@@ -1,0 +1,12 @@
+{
+  "name": "@sniper/storage",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@sniper/shared":"workspace:*",
+    "@sniper/core": "workspace:*",
+    "@prisma/client": "6.19.0",
+    "zod": "^4.6.7"
+  }
+}

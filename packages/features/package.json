@@ -1,0 +1,12 @@
+{
+  "name": "@sniper/features",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@sniper/core": "workspace:*",
+    "@sniper/shared": "workspace:*",
+    "@sniper/storage": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

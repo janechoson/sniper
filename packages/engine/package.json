@@ -1,0 +1,23 @@
+{
+  "name": "@sniper/engine",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@sniper/core": "workspace:*",
+    "@sniper/config": "workspace:*",
+    "@sniper/ai": "workspace:*",
+    "@sniper/chains": "workspace:*",
+    "@sniper/features": "workspace:*",
+    "@sniper/dex": "workspace:*",
+    "@sniper/execution": "workspace:*",
+    "@sniper/routing": "workspace:*",
+    "@sniper/positions": "workspace:*",
+    "@sniper/wallet": "workspace:*",
+    "@sniper/risk": "workspace:*",
+    "@sniper/strategies": "workspace:*",
+    "@sniper/storage": "workspace:*",
+    "@sniper/shared": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

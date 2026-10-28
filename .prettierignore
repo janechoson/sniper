@@ -1,0 +1,8 @@
+node_modules
+packages/storage/generated
+.next
+pnpm-lock.yaml
+data
+packages/storage/prisma/migrations
+packages/chains/idl/raydium-cpmm.json
+packages/chains/idl/meteora-dlmm.json

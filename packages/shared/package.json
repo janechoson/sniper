@@ -1,0 +1,9 @@
+{
+  "name": "@sniper/shared",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "pino": "^9.14.0"
+  }
+}

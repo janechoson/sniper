@@ -1,0 +1,47 @@
+{
+  "enabled": true,
+  "policy": {
+    "concentrationBasis": "adjusted",
+    "rejectNotSellable": true,
+    "rejectUnknownSellability": true,
+    "rejectActiveMint": true,
+    "rejectActiveFreeze": true,
+    "maxTop1Pct": 20,
+    "maxTop10Pct": 50,
+    "minimumLiquidityUsd": 20000,
+    "maximumRoundTripLossPct": 10,
+    "maxJevRugRisk": 2,
+    "maxJevSuspicious": 0.7,
+    "maxJevInsufficientData": 0.7
+  },
+  "policyByChain": {
+    "bnb": {
+      "requiredFields": [
+        "contract.validToken",
+        "contract.mintCapability",
+        "contract.blacklistCapability",
+        "trading.sellability",
+        "liquidity.usd",
+        "holders.adjustedTop1Pct"
+      ]
+    },
+    "robinhood": {
+      "requiredFields": [
+        "contract.validToken",
+        "contract.mintCapability",
+        "contract.blacklistCapability",
+        "trading.sellability",
+        "liquidity.usd",
+        "holders.adjustedTop1Pct"
+      ]
+    }
+  },
+  "external": {
+    "goplus": false,
+    "honeypot": false,
+    "rugcheck": false
+  },
+  "providerTimeoutMs": 5000,
+  "monitorIntervalMs": 15000,
+  "exclusions": []
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@sniper/chains",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./discovery": "./src/discovery.ts"
+  },
+  "dependencies": {
+    "@sniper/core": "workspace:*",
+    "@sniper/shared": "workspace:*",
+    "@sniper/config": "workspace:*",
+    "@sniper/features": "workspace:*",
+    "@sniper/storage": "workspace:*",
+    "zod": "^4.6.7",
+    "viem": "^2.38.0",
+    "@solana/web3.js": "^1.98.4",
+    "@solana/spl-token": "^0.4.15",
+    "@coral-xyz/anchor": "^0.32.1",
+    "ws": "^8.22.0"
+  }
+}

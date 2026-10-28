@@ -1,0 +1,7 @@
+# Quy ước vận hành dự án
+
+Tên ứng dụng: Super Bot 1M$. Dùng APP_NAME trong apps/web/components/brand.ts cho tên hiển thị và metadata.
+
+Chính sách mới của người dùng: knownBadFunding=true/false/UNKNOWN chỉ để nghiên cứu/UI/lưu trữ, không được chặn entry, readiness, tự thoát lệnh hoặc ảnh hưởng phân loại Jev. Không chuyển UNKNOWN thành false. Giữ các chốt rug/honeypot/transfer/sellability; xem docs/funding-informational-20261028.md. Lịch sử creator tổng quát không bắt buộc theo mặc định; bằng chứng sự cố rug/rút thanh khoản nghiêm trọng vẫn có thể REJECT.
+
+Trước khi sửa sizing hoặc đổi vận hành, đọc docs/live-handoff.md và docs/live-start-20261028.md. Người dùng đã ủy quyền bật LIVE: DATA_MODE=real, TRADING_MODE=live, LIVE_TRADING_ACK=true, OBSERVATION_ONLY=false, OBSERVATION_AUTO_START=true. Chỉ Solana nằm trong execution.liveChains; BNB khóa vì RPC thiếu native confirmation trace, Robinhood khóa vì reverse simulation thất bại. Không tự mở thêm chain hoặc nới policy. Scanner và timers phải giữ chạy; lệnh thật chỉ từ ApprovedTradeIntent của pipeline bình thường. Không tạo intent/test transaction, không ký/gửi thủ công bằng tools. Sizing10% vốn khả dụng sau native/pending reserves; không giảm phần trăm hay đổi sang5USD. Không bỏ chốt UNKNOWN quan trọng. Discovery gap vẫn chặn entry; WS hints được xác minh tx chỉ giúp nhận token mới, không chứng nhận coverage đầy đủ. Giữ UI tiếng Việt, tên APP_NAME, nền giấy kem #f4ecd8, chữ nâu #2a2520, olive, card bo góc/bóng mềm và log cuộn có giới hạn. Không nạp fixture/mock vào runtime/SQL. Xem DESIGN.md.

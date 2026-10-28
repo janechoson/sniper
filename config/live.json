@@ -1,0 +1,497 @@
+{
+  "version": 1,
+  "quotes": {
+    "solana": [
+      {
+        "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "symbol": "USDC",
+        "decimals": 6,
+        "coinbaseOracle": {
+          "product": "USDC-USD",
+          "maxAgeSec": 30,
+          "maxSpreadBps": 100
+        }
+      },
+      {
+        "address": "So11111111111111111111111111111111111111112",
+        "symbol": "SOL",
+        "decimals": 9,
+        "type": "NATIVE",
+        "coinbaseOracle": {
+          "product": "SOL-USD",
+          "maxAgeSec": 30,
+          "maxSpreadBps": 100
+        }
+      }
+    ],
+    "bnb": [
+      {
+        "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+        "symbol": "WBNB",
+        "decimals": 18,
+        "usdOracle": {
+          "chainId": "bnb",
+          "address": "0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE",
+          "expectedDescription": "BNB / USD",
+          "maxAgeSec": 180,
+          "verifiedSource": "https://data.chain.link/feeds/bsc/mainnet/bnb-usd"
+        },
+        "type": "WRAPPED_NATIVE"
+      },
+      {
+        "address": "0x0000000000000000000000000000000000000000",
+        "symbol": "BNB",
+        "decimals": 18,
+        "usdOracle": {
+          "chainId": "bnb",
+          "address": "0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE",
+          "expectedDescription": "BNB / USD",
+          "maxAgeSec": 180,
+          "verifiedSource": "https://data.chain.link/feeds/bsc/mainnet/bnb-usd"
+        },
+        "type": "NATIVE"
+      },
+      {
+        "symbol": "USDT",
+        "address": "0x55d398326f99059fF775485246999027B3197955",
+        "type": "STABLECOIN",
+        "decimals": 18
+      },
+      {
+        "symbol": "USDC",
+        "address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        "type": "STABLECOIN",
+        "decimals": 18
+      }
+    ],
+    "robinhood": [
+      {
+        "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+        "symbol": "WETH",
+        "decimals": 18,
+        "type": "WRAPPED_NATIVE",
+        "coinbaseOracle": {
+          "product": "ETH-USD",
+          "maxAgeSec": 30,
+          "maxSpreadBps": 100
+        }
+      },
+      {
+        "address": "0x0000000000000000000000000000000000000000",
+        "symbol": "ETH",
+        "decimals": 18,
+        "type": "NATIVE",
+        "coinbaseOracle": {
+          "product": "ETH-USD",
+          "maxAgeSec": 30,
+          "maxSpreadBps": 100
+        }
+      },
+      {
+        "address": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+        "symbol": "USDG",
+        "decimals": 6,
+        "type": "STABLECOIN"
+      }
+    ]
+  },
+  "deployments": [
+    {
+      "id": "raydium-cpmm",
+      "chainId": "solana",
+      "family": "raydium-cpmm",
+      "programId": "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://github.com/raydium-io/raydium-idl",
+      "enabled": true
+    },
+    {
+      "id": "meteora-dlmm",
+      "chainId": "solana",
+      "family": "meteora-dlmm",
+      "programId": "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://github.com/MeteoraAg/dlmm-sdk",
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-v2",
+      "chainId": "bnb",
+      "family": "pancakeswap",
+      "factoryAddress": "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+      "routerAddress": "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/v2/addresses",
+      "enabled": true,
+      "initialLookbackBlocks": 400
+    },
+    {
+      "id": "pancakeswap-v2",
+      "chainId": "robinhood",
+      "family": "pancakeswap",
+      "factoryAddress": "0x02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E",
+      "routerAddress": "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/v2/addresses",
+      "enabled": true,
+      "initialLookbackBlocks": 400
+    },
+    {
+      "id": "pump-fun",
+      "chainId": "solana",
+      "family": "pump-fun",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://github.com/pump-fun/pump-public-docs/tree/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22",
+      "enabled": true
+    },
+    {
+      "id": "pump-swap",
+      "chainId": "solana",
+      "family": "pump-swap",
+      "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "confirmationDepth": 2,
+      "verifiedSource": "https://github.com/pump-fun/pump-public-docs/tree/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22",
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-v3",
+      "chainId": "bnb",
+      "family": "uniswap-v3",
+      "factoryAddress": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/v3/addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-infinity-cl",
+      "chainId": "bnb",
+      "family": "pancakeswap-infinity-cl",
+      "factoryAddress": "0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/infinity/resources/addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "openfour",
+      "chainId": "bnb",
+      "family": "openfour",
+      "factoryAddress": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://github.com/four-meme-community/openfour-docs",
+      "discoveryOnly": true,
+      "enabled": true,
+      "registryAddress": "0x912CEf0C3aE9Ab6eB3Ec87cab69371cFb317Ab94"
+    },
+    {
+      "id": "flap",
+      "chainId": "bnb",
+      "family": "flap",
+      "factoryAddress": "0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://docs.flap.sh/flap/developers/deployed-contract-addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v2",
+      "chainId": "bnb",
+      "family": "uniswap-v2",
+      "factoryAddress": "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v3",
+      "chainId": "bnb",
+      "family": "uniswap-v3",
+      "factoryAddress": "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v4",
+      "chainId": "bnb",
+      "family": "uniswap-v4",
+      "factoryAddress": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-v3",
+      "chainId": "robinhood",
+      "family": "uniswap-v3",
+      "factoryAddress": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/v3/addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-infinity-cl",
+      "chainId": "robinhood",
+      "family": "pancakeswap-infinity-cl",
+      "factoryAddress": "0xeE04c68742e6Bf434bE8039580D2e89BBE55bc6f",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/infinity/resources/addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "openfour",
+      "chainId": "robinhood",
+      "family": "openfour",
+      "factoryAddress": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://github.com/four-meme-community/openfour-docs",
+      "discoveryOnly": true,
+      "enabled": true,
+      "registryAddress": "0x912CEf0C3aE9Ab6eB3Ec87cab69371cFb317Ab94"
+    },
+    {
+      "id": "flap",
+      "chainId": "robinhood",
+      "family": "flap",
+      "factoryAddress": "0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://docs.flap.sh/flap/developers/deployed-contract-addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v2",
+      "chainId": "robinhood",
+      "family": "uniswap-v2",
+      "factoryAddress": "0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v3",
+      "chainId": "robinhood",
+      "family": "uniswap-v3",
+      "factoryAddress": "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "uniswap-v4",
+      "chainId": "robinhood",
+      "family": "uniswap-v4",
+      "factoryAddress": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/deployments.json",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pancakeswap-infinity-bin",
+      "chainId": "bnb",
+      "family": "pancakeswap-infinity-bin",
+      "factoryAddress": "0xC697d2898e0D09264376196696c51D7aBbbAA4a9",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developer.pancakeswap.finance/contracts/infinity/resources/addresses",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "four-meme",
+      "chainId": "bnb",
+      "family": "four-meme",
+      "factoryAddress": "0x5c952063c7fc8610FFDB798152D69F0B9550762b",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://github.com/four-meme-community/fourmeme-docs",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pons-v2",
+      "chainId": "robinhood",
+      "family": "pons-v2",
+      "factoryAddress": "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://docs.ponsfamily.com/docs/v2",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "bags",
+      "chainId": "robinhood",
+      "family": "bags",
+      "factoryAddress": "0xe8Cc4431adF8b5A847C113EF0c6af9043219Cb37",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://docs.bags.fm/robinhood/contracts",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "doppler",
+      "chainId": "robinhood",
+      "family": "doppler",
+      "factoryAddress": "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://github.com/whetstoneresearch/doppler/blob/main/deployments/4663.md",
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pools-trade-creator-v33",
+      "chainId": "robinhood",
+      "family": "pools-trade",
+      "factoryAddress": "0x7c48DDe3B447381F4d986334679b3Afc7F2D35C2",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/docs/liquidity/liquidity-launchpad/deployments",
+      "discoveryOnly": true,
+      "enabled": true,
+      "poolManagerAddress": "0x8366a39CC670B4001A1121B8F6A443A643e40951"
+    },
+    {
+      "id": "pools-trade-standard-v33",
+      "chainId": "robinhood",
+      "family": "pools-trade",
+      "factoryAddress": "0xC9566675b1Ea42861546f3c5B74Ace2c79c49572",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/docs/liquidity/liquidity-launchpad/deployments",
+      "discoveryOnly": true,
+      "enabled": true,
+      "poolManagerAddress": "0x8366a39CC670B4001A1121B8F6A443A643e40951"
+    },
+    {
+      "id": "pools-trade-creator-v32",
+      "chainId": "robinhood",
+      "family": "pools-trade",
+      "factoryAddress": "0x23f8209572b4a1C2AD88A42749E830791Fb027f1",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "verifiedSource": "https://developers.uniswap.org/docs/liquidity/liquidity-launchpad/deployments",
+      "discoveryOnly": true,
+      "enabled": true,
+      "poolManagerAddress": "0x8366a39CC670B4001A1121B8F6A443A643e40951"
+    },
+    {
+      "id": "long",
+      "chainId": "robinhood",
+      "family": "long",
+      "factoryAddress": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+      "verifiedSource": "https://robinhoodchain.blockscout.com/address/0x22e99278308b393ea1260859b181ad7e78f5eeed?tab=contract",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "discoveryOnly": true,
+      "enabled": true
+    },
+    {
+      "id": "pools-trade-standard-v32",
+      "chainId": "robinhood",
+      "family": "pools-trade",
+      "factoryAddress": "0xAD44D55E7f8337C3cE113fBb591486E85be104b2",
+      "poolManagerAddress": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "verifiedSource": "https://developers.uniswap.org/docs/liquidity/liquidity-launchpad/deployments",
+      "confirmationDepth": 2,
+      "initialLookbackBlocks": 400,
+      "discoveryOnly": true,
+      "enabled": true
+    }
+  ],
+  "solana": {
+    "jupiterBaseUrl": "https://api.jup.ag/swap/v2",
+    "allowedPrograms": [
+      "11111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+    ],
+    "maxPriorityFeeLamports": "0",
+    "allowedDexes": ["Raydium CP", "Meteora DLMM"]
+  },
+  "maxPools": 300,
+  "maxObservationsPerPool": 2000,
+  "maxSlippageBps": 100,
+  "quoteTtlMs": 10000,
+  "maxRoundTripLossPct": 5,
+  "requireSellSimulation": true,
+  "execution": {
+    "maxGasWeiByChain": {
+      "bnb": "300000000000000",
+      "robinhood": "121068000000000"
+    },
+    "nativeUsdQuoteByChain": {
+      "bnb": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+      "robinhood": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "solana": "So11111111111111111111111111111111111111112"
+    },
+    "solanaAllowedAccountOwners": [
+      "11111111111111111111111111111111",
+      "ComputeBudget111111111111111111111111111111",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+      "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+      "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+    ],
+    "nativeFeeReserveByChain": {
+      "solana": "4178560",
+      "bnb": "1800000000000000",
+      "robinhood": "726408000000000"
+    },
+    "solanaMaxFeeLamports": "50000",
+    "solanaMaxNativeDebitLamports": "4078560",
+    "liveChains": ["solana"]
+  },
+  "rugCheck": {
+    "enabled": true,
+    "external": {
+      "goplus": true,
+      "honeypot": true,
+      "rugcheck": true
+    },
+    "policy": {
+      "concentrationBasis": "adjusted",
+      "rejectNotSellable": true,
+      "rejectUnknownSellability": true
+    },
+    "providerTimeoutMs": 5000,
+    "monitorIntervalMs": 15000,
+    "exclusions": []
+  },
+  "discoveryArchiveRpcByChain": {
+    "bnb": "https://rpc-bnb.blockmachine.io"
+  }
+}

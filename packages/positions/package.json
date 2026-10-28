@@ -1,0 +1,12 @@
+{
+  "name": "@sniper/positions",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@sniper/core": "workspace:*",
+    "@sniper/config": "workspace:*",
+    "@sniper/storage": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

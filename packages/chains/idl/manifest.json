@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "file": "pump-fun.json",
+      "repository": "pump-fun/pump-public-docs",
+      "commit": "639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22",
+      "path": "idl/pump.json",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "url": "https://raw.githubusercontent.com/pump-fun/pump-public-docs/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/idl/pump.json",
+      "sha256": "7616681ea557975f9f623ac211080f22a93060781eaf4765b0a488d980997207"
+    },
+    {
+      "file": "pump-swap.json",
+      "repository": "pump-fun/pump-public-docs",
+      "commit": "639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22",
+      "path": "idl/pump_amm.json",
+      "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "url": "https://raw.githubusercontent.com/pump-fun/pump-public-docs/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/idl/pump_amm.json",
+      "sha256": "b7d8c57a4d9c4dd0109a9ab893052352333252d4eedced10ac091d4d66cab89b"
+    },
+    {
+      "file": "raydium-cpmm.json",
+      "repository": "raydium-io/raydium-idl",
+      "commit": "e7e0c96fe77bcf6a020b84a44c47a722aac8e359",
+      "path": "raydium_cpmm/raydium_cp_swap.json",
+      "programId": "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+      "url": "https://raw.githubusercontent.com/raydium-io/raydium-idl/e7e0c96fe77bcf6a020b84a44c47a722aac8e359/raydium_cpmm/raydium_cp_swap.json",
+      "sha256": "1202f6dc8e1c3216598f2ad5c620b9aa8c64ac584563fafed68125c27fb6df81"
+    },
+    {
+      "file": "meteora-dlmm.json",
+      "repository": "MeteoraAg/dlmm-sdk",
+      "commit": "2f540c2107988e0f97efa5917100bb912c96c17a",
+      "path": "idls/dlmm.json",
+      "programId": "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+      "url": "https://raw.githubusercontent.com/MeteoraAg/dlmm-sdk/2f540c2107988e0f97efa5917100bb912c96c17a/idls/dlmm.json",
+      "sha256": "045c0f4af044be046b6a14b350077e4242e8ac026b64a855803dab30fcdd8b35"
+    }
+  ]
+}

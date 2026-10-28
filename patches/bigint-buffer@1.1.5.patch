@@ -1,0 +1,22 @@
+diff --git a/dist/node.js b/dist/node.js
+index 513168c89e387668a79b6beb109587b3eb41a7d0..c6aafa0c5aeaa118b7f2f9868083883c744a58b6 100644
+--- a/dist/node.js
++++ b/dist/node.js
+@@ -1,15 +1,8 @@
+ 'use strict';
+ 
+ Object.defineProperty(exports, "__esModule", { value: true });
+-let converter;
+-{
+-    try {
+-        converter = require('bindings')('bigint_buffer');
+-    }
+-    catch (e) {
+-        console.warn('bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)');
+-    }
+-}
++// Chỉ dùng BigInt JavaScript; không nạp native addon có GHSA-3gc7-fjrx-p6mg.
++const converter = undefined;
+ /**
+  * Convert a little-endian buffer into a BigInt.
+  * @param buf The little-endian buffer to convert

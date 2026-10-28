@@ -1,0 +1,495 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-27T12:53:31.971Z",
+  "repositoryCommits": {
+    "four-meme-community/fourmeme-docs": "5f7f589b042e4e3b41c2c214d0fe3a81b36725a9",
+    "four-meme-community/openfour-docs": "6e1b1c3a3c77be383784e23f5f01198d34690f1e",
+    "flap-sh/FlapVaultExample": "5949cc7eb99bcb5ac5f679cc710ae456e627f12a",
+    "pancakeswap/infinity-core": "3c5ef1be1f71442d8bc60cc6fd11f9c677b714df",
+    "bagsfm/bags-idl": "450a04fa94e129f05229eac6ae49c22e81691914",
+    "whetstoneresearch/doppler": "5754c7ee01f1bdbd6f07c62be721e1223b725ecd",
+    "Uniswap/liquidity-launcher": "266c18786c58822b72a7a9490f4e319294df0548"
+  },
+  "profiles": [
+    {
+      "family": "uniswap-v2",
+      "sha256": "6a0fb3517f50a2ed5c84303f817c3adc006396cce4e0fb2f31da70657c52f853",
+      "events": [
+        {
+          "selector": "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
+          "indexed": [true, true, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/Uniswap/v2-core/blob/master/contracts/interfaces/IUniswapV2Factory.sol"
+      ]
+    },
+    {
+      "family": "pancakeswap",
+      "sha256": "6a0fb3517f50a2ed5c84303f817c3adc006396cce4e0fb2f31da70657c52f853",
+      "events": [
+        {
+          "selector": "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
+          "indexed": [true, true, false, false]
+        }
+      ],
+      "references": [
+        "https://developer.pancakeswap.finance/contracts/v2/addresses"
+      ]
+    },
+    {
+      "family": "uniswap-v3",
+      "sha256": "ab4f477b947bf060d57a42de7514190958c7215ad4a8e657aac7215314c0ee12",
+      "events": [
+        {
+          "selector": "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118",
+          "indexed": [true, true, true, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/Uniswap/v3-core/blob/main/contracts/interfaces/IUniswapV3Factory.sol",
+        "https://developer.pancakeswap.finance/contracts/v3/addresses"
+      ]
+    },
+    {
+      "family": "uniswap-v4",
+      "sha256": "339e6048d6ce37ad6a67a7d210478e48d3de348f698a79e9cce80af33b964cd9",
+      "events": [
+        {
+          "selector": "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438",
+          "indexed": [true, true, true, false, false, false, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/Uniswap/v4-core/blob/main/src/interfaces/IPoolManager.sol"
+      ]
+    },
+    {
+      "family": "pancakeswap-infinity-cl",
+      "sha256": "60b924ea7ecbef2968e4eddf3a568dc8188944616d2a4c8f5772cab7944864f9",
+      "events": [
+        {
+          "selector": "0x426cc62fe6a33a40ba2788c2c87a9c34ee4582b95bc9fa5a7bb7ae70b750b99c",
+          "indexed": [true, true, true, false, false, false, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/pancakeswap/infinity-core/blob/3c5ef1be1f71442d8bc60cc6fd11f9c677b714df/src/pool-cl/interfaces/ICLPoolManager.sol"
+      ]
+    },
+    {
+      "family": "pancakeswap-infinity-bin",
+      "sha256": "8b94a6b330893e9051b804f2ffb77aea86b5ee3fd382fe152b400f300769ce1e",
+      "events": [
+        {
+          "selector": "0xddfde5903015c0eb1671976c6c8f760f1328bec57f15286b6bdab2f955cab9c9",
+          "indexed": [true, true, true, false, false, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/pancakeswap/infinity-core/blob/3c5ef1be1f71442d8bc60cc6fd11f9c677b714df/src/pool-bin/interfaces/IBinPoolManager.sol"
+      ]
+    },
+    {
+      "family": "four-meme",
+      "sha256": "cb2d10b150a92919f4cc2894b682aed821f9e4e30e37e6809d4061042881ec61",
+      "events": [
+        {
+          "selector": "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20",
+          "indexed": [false, false, false, false, false, false, false, false]
+        },
+        {
+          "selector": "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0",
+          "indexed": [false, false, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/four-meme-community/fourmeme-docs/blob/5f7f589b042e4e3b41c2c214d0fe3a81b36725a9/contracts/interfaces/ITokenManager2.sol"
+      ]
+    },
+    {
+      "family": "openfour",
+      "sha256": "dbec63386cb31716f7feee1913895d0376a3db3f140a8773fcdee5fda3f9dfc7",
+      "events": [
+        {
+          "selector": "0x7dae4dcd1b20eb0445e7cc1d02b3e2e7f32fa63081a0e764732c269f2b8f228f",
+          "indexed": [
+            false,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ]
+        },
+        {
+          "selector": "0x147a4684ffc452d571b9faa729585d977e7c7caf3f0eb09bcc430ca605e0f8ff",
+          "indexed": [
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ]
+        },
+        {
+          "selector": "0xba80aa59bb279da81e47a24a4afc9d5f15204d3b1fed9b7e1d2680c5b54b22f5",
+          "indexed": [true, false, false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/four-meme-community/openfour-docs/blob/6e1b1c3a3c77be383784e23f5f01198d34690f1e/contracts/interfaces/IOpenFourCore.sol"
+      ]
+    },
+    {
+      "family": "flap",
+      "sha256": "a684873d6d23089b78668da746b0fa44420dd57852e2f6dd3b5e4d46e086350c",
+      "events": [
+        {
+          "selector": "0x504e7f360b2e5fe33cbaaae4c593bc55305328341bf79009e43e0e3b7f699603",
+          "indexed": [false, false, false, false, false, false, false]
+        },
+        {
+          "selector": "0x3ceb902d3c555c21c3415b6aa839104b18e4825b2f8324011ff979089a507a8c",
+          "indexed": [false, false]
+        },
+        {
+          "selector": "0xcf2372b9357f0d392563d2cedb11e2b3bf0c14d2b8b75eb8bad073bbea9b0ff9",
+          "indexed": [false, false]
+        }
+      ],
+      "references": [
+        "https://github.com/flap-sh/FlapVaultExample/blob/5949cc7eb99bcb5ac5f679cc710ae456e627f12a/src/flap/IPortal.sol",
+        "https://docs.flap.sh/flap/developers/deployed-contract-addresses"
+      ]
+    },
+    {
+      "family": "pons-v2",
+      "sha256": "650127f03a7203ad1f2c93ebeaebe4958379655e67369f49ea45e05a33ce2e70",
+      "events": [
+        {
+          "selector": "0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607",
+          "indexed": [true, true, true, false, false, false]
+        },
+        {
+          "selector": "0xcdb72f157fd3666758a6ce201387ffb52038c7562e4fff352828da1096c4b6b4",
+          "indexed": [true, false, false]
+        },
+        {
+          "selector": "0x0a44ef75df69c534f43cd6c1aa3ef8983065fe5fe79ef9e79f6494e6f258c259",
+          "indexed": [true, false, false, false]
+        }
+      ],
+      "references": [
+        "https://docs.ponsfamily.com/docs/v2",
+        "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"
+      ]
+    },
+    {
+      "family": "bags",
+      "sha256": "16dc192b7fb5fefb3ea384d948a2428643e23bea66689f15d24d087d7f0e2b35",
+      "events": [
+        {
+          "selector": "0x643b3b606052cbadac2f906ad0b462da99eda2a1d4f824d315d7f6edd3e4cced",
+          "indexed": [
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ]
+        }
+      ],
+      "references": [
+        "https://github.com/bagsfm/bags-idl/blob/450a04fa94e129f05229eac6ae49c22e81691914/robinhood-abi-v2/BagsFactory.json"
+      ]
+    },
+    {
+      "family": "doppler",
+      "sha256": "9474ecac1de83340ed68434bf9766b054ea7fe9d899b0c2e97bd05141198c8e9",
+      "events": [
+        {
+          "selector": "0x68ff1cfcdcf76864161555fc0de1878d8f83ec6949bf351df74d8a4a1a2679ab",
+          "indexed": [false, true, false, false]
+        },
+        {
+          "selector": "0x2a05bb717043f3a794e94382bf63f2e275ecafc41be9b63c34f16d58da9822ca",
+          "indexed": [true, true]
+        }
+      ],
+      "references": [
+        "https://github.com/whetstoneresearch/doppler/blob/5754c7ee01f1bdbd6f07c62be721e1223b725ecd/src/Airlock.sol",
+        "https://github.com/whetstoneresearch/doppler/blob/5754c7ee01f1bdbd6f07c62be721e1223b725ecd/deployments/4663.md"
+      ]
+    },
+    {
+      "family": "long",
+      "sha256": "1c9c25a7a90341d29fa3a5e4206cfb005dcaad2f27edc79d95ac8198c1f5e34b",
+      "events": [
+        {
+          "selector": "0xadc6f1f726f7c710f77ec06adc75f3bb964e5be19581b072c67f7b9b4039267b",
+          "indexed": [
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ]
+        }
+      ],
+      "references": [
+        "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0x22e99278308b393ea1260859b181ad7e78f5eeed"
+      ]
+    },
+    {
+      "family": "pools-trade",
+      "sha256": "714d98e51c147c5e63530083ac052716a6ec1c6b8d4a6584a6197506c2c3acfb",
+      "events": [
+        {
+          "selector": "0x3b3d2bafdcae274a232217e1f80ee4305d3af6aa25c8b14b1681bd68d18042a4",
+          "indexed": [true, true, true, false]
+        }
+      ],
+      "references": [
+        "https://github.com/Uniswap/liquidity-launcher/blob/266c18786c58822b72a7a9490f4e319294df0548/src/strategies/InstantLaunchStrategy.sol",
+        "https://developers.uniswap.org/docs/liquidity/liquidity-launchpad/deployments"
+      ]
+    }
+  ],
+  "deploymentProofs": {
+    "checkedAt": "2026-10-27T12:38:13.278Z",
+    "broadcast": false,
+    "sources": [
+      {
+        "chainId": "bnb",
+        "source": "pancakeswap-v3",
+        "address": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+        "codePresent": true,
+        "codeHash": "0x8191d3ab1d55d3da9822199f28865415c99566b6f1aee4a4b16713f57930678c",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "pancakeswap-infinity-cl",
+        "address": "0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b",
+        "codePresent": true,
+        "codeHash": "0x3caf72836cb6603c6af03bba1578ec70ece8c3e5b1d0ef73667b5fbd74b02a0f",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "openfour",
+        "address": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3",
+        "codePresent": true,
+        "codeHash": "0x124781bc5ba986358f7155287ed3f102fefa10955f1665d795d6c5b5f3cb53f8",
+        "status": "CODE_VERIFIED",
+        "registryCore": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3"
+      },
+      {
+        "chainId": "bnb",
+        "source": "flap",
+        "address": "0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0",
+        "codePresent": true,
+        "codeHash": "0x0a3fe6f701ee3cb432f45912e054896327ce5902337eae4d62d01406005a91c3",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "uniswap-v2",
+        "address": "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+        "codePresent": true,
+        "codeHash": "0xbab145d02e7005f0d84c6c1639d39b799b0ea16df99ebbdaf5a14d9da820b4e0",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "uniswap-v3",
+        "address": "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7",
+        "codePresent": true,
+        "codeHash": "0x34b1009d0f004e58da791225992645e2df7697ac71ac89dc5e80469c4ef7e322",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "uniswap-v4",
+        "address": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+        "codePresent": true,
+        "codeHash": "0x48752321ee7abf0d2a17c30679df9a1ddd14dc75d28b26e2509b76396145a005",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "pancakeswap-infinity-bin",
+        "address": "0xC697d2898e0D09264376196696c51D7aBbbAA4a9",
+        "codePresent": true,
+        "codeHash": "0x9e95edb558f2fb05a0d5a96b57cd59400d39b1b7c02a4fc7a8a158b3d092835f",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "bnb",
+        "source": "four-meme",
+        "address": "0x5c952063c7fc8610FFDB798152D69F0B9550762b",
+        "codePresent": true,
+        "codeHash": "0xf035b164f546d628163baa4d5428649ad6728453a19e4af6ba602a713b6d9f08",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pancakeswap-v3",
+        "address": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+        "codePresent": true,
+        "codeHash": "0xf6105f5817b3f67dd0f060fa27c1e23a14d9fca13c6ebd695545ca4d5c0fbe06",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pancakeswap-infinity-cl",
+        "address": "0xeE04c68742e6Bf434bE8039580D2e89BBE55bc6f",
+        "codePresent": true,
+        "codeHash": "0xc7a718bdecefbe9d1a1708097bc856f9c13d87701f050cedbafcafe01fd42064",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "openfour",
+        "address": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3",
+        "codePresent": true,
+        "codeHash": "0x124781bc5ba986358f7155287ed3f102fefa10955f1665d795d6c5b5f3cb53f8",
+        "status": "CODE_VERIFIED",
+        "registryCore": "0xebe7b6C1089D9F72aD07f34E36d898e44E5e27f3"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "flap",
+        "address": "0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09",
+        "codePresent": true,
+        "codeHash": "0xcecb292d9c022858199c9348abf0d5836f9ea4dab5cf03710e1dcf41fd9a4c35",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "uniswap-v2",
+        "address": "0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f",
+        "codePresent": true,
+        "codeHash": "0xbab145d02e7005f0d84c6c1639d39b799b0ea16df99ebbdaf5a14d9da820b4e0",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "uniswap-v3",
+        "address": "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
+        "codePresent": true,
+        "codeHash": "0xec72b1abd1f2faee020cfea9c646bd8994f9fb389054f6e574f103a895091739",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "uniswap-v4",
+        "address": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+        "codePresent": true,
+        "codeHash": "0xbd3881180b547f5fe817545743cfb4343e96b1bc6640dcd70c106b0066e95626",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pons-v2",
+        "address": "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e",
+        "codePresent": true,
+        "codeHash": "0x89a27da6f703e0a7cdd4f233e7cb57604ff75b164530962d3ff7cf8483a67d84",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "bags",
+        "address": "0xe8Cc4431adF8b5A847C113EF0c6af9043219Cb37",
+        "codePresent": true,
+        "codeHash": "0x81489932a2c2dc73badc783623df7631238faed2c6b5119b30eb7f0297825871",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "doppler",
+        "address": "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862",
+        "codePresent": true,
+        "codeHash": "0x86b37100cbe9841771c452a592985b4e921254b127a380246073b84ec953f7f8",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pools-trade-creator-v33",
+        "address": "0x7c48DDe3B447381F4d986334679b3Afc7F2D35C2",
+        "codePresent": true,
+        "codeHash": "0xbcf3403daaaf65a9e575e8736872ff79865c9988a303f1bb6ada7ae5ddfc4bdd",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pools-trade-standard-v33",
+        "address": "0xC9566675b1Ea42861546f3c5B74Ace2c79c49572",
+        "codePresent": true,
+        "codeHash": "0x549e67dfd42358ddaeed7ef63437239245c67d381342b0ab1ee0470c3b97d8d9",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pools-trade-creator-v32",
+        "address": "0x23f8209572b4a1C2AD88A42749E830791Fb027f1",
+        "codePresent": true,
+        "codeHash": "0x29df27cf43533e9b3708dcd2a2c0fd17a1a8796407e7d39375f47e5c809cffca",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "long",
+        "address": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+        "codePresent": true,
+        "codeHash": "0x07f672e3431f9963637f0ecea95753147f10c36a22a8dc5192f397fe1cea0c59",
+        "status": "CODE_VERIFIED"
+      },
+      {
+        "chainId": "robinhood",
+        "source": "pools-trade-standard-v32",
+        "address": "0xAD44D55E7f8337C3cE113fBb591486E85be104b2",
+        "codePresent": true,
+        "codeHash": "0x6944058fa8339bcf018c4a2ddc043d378b47516f8756db34202bdc6cf93a9a8e",
+        "status": "CODE_VERIFIED"
+      }
+    ],
+    "quoteMetadata": [
+      {
+        "chainId": "robinhood",
+        "address": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+        "decimals": 6,
+        "symbol": "USDG"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@sniper/bot",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@sniper/core": "workspace:*",
+    "@sniper/config": "workspace:*",
+    "@sniper/shared": "workspace:*",
+    "@sniper/storage": "workspace:*",
+    "@sniper/engine": "workspace:*",
+    "@sniper/wallet": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,11 @@
+# Bảo mật và phạm vi phát hành
+
+Mặc định PAPER/MOCK. Runtime REAL có executor EVM/Solana riêng, ví cục bộ, dry-run và LIVE có kiểm soát. `DisabledWalletManager` và `LiveExecutor` cũ chỉ thuộc nền tảng mock/tương thích; chúng không mô tả khả năng runtime REAL mới. API không nhận khóa riêng hoặc yêu cầu ký tùy ý. Bot và giao diện chỉ lắng nghe địa chỉ nội bộ máy. Yêu cầu thay đổi dữ liệu phải dùng JSON và qua kiểm tra nguồn trình duyệt/tên máy chủ. Triển khai công khai còn cần xác thực, phân quyền, TLS và đánh giá vận hành.
+
+Bằng chứng bảo mật vẫn chưa rõ cho đến khi có nguồn phân tích. Các cờ bắt buộc được cấu hình theo chính sách chuỗi; không áp khái niệm EVM lên Solana. Thiếu thông tin bắt buộc thì từ chối trước AI. Bộ thu thập sau không được ghi đè bằng chứng mâu thuẫn để biến token nguy hiểm thành an toàn. Phản hồi AI được kiểm tra chặt và có hạn thời gian. Mở lệnh mô phỏng yêu cầu mô phỏng cả mua/bán và kiểm tra rủi ro ở bước cuối.
+
+Đã nâng TOML phụ thuộc của Anchor lên 5.0.1 và giữ override Effect/DeepmergeTS đã vá. bigint-buffer 1.1.5 chưa có bản vá upstream; pnpm patchedDependencies buộc nhánh BigInt JavaScript và bỏ nạp native addon có lỗi tràn bộ đệm. Kiểm thử xác nhận SPL thực sự dùng bản patch, buffer 64 byte và round-trip u128. Audit vẫn báo **1 high (bigint-buffer đã giảm thiểu bằng patch) và 4 moderate (uuid/stream-json qua Jayson)**; không gọi kết quả audit là sạch. Không tự nâng stream-json sang ESM không tương thích CommonJS. Cần đánh giá lại dependency trước LIVE và không bỏ patch khi đồng bộ packages.
+
+Các cảnh báo còn lại: [kiểm tra giới hạn bộ đệm uuid](https://github.com/advisories/GHSA-w5hq-g745-h8pq), [lọc luồng lồng nhau](https://github.com/advisories/GHSA-528h-pc64-c93x), [quét lại chú thích JSONC](https://github.com/advisories/GHSA-hqr4-qq8f-hg3x), [ô nhiễm nguyên mẫu trong bộ ghép luồng](https://github.com/advisories/GHSA-mjw6-4jj6-33hc).
+
+Nhật ký có cấu trúc che các trường bí mật và không ghi URL RPC có thông tin xác thực, khóa API hay nội dung ngoại lệ thô. Lỗi cơ sở dữ liệu/nhật ký kích hoạt ngắt khẩn cấp. Lỗi bên nhận sự kiện giao diện được cô lập khỏi bộ thực thi. Khôi phục thủ công cần kiểm tra trạng thái, AI và vòng báo giá mua/bán khi liên quan. ENTRY_DISABLED vẫn quản lý và thoát vị thế; ALL_TRADING_DISABLED chặn cả mua/bán với xác nhận riêng, vẫn đối soát giao dịch đã phát.

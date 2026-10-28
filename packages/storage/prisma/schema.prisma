@@ -1,0 +1,556 @@
+generator client {
+  provider = "prisma-client"
+  output = "../generated/client"
+  moduleFormat = "esm"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+// Nhật ký chỉ ghi thêm là nguồn dữ liệu chính của bộ mô phỏng. Các mô hình khác
+// chứa dữ liệu chuẩn hóa có chỉ mục; thông tin chưa rõ không được mặc định là an toàn.
+model JournalEntry {
+  id String @id
+  sequence BigInt @unique @default(autoincrement())
+  kind String
+  chainId String?
+  tokenAddress String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([kind, createdAt])
+  @@index([chainId, tokenAddress, createdAt])
+}
+model EngineLease {
+  id String @id
+  owner String
+  expiresAt DateTime
+}
+model RugCheckSnapshot {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  poolAddress String?
+  snapshotHash String
+  source String
+  decision String?
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@index([namespace, snapshotHash])
+  @@map("rug_check_snapshots")
+}
+model SecurityEvidence {
+  id String @id
+  namespace String
+  snapshotId String
+  field String
+  provider String
+  origin String
+  state String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, snapshotId, field])
+  @@index([namespace, provider, state, observedAt])
+  @@map("security_evidence")
+}
+model HolderSecuritySnapshot {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("holder_snapshots")
+}
+model HolderSecurityCluster {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  confidence String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("holder_clusters")
+}
+model CreatorSecurityHistory {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  kind String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("creator_history")
+}
+model LiquiditySecuritySnapshot {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("liquidity_snapshots")
+}
+model SellabilitySecurityCheck {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("sellability_checks")
+}
+model RoundTripSecurityCheck {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("round_trip_checks")
+}
+model ExternalSecurityResult {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  provider String
+  status String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@index([namespace, provider, status, observedAt])
+  @@map("external_security_results")
+}
+model JevRiskResult {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  snapshotHash String
+  status String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@index([namespace, snapshotHash])
+  @@map("jev_risk_results")
+}
+model SecurityRiskDecision {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  decision String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@map("risk_decisions")
+}
+model SecurityRiskReason {
+  id String @id
+  namespace String
+  decisionId String
+  code String
+  observedAt DateTime
+  @@index([namespace, code, observedAt])
+  @@map("risk_reason_codes")
+}
+model Wallet {
+  id String @id
+  namespace String
+  walletId String
+  address String
+  family String
+  label String
+  signerType String
+  enabled Boolean
+  chains Json
+  updatedAt DateTime
+  @@unique([namespace, walletId])
+  @@index([address])
+}
+model WalletChainState {
+  id String @id
+  namespace String
+  walletId String
+  chainId String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, walletId, chainId, observedAt])
+}
+model TradeIntent {
+  id String @id
+  namespace String
+  walletId String
+  chainId String
+  idempotencyKey String
+  mode String
+  side String
+  payload Json
+  createdAt DateTime
+  expiresAt DateTime
+  @@unique([namespace, idempotencyKey])
+  @@index([namespace, chainId, walletId, createdAt])
+}
+model Execution {
+  id String @id
+  namespace String
+  intentId String
+  walletId String
+  chainId String
+  idempotencyKey String
+  mode String
+  state String
+  transactionId String?
+  payload Json
+  updatedAt DateTime
+  @@unique([namespace, idempotencyKey])
+  @@index([namespace, chainId, walletId, state, updatedAt])
+  @@index([transactionId])
+}
+model ApprovalTransaction {
+  id String @id
+  namespace String
+  intentId String
+  walletId String
+  chainId String
+  state String
+  transactionId String?
+  payload Json
+  updatedAt DateTime
+  @@index([namespace, walletId, chainId, updatedAt])
+  @@index([transactionId])
+}
+model CreatorProfile {
+  id String @id
+  namespace String
+  chainId String
+  creatorAddress String
+  payload Json
+  updatedAt DateTime
+  @@unique([namespace, chainId, creatorAddress])
+}
+model CreatorTokenRelationship {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String
+  creatorAddress String
+  evidence String
+  payload Json
+  observedAt DateTime
+  @@unique([namespace, chainId, tokenAddress, evidence])
+  @@index([namespace, chainId, creatorAddress, observedAt])
+}
+model ProviderHealth {
+  id String @id
+  namespace String
+  chainId String?
+  providerId String
+  status String
+  payload Json
+  checkedAt DateTime
+  @@index([namespace, chainId, providerId, checkedAt])
+}
+model KillSwitchEvent {
+  id String @id
+  namespace String
+  scope String
+  active Boolean
+  payload Json
+  createdAt DateTime
+  @@index([namespace, scope, createdAt])
+}
+model DiscoveryCursor {
+  id String @id
+  namespace String
+  key String
+  value String
+  updatedAt DateTime
+  @@unique([namespace, key])
+}
+model PipelineObservation {
+  id String @id
+  namespace String
+  chainId String
+  tokenAddress String?
+  providerId String?
+  kind String
+  payload Json
+  observedAt DateTime
+  @@index([namespace, chainId, tokenAddress, observedAt])
+  @@index([namespace, providerId, kind, observedAt])
+}
+model Chain {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Dex {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Token {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Pool {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model TokenObservation {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model FeatureSnapshot {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model SecurityAnalysis {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model AIClassification {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model StrategyDecision {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model RiskDecision {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model TradeQuote {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model PaperOrder {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Order {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Transaction {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model Position {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model PositionEvent {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model MarketSnapshot {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model StrategyRun {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}
+model TokenOutcome {
+  id String @id @default(cuid())
+  chainId String
+  tokenAddress String?
+  poolAddress String?
+  dexId String?
+  strategyId String?
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([chainId, tokenAddress, createdAt])
+  @@index([chainId, poolAddress])
+  @@index([dexId, createdAt])
+  @@index([strategyId, createdAt])
+}

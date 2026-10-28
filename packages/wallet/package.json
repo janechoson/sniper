@@ -1,0 +1,15 @@
+{
+  "name": "@sniper/wallet",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "bs58": "6.0.0",
+    "@sniper/core": "workspace:*",
+    "@sniper/chains": "workspace:*",
+    "@sniper/shared": "workspace:*",
+    "viem": "^2.38.0",
+    "@solana/web3.js": "^1.98.4",
+    "zod": "^4.6.7"
+  }
+}
