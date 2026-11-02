@@ -472,6 +472,14 @@ test("server starts without JEV/provider keys paused, local paths, no active loo
     assert.equal(status.sizing.editable, false);
     assert.equal(status.sizing.basis, "SPENDABLE_SOL_AFTER_RESERVE");
     assert.equal(status.realExecutionEnabled, false);
+    assert.deepEqual(status.wallet, {
+      lamports: null,
+      at: null,
+      stale: true,
+      state: "NOT_CONFIGURED",
+    });
+    const overview = await fetch(base + "/api/overview").then((r) => r.json());
+    assert.deepEqual(overview.wallet, status.wallet);
     const data = await fetch(base + "/api/kronos").then((r) => r.json());
     assert.equal(data.enabled, false);
     assert.equal(data.summary.records, 0);

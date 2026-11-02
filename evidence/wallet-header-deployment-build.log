@@ -1,0 +1,5 @@
+ WARN  Unsupported engine: wanted: {"node":">=22.13.0"} (current: {"node":"v20.19.3","pnpm":"10.28.2"})
+
+> k1ll-kronos-paper-bot@1.0.0 build C:\Users\admin\Desktop\Tool\sniper
+> node scripts/build.mjs
+

@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-02T10:06:07.504Z",
+  "at": "2026-11-02T10:29:32.164Z",
   "passed": true,
   "errors": [],
   "mutations": 0,
@@ -13,11 +13,11 @@
       "method": "GET"
     },
     {
-      "path": "/overview.js",
+      "path": "/token-avatar.js",
       "method": "GET"
     },
     {
-      "path": "/token-avatar.js",
+      "path": "/overview.js",
       "method": "GET"
     },
     {
@@ -105,11 +105,11 @@
       "method": "GET"
     },
     {
-      "path": "/api/overview",
+      "path": "/api/logs",
       "method": "GET"
     },
     {
-      "path": "/api/logs",
+      "path": "/api/overview",
       "method": "GET"
     },
     {
@@ -121,11 +121,11 @@
       "method": "GET"
     },
     {
-      "path": "/api/overview",
+      "path": "/api/logs",
       "method": "GET"
     },
     {
-      "path": "/api/history",
+      "path": "/api/overview",
       "method": "GET"
     },
     {
@@ -221,7 +221,7 @@
         "x": 10,
         "y": 146,
         "width": 370,
-        "height": 2353.59375
+        "height": 2383.59375
       }
     },
     {

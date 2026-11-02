@@ -18,6 +18,20 @@
     ms === null || ms === undefined
       ? "—"
       : Math.floor(ms / 3600000) + "h " + (Math.floor(ms / 60000) % 60) + "m";
+  function decisionReason(reason) {
+    return (
+      {
+        DISAGREEMENT_OR_FLAT_UNCERTAIN:
+          "Các đường dự báo chưa đồng thuận hoặc có dự báo đi ngang.",
+        ALL_SAMPLED_TERMINALS_LOWER:
+          "Tất cả các đường dự báo có giá cuối kỳ thấp hơn giá nến gần nhất.",
+        ALL_SAMPLED_TERMINALS_HIGHER:
+          "Tất cả các đường dự báo có giá cuối kỳ cao hơn giá nến gần nhất.",
+      }[reason] ||
+      reason ||
+      "Chưa có kết luận"
+    );
+  }
   const labels = {
     CHEAP_FILTER: "Cheap Filter",
     SECURITY: "Security",
@@ -251,9 +265,23 @@
           : usd(a?.summaries?.entry?.value),
       ),
     );
+    if (a?.summaries?.decision?.reason) {
+      const explanation = node(
+        "p",
+        decisionReason(a.summaries.decision.reason),
+        "muted kronos-model-reason",
+      );
+      explanation.title = a.summaries.decision.reason;
+      decision.append(explanation);
+    }
     if (a?.reasonCode) {
       decision.append(
-        node("p", a.failedStage + ": " + a.reasonCode, "terminal-reason"),
+        node(
+          "p",
+          (a.failedStage ? a.failedStage + ": " : "") +
+            decisionReason(a.reasonCode),
+          "terminal-reason",
+        ),
       );
     }
     if (h)
@@ -291,55 +319,6 @@
         }),
     );
   }
-  function chart(decision) {
-    const f = decision?.forecast;
-    if (!f) return node("p", "Chưa có forecast.", "muted");
-    const all = [decision.lastObservedClose, ...f.paths.flat()],
-      low = Math.min(...all),
-      high = Math.max(...all),
-      range = high - low || high * 0.01;
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 500 150");
-    svg.setAttribute("role", "img");
-    svg.setAttribute(
-      "aria-label",
-      "Observed last close and forecast sample paths",
-    );
-    const y = (v) => 135 - ((v - low) / range) * 115;
-    const line = (points, color, dash) => {
-      const e = document.createElementNS(svg.namespaceURI, "polyline");
-      e.setAttribute("points", points);
-      e.setAttribute("fill", "none");
-      e.setAttribute("stroke", color);
-      e.setAttribute("stroke-width", "2");
-      if (dash) e.setAttribute("stroke-dasharray", "5 4");
-      svg.append(e);
-    };
-    line(
-      `10,${y(decision.lastObservedClose)} 490,${y(decision.lastObservedClose)}`,
-      "#8094a6",
-      true,
-    );
-    f.paths.forEach((p, i) =>
-      line(
-        [decision.lastObservedClose, ...p]
-          .map((v, j) => `${10 + (j * 480) / p.length},${y(v)}`)
-          .join(" "),
-        ["#00d8ff", "#15e391", "#f6c95d"][i],
-        true,
-      ),
-    );
-    const box = node("div", undefined, "kronos-chart");
-    box.append(
-      node(
-        "p",
-        "Observed: mốc close cuối · Forecast: 3 đường nét đứt, không phải giá đã xảy ra.",
-      ),
-      svg,
-    );
-    return box;
-  }
-
   let currentView = "overview",
     frame,
     statusData,
@@ -444,7 +423,7 @@
             l.kind +
             (l.payload?.stage ? ": " + l.payload.stage : "") +
             (l.payload?.action ? ": " + l.payload.action : "") +
-            (l.payload?.reason ? " · " + l.payload.reason : ""),
+            (l.payload?.reason ? " · " + decisionReason(l.payload.reason) : ""),
         })),
     };
   }
@@ -551,17 +530,6 @@
       row.append(td);
       body.append(row);
     }
-  }
-  function table(container, rows) {
-    const t = node("table", undefined, "kronos-data-table"),
-      head = node("thead"),
-      hr = node("tr"),
-      body = node("tbody");
-    for (const v of positionHeaders) hr.append(node("th", v));
-    head.append(hr);
-    positionRows(rows, body);
-    t.append(head, body);
-    container.replaceChildren(t);
   }
   const date = (at) =>
     Number.isFinite(at) ? new Date(at).toLocaleString("vi-VN") : "—";
@@ -754,7 +722,7 @@
           "KRONOS · " +
             (p.latest?.action?.replace("PAPER_", "") || "CHƯA CÓ QUYẾT ĐỊNH"),
         ),
-        node("p", p.latest?.reason || "Chờ model và dữ liệu hợp lệ"),
+        node("p", decisionReason(p.latest?.reason)),
         node("small", date(p.latest?.at)),
       );
       card.append(model);
@@ -938,8 +906,37 @@
     $("overviewMode").textContent = mode + (f.dryRun ? " · DRY RUN" : "");
     $("mode").textContent = mode;
     $("mode").classList.toggle("negative", mode === "LIVE");
-    $("terminalBalance").textContent = "MARKET: REAL";
-    $("terminalUsd").textContent = "TRADING: " + mode;
+    const w = f.wallet ?? statusData?.wallet;
+    const fresh =
+      w &&
+      !w.stale &&
+      typeof w.lamports === "string" &&
+      /^\d+$/.test(w.lamports) &&
+      Number.isFinite(w.at) &&
+      w.at <= Date.now() &&
+      Date.now() - w.at <= 45000;
+    if (fresh) {
+      const amount = BigInt(w.lamports),
+        fraction = (amount % 1000000000n)
+          .toString()
+          .padStart(9, "0")
+          .replace(/0+$/, "");
+      $("terminalBalance").textContent =
+        "SOL: " +
+        (amount / 1000000000n).toString() +
+        (fraction ? "." + fraction : "");
+      $("terminalUsd").textContent =
+        "Cập nhật " + new Date(w.at).toLocaleTimeString("vi-VN");
+    } else {
+      $("terminalBalance").textContent = "SOL: —";
+      $("terminalUsd").textContent = !w
+        ? "Chờ API số dư"
+        : w.state === "NOT_CONFIGURED"
+          ? "Chưa cấu hình ví"
+          : "Chưa có số dư mới";
+    }
+    $("terminalBalance").closest(".terminal-wallet").title =
+      "Số dư SOL thật của ví Kronos qua RPC · " + mode;
     $("terminalDot").classList.toggle("running", !!f.enabled);
     $("terminalRunning").textContent = f.enabled
       ? "Bot Running"
@@ -1237,7 +1234,7 @@
         line,
         node(
           "span",
-          e.payload?.reason ||
+          (e.payload?.reason ? decisionReason(e.payload.reason) : null) ||
             e.payload?.stage ||
             e.payload?.action ||
             "Sự kiện đã ghi nhận",
@@ -1420,41 +1417,6 @@
     );
     $("configuration").replaceChildren(grid, status);
   }
-  async function kronos() {
-    const f = await get("/api/kronos");
-    const box = $("kronosDetail");
-    box.replaceChildren(
-      node(
-        "p",
-        "Records " +
-          f.summary.records +
-          " · OPEN " +
-          f.summary.open +
-          " · CLOSED " +
-          f.summary.closed,
-      ),
-    );
-    if (frame?.current?.latest?.forecast)
-      box.append(chart(frame.current.latest));
-    table(
-      box.appendChild(node("div", undefined, "terminal-table-wrap")),
-      f.records,
-    );
-    const details = node("details"),
-      summary = node(
-        "summary",
-        "Chi tiết token hiện tại / 50 decisions gần nhất",
-      );
-    details.append(summary);
-    details.ontoggle = async () => {
-      if (!details.open || !frame?.current) return;
-      const r = await get(
-        "/api/trial?id=" + encodeURIComponent(frame.current.id),
-      );
-      details.replaceChildren(summary, node("pre", JSON.stringify(r, null, 2)));
-    };
-    box.append(details);
-  }
   async function refreshView() {
     if (currentView === "statistics") await stats();
     else if (currentView === "history" || currentView === "positions")
@@ -1466,7 +1428,7 @@
         kronosPolicy = data.policy;
       }
       configuration();
-    } else if (currentView === "kronos") await kronos();
+    }
   }
   function view(name) {
     currentView = name;

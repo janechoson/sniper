@@ -18,6 +18,7 @@ import { KronosMarket, type LabMarket } from "./kronos-market.js";
 import { KronosWorker } from "./kronos-worker.js";
 import { TOKEN_IMAGE_CSP } from "./token-metadata.js";
 import { startupErrorCode } from "./startup-error.js";
+import { WalletBalance } from "./wallet-balance.js";
 import { LiveStore } from "./live-store.js";
 import { LiveExecutor } from "./live-executor.js";
 import { Solana } from "./solana.js";
@@ -127,6 +128,11 @@ export async function startKronos(
     );
     lab.attachExecution(executor, configuration.dryRun);
   }
+  const walletBalance = new WalletBalance(
+    live && rpc
+      ? () => rpc!.balance(configuration.execution!.WALLET_PUBLIC_KEY)
+      : undefined,
+  );
   async function livePreflight() {
     if (!live) {
       if (ledger.pending().length || ledger.openCount())
@@ -213,6 +219,7 @@ export async function startKronos(
             csrf,
             settings,
             sizing: LIVE_SIZING_POLICY,
+            wallet: walletBalance.view(),
             credentials: {
               gmgn: configuration.apiKey ? "configured" : "not configured",
               wallet: live ? "configured" : "not configured",
@@ -248,6 +255,7 @@ export async function startKronos(
             tradingMode: live ? "LIVE" : "PAPER",
             liveExecution: executor?.status(),
             providers: market instanceof KronosMarket ? market.status() : {},
+            wallet: walletBalance.view(),
           });
         if (url.pathname === "/api/history")
           return reply(200, store.page(page));

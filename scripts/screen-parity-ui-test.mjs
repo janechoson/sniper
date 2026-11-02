@@ -12,7 +12,7 @@ const records=Array.from({length:55},(_,i)=>({...trial(i+1,false,i<2),cursor:i+1
 records[53].symbol='<img src=x onerror="window.PWNED=1">';
 records.push({...trial(1,true),cursor:56},{...trial(2,true),cursor:57});
 const events=Array.from({length:120},(_,i)=>({id:i+1,at:now-(119-i)*1000,trial_id:"open-1",kind:["KRONOS_STAGE_PASS","KRONOS_INFERENCE_RESULT","BUY_RECONCILED","KRONOS_SECURITY_REJECT"][i%4],payload:{stage:i%4===3?"SECURITY":"HISTORY",reason:i%4===3?"LAB_SECURITY_REJECT":"fixture evidence",action:i%4===1?"HOLD":undefined}})).reverse();
-const overview={tradingMode:"LIVE",paperOnly:false,dryRun:false,enabled:true,active:true,queueDepth:1,current:records.at(-1),queue:[],positions:{rows:records.filter(p=>p.status==="OPEN"),hasMore:false},logs:events.slice(0,5),inference:{loaded:true},providers:{gmgn:{state:"OK"},rpc:{state:"OK"}},recordsCount:records.length};
+const overview={tradingMode:"LIVE",paperOnly:false,dryRun:false,enabled:true,active:true,queueDepth:1,current:records.at(-1),queue:[],positions:{rows:records.filter(p=>p.status==="OPEN"),hasMore:false},logs:events.slice(0,5),inference:{loaded:true},providers:{gmgn:{state:"OK"},rpc:{state:"OK"}},wallet:{lamports:"123456789",at:now,stale:false,state:"OK"},recordsCount:records.length};
 const requests=[],errors=[];let mutations=0;
 const server=createServer((req,res)=>{
   requests.push({url:req.url,method:req.method});
@@ -44,6 +44,21 @@ try{
   page.on("pageerror",e=>errors.push(e.message));
   await page.route("**/*",r=>{const u=new URL(r.request().url());return u.hostname==="127.0.0.1"&&u.port===String(port)?r.continue():r.abort();});
   await page.goto(`http://127.0.0.1:${port}`);await page.waitForSelector(".central-token");
+  assert.equal(await page.locator('nav [data-view="kronos"]').count(),0);
+  assert.equal(await page.locator("#terminalBalance").textContent(),"SOL: 0.123456789");
+  for(const [wallet,expected] of [
+    [{lamports:"0",at:Date.now(),stale:false,state:"OK"},"SOL: 0"],
+    [{lamports:"123456789",at:Date.now()-46000,stale:false,state:"OK"},"SOL: —"],
+    [{lamports:null,at:null,stale:true,state:"UNAVAILABLE"},"SOL: —"],
+    [undefined,"SOL: —"],
+  ]){
+    await page.evaluate(({overview,wallet})=>window.KronosOverview.render({...overview,wallet}),{overview,wallet});
+    assert.equal(await page.locator("#terminalBalance").textContent(),expected);
+  }
+  await page.evaluate(overview=>window.KronosOverview.render({...overview,current:{...overview.current,latest:{action:"HOLD",reason:"DISAGREEMENT_OR_FLAT_UNCERTAIN",at:Date.now()}}}),overview);
+  assert.match(await page.locator(".kronos-model-reason").textContent(),/chưa đồng thuận.*đi ngang/);
+  assert.equal(await page.locator(".kronos-model-reason").getAttribute("title"),"DISAGREEMENT_OR_FLAT_UNCERTAIN");
+  await page.evaluate(overview=>window.KronosOverview.render(overview),overview);
   await page.locator('nav [data-view="positions"]').click();await page.waitForSelector(".position-card");
   assert.equal(await page.locator("#positionRows .position-card").count(),2);
   assert.match(await page.locator("#positionRows").textContent(),/1\.012345/);

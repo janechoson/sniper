@@ -1,0 +1,22 @@
+{
+  "themeAppliedWithoutRestart": true,
+  "at": "2026-11-02T10:29:33.1400905Z",
+  "botB": {
+    "pid": 7656,
+    "unchanged": true
+  },
+  "separateWalletRestart": {
+    "authorized": true,
+    "temporaryPause": true,
+    "stopCommandPolicyRejected": true,
+    "restarted": false,
+    "collectionRestored": true
+  },
+  "kronos": {
+    "dryRun": false,
+    "mode": "live",
+    "pid": 15012,
+    "walletApiLoaded": false,
+    "enabled": true
+  }
+}

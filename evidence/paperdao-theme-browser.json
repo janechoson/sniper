@@ -1,0 +1,57 @@
+{
+  "at": "2026-11-02T10:29:24.275Z",
+  "reports": [
+    {
+      "name": "bot-b",
+      "palette": {
+        "bg": "rgb(244, 236, 216)",
+        "text": "rgb(43, 41, 36)",
+        "accent": "#8b2020",
+        "scheme": "light"
+      },
+      "geometry": [
+        {
+          "width": 1440,
+          "identical": true
+        },
+        {
+          "width": 1024,
+          "identical": true
+        },
+        {
+          "width": 390,
+          "identical": true
+        }
+      ],
+      "errors": [],
+      "mutations": [],
+      "cssOnly": true
+    },
+    {
+      "name": "kronos",
+      "palette": {
+        "bg": "rgb(244, 236, 216)",
+        "text": "rgb(43, 41, 36)",
+        "accent": "#8b2020",
+        "scheme": "light"
+      },
+      "geometry": [
+        {
+          "width": 1440,
+          "identical": true
+        },
+        {
+          "width": 1024,
+          "identical": true
+        },
+        {
+          "width": 390,
+          "identical": true
+        }
+      ],
+      "errors": [],
+      "mutations": [],
+      "cssOnly": true
+    }
+  ]
+}

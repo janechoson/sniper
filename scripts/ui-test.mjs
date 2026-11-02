@@ -216,7 +216,7 @@ try {
   );
   assert.match(
     await page.locator("aside").textContent(),
-    /PAPER.*MARKET: REAL/s,
+    /PAPER.*SOL:/s,
   );
   assert.equal(await page.locator("[data-sell-percent]").count(), 0);
   assert((await page.locator("#tokenCarousel .carousel-token").count()) <= 7);
