@@ -9,6 +9,7 @@ export interface DiscoveryEvidence {
     firstSeenAt: number;
     lastSeenAt: number;
     sequenceStartedAt: number;
+    sequenceOrigin?: "PROVIDER" | "LOCAL_SNAPSHOT";
     consecutiveObservations: number;
     rank?: number;
     basis: string;

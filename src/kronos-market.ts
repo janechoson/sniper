@@ -19,6 +19,10 @@ import {
 } from "./kronos-domain.js";
 export interface LabMarket {
   discover(): Promise<Candidate[]>;
+  discoveryMetadata?():
+    | { fetchedAt: number; rawReceivedCount: number }
+    | undefined;
+  retryAt?(): number;
   prepare(
     c: Candidate,
     stage: (name: string, work: () => Promise<unknown>) => Promise<unknown>,
@@ -32,6 +36,7 @@ export class KronosMarket implements LabMarket {
   private tail: Promise<void> = Promise.resolve();
   private requests = 0;
   private cooldown = 0;
+  private lastDiscovery?: { fetchedAt: number; rawReceivedCount: number };
   private gmgnHealth: { state: string; at: number; error?: string } = {
     state: "UNKNOWN",
     at: 0,
@@ -131,7 +136,31 @@ export class KronosMarket implements LabMarket {
       direction: "desc",
       limit: 50,
     });
-    return parseTrending(raw, "5m").slice(0, 50);
+    const fetchedAt = Number(record(raw._gmgnSnapshot).fetchedAt);
+    const rank = record(raw).rank;
+    this.lastDiscovery = {
+      fetchedAt,
+      rawReceivedCount: Array.isArray(rank) ? rank.length : 0,
+    };
+    const candidates = parseTrending(raw, "5m").slice(0, 50);
+    for (const c of candidates) {
+      const listing = record(c.listing),
+        value = listing.sequenceStartedAt ?? listing.sequence_started_at;
+      const n = typeof value === "number" ? value : NaN;
+      const sequence = n > 0 && n < 1e12 ? n * 1000 : n;
+      const t = c.discovery!.trending!;
+      if (Number.isFinite(sequence) && sequence > 0 && sequence <= fetchedAt) {
+        t.sequenceStartedAt = sequence;
+        t.sequenceOrigin = "PROVIDER";
+      } else t.sequenceOrigin = "LOCAL_SNAPSHOT";
+    }
+    return candidates;
+  }
+  discoveryMetadata() {
+    return this.lastDiscovery;
+  }
+  retryAt() {
+    return this.cooldown;
   }
   async history(c: Candidate) {
     const now = Date.now(),
@@ -274,7 +303,7 @@ export class KronosMarket implements LabMarket {
       rpc: this.rpcHealth,
       cooldownUntil: this.cooldown,
       spacingMs: 3000,
-      discovery: "INDEPENDENT_GMGN_TRENDING_50_PER_120S",
+      discovery: "INDEPENDENT_GMGN_TRENDING_50_BATCH_EXHAUSTED_OR_5M",
     };
   }
 }

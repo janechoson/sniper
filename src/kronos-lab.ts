@@ -1,7 +1,7 @@
 import type { Candidate } from "./domain.js";
 import type { LabMarket } from "./kronos-market.js";
 import { KronosStore } from "./kronos-store.js";
-import { tokenLogo } from "./token-metadata.js";
+import { DiscoveryBatches } from "./discovery-batch.js";
 import type { LiveExecutor } from "./live-executor.js";
 import {
   KRONOS,
@@ -24,8 +24,7 @@ export class KronosLab {
   private active = false;
   private stopped = false;
   private enabled = false;
-  private nextDiscovery = 0;
-  private discoveryPending?: Promise<void>;
+  discovery: DiscoveryBatches;
   private failures = 0;
   private error?: string;
   private currentId?: string;
@@ -36,7 +35,9 @@ export class KronosLab {
     private inference: LabInference,
     readonly mode: "PAPER" | "LIVE" = "PAPER",
     private execution?: LiveExecutor,
-  ) {}
+  ) {
+    this.discovery = new DiscoveryBatches(store, market, mode);
+  }
   attachExecution(execution: LiveExecutor, dryRun = false) {
     this.execution = execution;
     this.dryRun = dryRun;
@@ -50,69 +51,33 @@ export class KronosLab {
     this.store.set("collectionEnabled", value);
   }
   async discover() {
-    const rows = await this.market.discover();
-    for (const c of rows) {
-      const appearance =
-        (this.mode === "LIVE" ? "LIVE:" : "") +
-        c.mint +
-        ":" +
-        (c.discovery?.trending?.sequenceStartedAt ?? c.discoveredAt);
-      const trial = this.store.add({
-        mint: c.mint,
-        symbol: c.symbol,
-        name: c.name,
-        logo: tokenLogo(c),
-        discoveredAt: c.discoveredAt,
-        appearance,
-        mode: this.mode,
-      });
-      if (trial) {
-        this.store.set("candidate:" + trial.id, {
-          mint: c.mint,
-          symbol: c.symbol,
-          name: c.name,
-          logo: tokenLogo(c),
-          source: c.source,
-          createdAt: c.createdAt,
-          discoveredAt: c.discoveredAt,
-          discovery: c.discovery,
-        });
-        this.store.event("KRONOS_DISCOVERY", trial, {
-          source: trial.source,
-          appearance,
-        });
-      }
-    }
+    await this.discovery.fetch();
   }
   async tick() {
+    if (this.enabled && !this.stopped) this.discovery.poll();
     if (this.execution) await this.execution.recover(false);
     if (!this.enabled || this.stopped || this.active) return;
     this.active = true;
     try {
-      if (Date.now() >= this.nextDiscovery && !this.discoveryPending) {
-        this.nextDiscovery = Date.now() + 120000;
-        this.discoveryPending = this.discover()
-          .then(() => {
-            this.error = undefined;
-          })
-          .catch(() => {
-            this.error = "DISCOVERY_UNAVAILABLE";
-          })
-          .finally(() => {
-            this.discoveryPending = undefined;
-          });
-      }
       const t =
         this.store.due(true, Date.now(), this.mode) ??
-        this.store.due(false, Date.now(), this.mode);
+        (this.discovery.canScheduleCandidates()
+          ? (this.discovery.next() ??
+            this.store.due(false, Date.now(), this.mode, true))
+          : undefined);
       if (t) await this.step(t.id);
     } finally {
       this.active = false;
+      if (this.enabled && !this.stopped) this.discovery.poll();
     }
   }
   async step(id: string) {
     const t = this.store.trial(id);
-    if (!t || ["CLOSED", "REJECTED", "ERROR"].includes(t.status)) return;
+    if (
+      !t ||
+      ["CLOSED", "REJECTED", "ERROR", "EXPIRED_UNPROCESSED"].includes(t.status)
+    )
+      return;
     if ((t.mode ?? "PAPER") !== this.mode) return;
     if (
       this.mode === "LIVE" &&
@@ -121,6 +86,7 @@ export class KronosLab {
       return;
     const executionStage =
       this.mode === "LIVE" ? "EXECUTION" : "PAPER_DECISION";
+    this.discovery.started(t);
     this.currentId = id;
     t.checkedAt ??= Date.now();
     t.evaluation = {
@@ -367,6 +333,7 @@ export class KronosLab {
           : KRONOS.inferenceIntervalMs);
       t.updatedAt = Date.now();
       this.store.save(t);
+      this.discovery.finished(t);
     }
   }
   private present(t: import("./kronos-domain.js").LabTrial) {
@@ -390,6 +357,7 @@ export class KronosLab {
       enabled: this.enabled,
       active: this.active,
       concurrency: 1,
+      discovery: this.discovery.view(),
       queueDepth: this.store.queueDepth(),
       current: current ? this.present(current) : null,
       candidate: current ? this.store.get("candidate:" + current.id) : null,
@@ -417,6 +385,7 @@ export class KronosLab {
       enabled: this.enabled,
       active: this.active,
       concurrency: 1,
+      discovery: this.discovery.view(),
       queueDepth: this.store.queueDepth(),
       failures: this.failures,
       error: this.error,
@@ -434,15 +403,15 @@ export class KronosLab {
   }
   reset(confirmation: string) {
     if (this.enabled || this.active) throw Error("PAUSE_AND_WAIT_BEFORE_RESET");
-    if (this.discoveryPending) throw Error("DISCOVERY_STILL_ACTIVE");
+    if (this.discovery.view().fetching) throw Error("DISCOVERY_STILL_ACTIVE");
     this.store.reset(confirmation);
-    this.nextDiscovery = 0;
+    this.discovery = new DiscoveryBatches(this.store, this.market, this.mode);
   }
   async stop() {
     this.stopped = true;
     this.enabled = false;
     this.inference.stop();
     while (this.active) await new Promise((r) => setTimeout(r, 20));
-    await this.discoveryPending;
+    await this.discovery.stop();
   }
 }

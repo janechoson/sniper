@@ -46,6 +46,12 @@ try{
   await page.goto(`http://127.0.0.1:${port}`);await page.waitForSelector(".central-token");
   assert.equal(await page.locator('nav [data-view="kronos"]').count(),0);
   assert.equal(await page.locator("#terminalBalance").textContent(),"SOL: 0.123456789");
+  const discovery={batch:{batchId:"fixture-batch-1",fetchedAt:Date.now()-222000,expiresAt:Date.now()+78000,uniqueCount:50,processedCount:31,pendingCount:19,expiredUnprocessedCount:0,duplicateCount:0,skippedCount:0,status:"PROCESSING"},listFetchCount:1,candidateEvaluationCount:31,fetching:false};
+  await page.evaluate(({overview,discovery})=>window.KronosOverview.render({...overview,discovery}),{overview,discovery});
+  assert.match(await page.locator("#discoveryBatch").textContent(),/31\/50 checked.*19 remaining.*Age 03:42.*Refresh 01:1[78].*PROCESSING/);
+  await page.evaluate(({overview,discovery})=>window.KronosOverview.render({...overview,discovery:{...discovery,fetching:true,batch:{...discovery.batch,status:"EXPIRED",pendingCount:0,expiredUnprocessedCount:19}}}),{overview,discovery});
+  assert.match(await page.locator("#discoveryBatch").textContent(),/EXPIRED.*Expired unprocessed: 19.*Fetching/);
+  assert.match(await page.locator("#discoveryBatch").getAttribute("title"),/List fetches: 1.*Candidate evaluations: 31/);
   for(const [wallet,expected] of [
     [{lamports:"0",at:Date.now(),stale:false,state:"OK"},"SOL: 0"],
     [{lamports:"123456789",at:Date.now()-46000,stale:false,state:"OK"},"SOL: —"],

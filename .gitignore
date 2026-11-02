@@ -8,3 +8,8 @@ logs/
 runtime/
 __pycache__/
 *.pyc
+
+# Generated verification artifacts are temporary, not project source.
+/docs/previews/
+/evidence/
+/.discovery-build-check/

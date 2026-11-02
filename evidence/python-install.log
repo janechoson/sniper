@@ -1,6 +1,0 @@
-Downloading cpython-3.11.11-windows-x86_64-none (download) (24.3MiB)
- Downloaded cpython-3.11.11-windows-x86_64-none (download)
-Installed Python 3.11.11 in 15.39s
- + cpython-3.11.11-windows-x86_64-none
-warning: Failed to install executable for cpython-3.11.11-windows-x86_64-none
-  cause: Executable already exists at `C:\Users\admin\.local\bin\python3.11.exe` but is not managed by uv; use `--force` to replace it

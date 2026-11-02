@@ -1,1 +1,0 @@
-PASS: Kronos PAPER UI, actual-state metrics/unknowns, forecast labels, details, reset confirmation, offline/stale/XSS, desktop/mobile. All calls intercepted; no server/production data.

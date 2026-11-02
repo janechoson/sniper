@@ -219,6 +219,7 @@ export async function startKronos(
             csrf,
             settings,
             sizing: LIVE_SIZING_POLICY,
+            discovery: lab.discovery.view(),
             wallet: walletBalance.view(),
             credentials: {
               gmgn: configuration.apiKey ? "configured" : "not configured",

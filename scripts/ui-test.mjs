@@ -2,9 +2,10 @@ import { chromium } from "@playwright/test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import { startKronos } from "../dist/server.js";
-import { runtimeConfig, ROOT } from "../dist/config.js";
-import { paperFill, markPrice } from "../dist/kronos-domain.js";
+const uiBuild = process.env.KRONOS_UI_BUILD || "dist";
+const { startKronos } = await import(`../${uiBuild}/server.js`);
+const { runtimeConfig, ROOT } = await import(`../${uiBuild}/config.js`);
+const { paperFill, markPrice } = await import(`../${uiBuild}/kronos-domain.js`);
 const browser = await chromium.launch({ headless: true, channel: "chrome" });
 mkdirSync(join(ROOT, "data"), { recursive: true });
 mkdirSync("docs/previews", { recursive: true });
@@ -150,13 +151,8 @@ try {
     t.nextAt = Date.now() + 600000;
     app.store.save(t);
   }
-  for (let i = 0; i < 8; i++)
-    app.store.add({
-      mint: "token" + i,
-      symbol: "TOKEN" + i,
-      appearance: "token" + i,
-      discoveredAt: at,
-    });
+  market.discover = async () => Array.from({length:8},(_,i)=>({mint:"token"+i,symbol:"TOKEN"+i,source:"gmgn:trending",discoveredAt:at}));
+  await app.lab.discover();
   const t = app.store.page({ activeOnly: true, limit: 1 }).rows[0];
   app.lab.setEnabled(true);
   pending = app.lab.tick();

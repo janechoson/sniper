@@ -37,14 +37,43 @@ export class KronosStore {
       this.db.prepare("SELECT count(*) n FROM lab_trials").get()!.n,
     );
   }
-  due(open: boolean, now = Date.now(), mode = "PAPER") {
+  due(open: boolean, now = Date.now(), mode = "PAPER", checkedOnly = false) {
     return this.decode(
       this.db
         .prepare(
-          "SELECT payload FROM lab_trials WHERE COALESCE(json_extract(payload,'$.mode'),'PAPER')=? AND json_extract(payload,'$.status') IN ('ANALYZING','WAIT_BUY','OPEN','SELL_DECIDED_PRICE_PENDING') AND COALESCE(json_type(payload,'$.entry')='object',0)=? AND json_extract(payload,'$.nextAt')<=? ORDER BY json_extract(payload,'$.nextAt'),rowid LIMIT 1",
+          "SELECT payload FROM lab_trials WHERE COALESCE(json_extract(payload,'$.mode'),'PAPER')=? AND json_extract(payload,'$.status') IN ('ANALYZING','WAIT_BUY','OPEN','SELL_DECIDED_PRICE_PENDING') AND COALESCE(json_type(payload,'$.entry')='object',0)=? AND json_extract(payload,'$.nextAt')<=?" +
+            (checkedOnly
+              ? " AND json_extract(payload,'$.checkedAt') IS NOT NULL"
+              : "") +
+            " ORDER BY json_extract(payload,'$.nextAt'),rowid LIMIT 1",
         )
         .all(mode, open ? 1 : 0, now),
     )[0];
+  }
+  appearance(appearance: string) {
+    return this.decode(
+      this.db
+        .prepare("SELECT payload FROM lab_trials WHERE appearance=?")
+        .all(appearance),
+    )[0];
+  }
+  expireUnstarted(id: string, now: number) {
+    const t = this.trial(id);
+    if (!t || t.entry || t.checkedAt !== undefined || t.status !== "ANALYZING")
+      return;
+    t.status = "EXPIRED_UNPROCESSED";
+    t.updatedAt = now;
+    this.save(t);
+  }
+  expireLegacyUnstarted(mode: string, now: number) {
+    const rows = this.decode(
+      this.db
+        .prepare(
+          "SELECT payload FROM lab_trials WHERE COALESCE(json_extract(payload,'$.mode'),'PAPER')=? AND json_extract(payload,'$.status')='ANALYZING' AND json_extract(payload,'$.checkedAt') IS NULL AND json_type(payload,'$.entry') IS NULL",
+        )
+        .all(mode),
+    );
+    for (const t of rows) this.expireUnstarted(t.id, now);
   }
   queueDepth(now = Date.now()) {
     return Number(

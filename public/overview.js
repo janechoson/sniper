@@ -950,6 +950,37 @@
   }
   function renderOverview(f) {
     frame = f;
+    const discovery = f.discovery,
+      batch = discovery?.batch,
+      indicator = $("discoveryBatch");
+    if (indicator) {
+      const time = (ms) => {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        return (
+          String(Math.floor(s / 60)).padStart(2, "0") +
+          ":" +
+          String(s % 60).padStart(2, "0")
+        );
+      };
+      indicator.textContent = batch
+        ? `Batch ${batch.batchId.slice(0, 8)} · ${batch.processedCount}/${batch.uniqueCount} checked · ${batch.pendingCount} remaining · Age ${time(Date.now() - batch.fetchedAt)} · Refresh ${time(batch.expiresAt - Date.now())} · ${batch.status}` +
+          (batch.expiredUnprocessedCount
+            ? ` · Expired unprocessed: ${batch.expiredUnprocessedCount}`
+            : "") +
+          (discovery.fetching
+            ? " · Fetching…"
+            : discovery.error
+              ? " · DISCOVERY_UNAVAILABLE"
+              : "")
+        : discovery?.fetching
+          ? "Discovery Batch · Fetching…"
+          : discovery?.error
+            ? "Discovery Batch · DISCOVERY_UNAVAILABLE"
+            : "Discovery Batch · Chờ dữ liệu backend";
+      indicator.title = discovery
+        ? `List fetches: ${discovery.listFetchCount} · Candidate evaluations: ${discovery.candidateEvaluationCount} · Duplicates: ${batch?.duplicateCount ?? 0} · Skipped: ${batch?.skippedCount ?? 0}`
+        : "Backend hiện tại chưa có batch metadata";
+    }
     rememberLogTokens([
       f.current,
       ...(f.queue || []),

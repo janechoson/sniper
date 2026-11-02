@@ -248,12 +248,13 @@ test("200 queued trials never run concurrent model inferences", async () => {
     active = 0,
     maximum = 0;
   try {
-    for (let i = 0; i < 200; i++)
-      h.store.add({
+    h.market.discover = async () =>
+      Array.from({ length: 200 }, (_, i) => ({
         mint: "serial" + i,
-        appearance: "serial" + i,
+        source: "gmgn:trending",
         discoveredAt: Date.now(),
-      });
+      }));
+    await h.lab.discover();
     h.inference.forecast = async (rows, at) => {
       active++;
       maximum = Math.max(maximum, active);

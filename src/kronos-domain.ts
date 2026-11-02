@@ -70,6 +70,7 @@ export interface LabDecision {
   terminalRangePct?: [number, number];
 }
 export interface LabTrial {
+  discoveryBatch?: { batchId: string; fetchedAt: number; expiresAt: number };
   mode?: "PAPER" | "LIVE";
   live?: import("./live-types.js").LivePosition;
   execution?: {
@@ -107,6 +108,7 @@ export interface LabTrial {
     | "CLOSED"
     | "REJECTED"
     | "ERROR"
+    | "EXPIRED_UNPROCESSED"
     | "SELL_DECIDED_PRICE_PENDING";
   gates: Record<
     string,

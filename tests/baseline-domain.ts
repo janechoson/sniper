@@ -89,6 +89,7 @@ export interface LabTrial {
     | "CLOSED"
     | "REJECTED"
     | "ERROR"
+    | "EXPIRED_UNPROCESSED"
     | "SELL_DECIDED_PRICE_PENDING";
   gates: Record<
     string,
