@@ -1,0 +1,405 @@
+{
+  "at": "2026-11-02T09:39:10.783Z",
+  "candles": [
+    {
+      "at": 1793609880000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793609940000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610000000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610060000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610120000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610180000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610240000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610300000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610360000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610420000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610480000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610540000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610600000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610660000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610720000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610780000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610840000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610900000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793610960000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611020000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611080000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611140000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611200000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611260000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611320000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611380000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611440000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611500000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611560000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611620000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611680000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611740000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611800000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611860000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611920000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793611980000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793612040000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793612100000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793612160000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    },
+    {
+      "at": 1793612220000,
+      "open": 1,
+      "high": 1.02,
+      "low": 0.98,
+      "close": 1
+    }
+  ],
+  "first": {
+    "version": "KRONOS_FORECAST_V1",
+    "model": {
+      "id": "NeoQuasar/Kronos-small",
+      "revision": "901c26c1332695a2a8f243eb2f37243a37bea320"
+    },
+    "tokenizer": {
+      "id": "NeoQuasar/Kronos-Tokenizer-base",
+      "revision": "0e0117387f39004a9016484a186a908917e22426"
+    },
+    "commit": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+    "paths": [
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ],
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ],
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ]
+    ],
+    "forecastAt": [
+      1793612280000,
+      1793612340000,
+      1793612400000,
+      1793612460000,
+      1793612520000
+    ],
+    "inputFrom": 1793609880000,
+    "inputTo": 1793612280000,
+    "latestClosedCandleAt": 1793612280000,
+    "decisionAt": 1793612311778,
+    "volumeMode": "PRICE_ONLY_OPTIONAL_CHANNELS_DISABLED",
+    "priceScale": 1,
+    "seed": 1701,
+    "samples": 3,
+    "temperature": 1,
+    "topP": 0.9,
+    "eval": true,
+    "inferenceMode": true,
+    "limitations": [
+      "Three seeded paths are not calibrated probability/confidence",
+      "Price-only optional channels disabled",
+      "No Solana meme-token training validation established"
+    ]
+  },
+  "second": {
+    "version": "KRONOS_FORECAST_V1",
+    "model": {
+      "id": "NeoQuasar/Kronos-small",
+      "revision": "901c26c1332695a2a8f243eb2f37243a37bea320"
+    },
+    "tokenizer": {
+      "id": "NeoQuasar/Kronos-Tokenizer-base",
+      "revision": "0e0117387f39004a9016484a186a908917e22426"
+    },
+    "commit": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+    "paths": [
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ],
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ],
+      [
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896,
+        1.0000001192092896
+      ]
+    ],
+    "forecastAt": [
+      1793612280000,
+      1793612340000,
+      1793612400000,
+      1793612460000,
+      1793612520000
+    ],
+    "inputFrom": 1793609880000,
+    "inputTo": 1793612280000,
+    "latestClosedCandleAt": 1793612280000,
+    "decisionAt": 1793612311778,
+    "volumeMode": "PRICE_ONLY_OPTIONAL_CHANNELS_DISABLED",
+    "priceScale": 1,
+    "seed": 1701,
+    "samples": 3,
+    "temperature": 1,
+    "topP": 0.9,
+    "eval": true,
+    "inferenceMode": true,
+    "limitations": [
+      "Three seeded paths are not calibrated probability/confidence",
+      "Price-only optional channels disabled",
+      "No Solana meme-token training validation established"
+    ]
+  },
+  "equivalent": true,
+  "baselineWorkerIsCopiedUnchanged": true
+}

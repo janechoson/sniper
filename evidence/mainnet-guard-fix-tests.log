@@ -1,0 +1,36 @@
+TAP version 13
+# (node:14228) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: mainnet preflight accepts the canonical Solana mainnet hash and rejects other networks/typos
+ok 1 - mainnet preflight accepts the canonical Solana mainnet hash and rejects other networks/typos
+  ---
+  duration_ms: 1.7813
+  type: 'test'
+  ...
+# Subtest: startup reports controlled configuration, signer and filesystem/socket codes
+ok 2 - startup reports controlled configuration, signer and filesystem/socket codes
+  ---
+  duration_ms: 0.535
+  type: 'test'
+  ...
+# Subtest: startup never echoes raw error messages, stacks, URLs or embedded secrets
+ok 3 - startup never echoes raw error messages, stacks, URLs or embedded secrets
+  ---
+  duration_ms: 0.2359
+  type: 'test'
+  ...
+# Subtest: existing installation lock blocks startup explicitly and is never overwritten
+ok 4 - existing installation lock blocks startup explicitly and is never overwritten
+  ---
+  duration_ms: 9.9426
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1758.7402

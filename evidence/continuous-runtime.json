@@ -1,0 +1,78 @@
+{
+  "at": "2026-11-02T06:00:50.553Z",
+  "enabled": true,
+  "active": true,
+  "records": 50,
+  "queueDepth": 45,
+  "current": {
+    "symbol": "GTA6",
+    "status": "ANALYZING",
+    "gates": {
+      "CHEAP_FILTER": "PASS",
+      "SECURITY": "PASS",
+      "COMPATIBILITY": "PASS",
+      "HISTORY": "CHECKING"
+    }
+  },
+  "providers": {
+    "requests": 14,
+    "gmgn": {
+      "state": "OK",
+      "at": 1793599249003
+    },
+    "rpc": {
+      "state": "OK",
+      "at": 1793599249184
+    },
+    "cooldownUntil": 0,
+    "spacingMs": 3000,
+    "discovery": "INDEPENDENT_GMGN_TRENDING_50_PER_120S"
+  },
+  "inference": {
+    "active": false,
+    "loaded": true,
+    "timeouts": 0,
+    "loadMs": 9212.188999999853,
+    "rssBytes": 365887488,
+    "cpuThreads": 2,
+    "priority": "BELOW_NORMAL_BEST_EFFORT",
+    "memorySoftLimitBytes": 805306368,
+    "samples": 3,
+    "p50Ms": 682.7550999996674,
+    "p95Ms": null
+  },
+  "stats": {
+    "records": 50,
+    "tokensChecked": 6,
+    "kronosPass": 0,
+    "selectionRate": 0,
+    "eligible": 3,
+    "paperBuys": 0,
+    "open": 0,
+    "closed": 0,
+    "wins": 0,
+    "losses": 0,
+    "flats": 0,
+    "winRate": null,
+    "averagePnlPct": null,
+    "medianPnlPct": null,
+    "totalPaperPnlPct": null,
+    "bestTrade": null,
+    "worstTrade": null,
+    "averageMfePct": null,
+    "averageMaePct": null,
+    "averageHoldMs": null,
+    "rolling20": null,
+    "rolling50": null,
+    "distribution": [],
+    "funnel": {
+      "CHEAP_FILTER": 4,
+      "SECURITY": 4,
+      "COMPATIBILITY": 4,
+      "HISTORY": 3,
+      "CAPITAL_FLOW": 3
+    },
+    "winRateDenominator": "ALL_CLOSED_INCLUDING_FLAT",
+    "totalSemantics": "SUM_OF_EQUAL_NOTIONAL_CLOSED_PRICE_RETURNS_NOT_COMPOUNDED"
+  }
+}

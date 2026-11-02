@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kill of BOT — Kronos</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">
+        <span class="brandmark"
+          ><span class="bot-icon">🤖</span> Kill of BOT</span
+        ><span id="overviewMode" class="terminal-live">PAPER</span>
+      </div>
+      <div class="micro">KRONOS · DỮ LIỆU THẬT</div>
+      <nav>
+        <button data-view="overview" class="active">Tổng quan</button>
+
+        <button data-view="positions">
+          Positions
+          <span
+            id="positionsBadge"
+            class="position-badge hidden"
+            aria-live="polite"
+          ></span>
+        </button>
+
+        <button data-view="history">◷ Lịch sử</button>
+
+        <button data-view="kronos">Kronos</button>
+        <button data-view="settings">Cấu hình</button>
+        <button data-view="logs">Log</button
+        ><button data-view="statistics">Thống kê</button>
+      </nav>
+      <div class="terminal-wallet">
+        <span id="terminalBalance">MARKET: REAL</span
+        ><small id="terminalUsd">MODE: PAPER</small>
+      </div>
+      <div class="terminal-running">
+        <i id="terminalDot"></i><span id="terminalRunning">Đang kết nối</span>
+      </div>
+      <div class="aside-bottom">
+        <span class="dot"></span>KẾT NỐI NỘI BỘ<br /><small
+          >127.0.0.1 · Kronos độc lập</small
+        >
+        <p>PAPER mặc định. LIVE cần cấu hình ví riêng và kích hoạt rõ ràng.</p>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <div class="micro">KHÔNG GIAN LÀM VIỆC / MẠNG CHÍNH SOLANA</div>
+          <h1 id="title">Luồng xử lý token</h1>
+          <p class="header-subtitle">
+            Theo dõi quá trình quét, đánh giá và giao dịch theo thời gian thực
+          </p>
+        </div>
+        <div class="header-actions">
+          <span id="mode" class="pill">ĐANG KẾT NỐI</span
+          ><span id="clock" class="muted"></span>
+        </div>
+      </header>
+      <div id="notice" role="status" class="notice">
+        Đang kết nối với bộ máy giao dịch…
+      </div>
+      <section id="overview" class="view">
+        <div id="terminalOverview" class="terminal-overview">
+          <section class="token-scanner">
+            <h2>Tokens đang quét</h2>
+            <p id="terminalScanCaption">Đang chờ GMGN Trending…</p>
+            <div
+              id="tokenCarousel"
+              class="token-carousel"
+              aria-live="polite"
+            ></div>
+          </section>
+          <section class="terminal-panel current-token">
+            <h2>Token hiện tại</h2>
+            <div id="terminalToken"></div>
+          </section>
+          <section class="terminal-panel current-evaluation">
+            <h2>Đánh giá hiện tại</h2>
+            <div id="terminalStages"></div>
+          </section>
+          <section id="terminalResult" class="terminal-panel current-result">
+            <h2>Kết quả</h2>
+            <div id="terminalVerdict">ĐANG CHỜ</div>
+            <div id="terminalDecision"></div>
+          </section>
+          <section class="terminal-panel action-log">
+            <div class="terminal-panel-head">
+              <h2 id="terminalLogTitle">Action Log</h2>
+              <select id="terminalLogFilter" aria-label="Lọc Action Log">
+                <option value="ALL">Tất cả</option>
+                <option value="FAIL">Lỗi</option>
+                <option value="PASS">Hoàn tất</option>
+              </select>
+            </div>
+            <div id="terminalLogs" role="log" aria-live="polite"></div>
+          </section>
+          <section class="terminal-panel overview-positions">
+            <div class="terminal-panel-head">
+              <h2 id="terminalPositionCount">Positions (0)</h2>
+              <button data-open-view="positions">Xem tất cả →</button>
+            </div>
+            <div class="terminal-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Token</th>
+                    <th>Entry Price</th>
+                    <th>Current Price</th>
+                    <th title="Lãi/lỗ của vị thế trước phí.">PnL</th>
+                    <th title="PnL % không bao gồm phí.">PnL %</th>
+                    <th>MFE</th>
+                    <th>MAE</th>
+                    <th>Trạng thái</th>
+                    <th>Thời gian hold</th>
+                  </tr>
+                </thead>
+                <tbody id="terminalPositionRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section id="positions" class="view hidden">
+        <article class="panel positions-panel">
+          <div class="panel-title positions-heading">
+            <div>
+              <h2>
+                Vị thế<span
+                  id="positionActiveCount"
+                  class="position-active-count"
+                  >0 ĐANG GIỮ</span
+                >
+              </h2>
+              <p class="muted">Vị thế thực tế · tổng quan danh mục của bạn</p>
+            </div>
+            <span class="accounting-badge"
+              >✓ LIVE theo receipt · PAPER theo giá quan sát</span
+            >
+          </div>
+          <div class="kronos-screen-filters">
+            <label
+              >Chế độ
+              <select id="positionsMode">
+                <option value="ALL">Tất cả</option>
+                <option>PAPER</option>
+                <option>LIVE</option>
+              </select></label
+            >
+          </div>
+          <div
+            id="positionPortfolio"
+            class="position-portfolio"
+            aria-label="Tổng quan các vị thế đang giữ"
+          ></div>
+          <div id="positionsTable">
+            <div id="positionRows" class="position-grid"></div>
+          </div>
+          <div id="positionEmpty" class="empty">
+            Hiện không giữ token nào.<small
+              >Vị thế đã bán hết nằm trong Lịch sử.</small
+            >
+          </div>
+          <div class="kronos-page-footer">
+            <span id="positionsScope" class="muted"></span>
+            <div>
+              <button id="positionsPrevious" aria-label="Trang vị thế trước">
+                ←</button
+              ><span id="positionsPage">1</span
+              ><button id="positionsNext" aria-label="Trang vị thế tiếp">
+                →
+              </button>
+            </div>
+          </div>
+        </article>
+      </section>
+      <section id="history" class="view hidden">
+        <article class="panel">
+          <div class="panel-title">
+            <h2>Lịch sử giao dịch</h2>
+            <span class="muted">ĐÃ BÁN HẾT · LÃI/LỖ ĐÃ CHỐT</span>
+          </div>
+          <div class="kronos-screen-filters">
+            <label
+              >Chế độ
+              <select id="historyMode">
+                <option value="ALL">Tất cả</option>
+                <option>PAPER</option>
+                <option>LIVE</option>
+              </select></label
+            ><label
+              >Trạng thái
+              <select id="historyState">
+                <option value="CLOSED">Đã đóng</option>
+                <option value="ALL">Tất cả records</option>
+                <option value="OPEN">Đang giữ</option>
+                <option value="REJECTED">Đã loại</option>
+                <option value="ERROR">Lỗi</option>
+              </select></label
+            >
+          </div>
+          <div id="historyTable">
+            <div
+              id="historyRows"
+              class="history-list"
+              role="region"
+              aria-label="Lịch sử giao dịch, có thể cuộn dọc"
+              tabindex="0"
+            ></div>
+          </div>
+          <div id="historyEmpty" class="empty">
+            Chưa có vị thế hoàn tất trong chế độ này.
+          </div>
+          <div class="kronos-page-footer">
+            <span id="historyScope" class="muted"
+              >Mới nhất trước · lọc trên backend</span
+            >
+            <div>
+              <button id="historyPrevious" aria-label="Trang lịch sử trước">
+                ←</button
+              ><span id="historyPage">1</span
+              ><button id="historyNext" aria-label="Trang lịch sử tiếp">
+                →
+              </button>
+            </div>
+          </div>
+        </article>
+      </section>
+      <section id="kronos" class="view hidden">
+        <article class="terminal-panel">
+          <h2>Kronos</h2>
+          <p>
+            Dữ liệu GMGN thật. PAPER là mô phỏng; LIVE dùng receipt đã đối soát.
+          </p>
+          <div id="kronosDetail"></div>
+        </article>
+      </section>
+      <section id="settings" class="view hidden">
+        <div class="settings-operator-controls">
+          <div class="control">
+            <label>Điều khiển giao dịch</label>
+            <div class="kronos-operator-row">
+              <strong id="collectionStatus">ĐANG KẾT NỐI</strong
+              ><button id="collectionEnable" type="button">
+                Bắt đầu collection / trading theo mode</button
+              ><button id="collectionPause" type="button">
+                Tạm dừng collection
+              </button>
+            </div>
+          </div>
+        </div>
+        <article class="panel settings">
+          <div class="panel-title">
+            <h2>Tham số chiến lược và rủi ro</h2>
+            <span class="accounting-badge">KRONOS</span>
+          </div>
+          <p class="muted">
+            Mỗi lệnh mua dùng 1% SOL khả dụng sau dự phòng. Chế độ và thông tin
+            xác thực được cấu hình ở máy chủ.
+          </p>
+          <p class="muted">
+            Kronos quyết định BUY / WAIT và HOLD / SELL. Các giá trị dưới đây
+            phản ánh cấu hình đang chạy; chỉ đọc tại UI.
+          </p>
+          <div id="configuration"></div>
+          <p id="settingsHelp" class="muted">
+            Tham số được lấy từ backend. Mức BUY cố định 1%; thay đổi giao diện
+            không thay đổi chiến lược.
+          </p>
+        </article>
+      </section>
+      <section id="logs" class="view hidden insights-log-view">
+        <div class="insights-log-heading">
+          <div class="insights-log-title">
+            <span
+              class="insights-log-heading-icon"
+              data-log-icon="document"
+              aria-hidden="true"
+            ></span>
+            <div>
+              <h2>Log Hoạt Động</h2>
+              <p>
+                Theo dõi hoạt động, đánh giá và quyết định của Kronos theo thời
+                gian thực
+              </p>
+            </div>
+          </div>
+          <div class="insights-log-actions">
+            <span id="logStreamStatus" class="insights-stream" role="status"
+              >● ĐANG KẾT NỐI</span
+            >
+            <button
+              id="logPause"
+              title="Chỉ tạm dừng hiển thị log; bot vẫn giao dịch bình thường"
+              type="button"
+              aria-pressed="false"
+            >
+              <span aria-hidden="true">Ⅱ</span> Tạm dừng
+            </button>
+            <button
+              id="logClear"
+              type="button"
+              title="Chỉ xóa log đang hiển thị trong phiên này; không xóa dữ liệu backend"
+            >
+              <span data-log-icon="trash" aria-hidden="true"></span> Xóa
+            </button>
+            <button
+              id="logExport"
+              type="button"
+              title="Xuất các log đang lọc thành JSON"
+            >
+              <span data-log-icon="download" aria-hidden="true"></span> Xuất log
+            </button>
+          </div>
+        </div>
+        <div class="insights-log-panel">
+          <div class="insights-log-toolbar">
+            <div
+              id="logTypeFilters"
+              class="insights-log-filters"
+              role="group"
+              aria-label="Lọc theo loại log"
+            ></div>
+            <label class="insights-log-search"
+              ><span data-log-icon="search" aria-hidden="true"></span
+              ><input
+                id="logSearch"
+                type="search"
+                placeholder="Tìm token (tên, mint, reason...)"
+                aria-label="Tìm kiếm log"
+            /></label>
+            <select id="logRange" aria-label="Khoảng thời gian log">
+              <option value="today">Hôm nay</option>
+              <option value="7d">7 ngày</option>
+              <option value="30d">30 ngày</option>
+              <option value="all">Tất cả</option>
+            </select>
+          </div>
+          <div class="insights-log-table-wrap">
+            <table class="insights-log-table">
+              <thead>
+                <tr>
+                  <th>Thời gian</th>
+                  <th>Loại</th>
+                  <th>Token</th>
+                  <th>Thông tin &amp; Chi tiết</th>
+                  <th>Kết quả</th>
+                  <th><span class="insights-sr-only">Chi tiết JSON</span></th>
+                </tr>
+              </thead>
+              <tbody id="terminalAllLogs"></tbody>
+            </table>
+            <div id="logEmpty" class="insights-log-empty" role="status">
+              <span data-log-icon="document" aria-hidden="true"></span
+              ><strong>Chưa có log để hiển thị</strong>
+              <p>Log mới sẽ xuất hiện khi backend gửi sự kiện.</p>
+            </div>
+          </div>
+          <div class="insights-log-footer">
+            <button id="logsOlder" type="button">Nạp log cũ hơn</button
+            ><button id="logsLatest" type="button">Mới nhất</button
+            ><span id="logScope"
+              >Chỉ hiển thị log đã tải trong trình duyệt.</span
+            >
+            <div class="insights-log-pagination">
+              <button
+                id="logPrevious"
+                type="button"
+                aria-label="Trang log trước"
+              >
+                ←</button
+              ><span id="logPage">1 / 1</span
+              ><button
+                id="logNext"
+                type="button"
+                aria-label="Trang log tiếp theo"
+              >
+                →
+              </button>
+            </div>
+          </div>
+        </div>
+        <p
+          id="logFeedback"
+          class="insights-log-feedback"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
+      <section id="statistics" class="view hidden">
+        <article class="terminal-panel">
+          <h2>Thống kê theo mode</h2>
+          <select id="statisticsMode">
+            <option>PAPER</option>
+            <option>LIVE</option>
+          </select>
+          <p>
+            Selection: trial có PAPER entry / trial đã bắt đầu evaluation. PnL
+            là gross price return, chưa gồm phí/slippage.
+          </p>
+          <div id="statCards" class="kronos-summary"></div>
+          <h3>Selection funnel</h3>
+          <div id="statFunnel"></div>
+          <h3>Phân bố kết quả CLOSED</h3>
+          <div id="statDistribution"></div>
+        </article>
+      </section>
+    </main>
+    <script src="/token-avatar.js"></script>
+    <script src="/overview.js"></script>
+  </body>
+</html>

@@ -1,0 +1,104 @@
+{
+  "at": "2026-11-02T10:08:04.776Z",
+  "syntheticRecords": 5013,
+  "loadMs": 400.21259999999984,
+  "referenceGeometry": {
+    "aside": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 68
+    },
+    ".token-scanner": {
+      "x": 18,
+      "y": 86,
+      "width": 1009.125,
+      "height": 190
+    },
+    ".current-token": {
+      "x": 18,
+      "y": 294,
+      "width": 412.609375,
+      "height": 360
+    },
+    ".current-evaluation": {
+      "x": 445.609375,
+      "y": 294,
+      "width": 327.46875,
+      "height": 360
+    },
+    "#terminalResult": {
+      "x": 788.078125,
+      "y": 294,
+      "width": 239.046875,
+      "height": 360
+    },
+    ".action-log": {
+      "x": 1042.125,
+      "y": 86,
+      "width": 379.875,
+      "height": 568
+    },
+    ".overview-positions": {
+      "x": 18,
+      "y": 672,
+      "width": 1404,
+      "height": 149
+    }
+  },
+  "newGeometry": {
+    "aside": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 68
+    },
+    ".token-scanner": {
+      "x": 18,
+      "y": 86,
+      "width": 1009.125,
+      "height": 190
+    },
+    ".current-token": {
+      "x": 18,
+      "y": 294,
+      "width": 412.609375,
+      "height": 360
+    },
+    ".current-evaluation": {
+      "x": 445.609375,
+      "y": 294,
+      "width": 327.46875,
+      "height": 360
+    },
+    "#terminalResult": {
+      "x": 788.078125,
+      "y": 294,
+      "width": 239.046875,
+      "height": 360
+    },
+    ".action-log": {
+      "x": 1042.125,
+      "y": 86,
+      "width": 379.875,
+      "height": 568
+    },
+    ".overview-positions": {
+      "x": 18,
+      "y": 672,
+      "width": 1404,
+      "height": 361
+    }
+  },
+  "errors": [],
+  "apiPaths": [
+    "/api/status",
+    "/api/overview",
+    "/api/history",
+    "/api/statistics",
+    "/api/kronos",
+    "/api/kronos/control"
+  ],
+  "allFixtureRequestsIntercepted": true,
+  "realSourceReferenceReadOnly": true
+}

@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-02T09:53:16.492Z",
+  "kronos": {
+    "pid": 15012,
+    "mode": "live",
+    "enabled": true,
+    "dryRun": false,
+    "active": true,
+    "recordsCount": 68
+  },
+  "botB": {
+    "pid": null,
+    "mode": "live"
+  }
+}

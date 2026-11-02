@@ -1,0 +1,107 @@
+ WARN  Unsupported engine: wanted: {"node":">=22.13.0"} (current: {"node":"v20.19.3","pnpm":"10.28.2"})
+
+> k1ll-kronos-paper-bot@1.0.0 test C:\Users\admin\Desktop\Tool\sniper
+> tsx --import ./scripts/test-env.mjs --test tests/*.test.ts
+
+TAP version 13
+# (node:3172) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: empty installation has zero trials, positions, fills, history and no legacy names
+ok 1 - empty installation has zero trials, positions, fills, history and no legacy names
+  ---
+  duration_ms: 22.2819
+  type: 'test'
+  ...
+# Subtest: own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+ok 2 - own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+  ---
+  duration_ms: 8.8957
+  type: 'test'
+  ...
+# Subtest: 200 retained trials count CLOSED/reject/error, no eviction or appearance duplicates
+ok 3 - 200 retained trials count CLOSED/reject/error, no eviction or appearance duplicates
+  ---
+  duration_ms: 87.6535
+  type: 'test'
+  ...
+# Subtest: real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+ok 4 - real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+  ---
+  duration_ms: 7.1095
+  type: 'test'
+  ...
+# Subtest: native input / consensus / paper prices exactly match old policy, cap change is explicit
+ok 5 - native input / consensus / paper prices exactly match old policy, cap change is explicit
+  ---
+  duration_ms: 1.3766
+  type: 'test'
+  ...
+# Subtest: new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+ok 6 - new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+  ---
+  duration_ms: 3.1275
+  type: 'test'
+  ...
+# Subtest: pending PAPER sell requires valid post-decision price, no forecast/fill invented
+ok 7 - pending PAPER sell requires valid post-decision price, no forecast/fill invented
+  ---
+  duration_ms: 2.4841
+  type: 'test'
+  ...
+# Subtest: slow discovery does not block OPEN monitor; inference stays serial
+ok 8 - slow discovery does not block OPEN monitor; inference stays serial
+  ---
+  duration_ms: 2.9021
+  type: 'test'
+  ...
+# Subtest: 200 queued trials never run concurrent model inferences
+ok 9 - 200 queued trials never run concurrent model inferences
+  ---
+  duration_ms: 93.9287
+  type: 'test'
+  ...
+# Subtest: invalid model output never invents BUY or exits OPEN
+ok 10 - invalid model output never invents BUY or exits OPEN
+  ---
+  duration_ms: 4.5631
+  type: 'test'
+  ...
+# Subtest: restart own DB preserves OPEN entry and no duplicate appearance BUY
+ok 11 - restart own DB preserves OPEN entry and no duplicate appearance BUY
+  ---
+  duration_ms: 51.3988
+  type: 'test'
+  ...
+# Subtest: fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+ok 12 - fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+  ---
+  duration_ms: 77.7425
+  type: 'test'
+  ...
+# Subtest: worker env has no secrets or PATH forwarding; source/runtime graph has no execution or JEV modules
+ok 13 - worker env has no secrets or PATH forwarding; source/runtime graph has no execution or JEV modules
+  ---
+  duration_ms: 2.4386
+  type: 'test'
+  ...
+# Subtest: server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+ok 14 - server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+  ---
+  duration_ms: 83.0434
+  type: 'test'
+  ...
+# Subtest: pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+ok 15 - pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+  ---
+  duration_ms: 10814.0709
+  type: 'test'
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12828.7952

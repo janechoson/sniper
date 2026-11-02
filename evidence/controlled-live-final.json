@@ -1,0 +1,78 @@
+{
+  "at": "2026-11-02T06:44:45.636Z",
+  "botB": {
+    "protectedFiles": 212,
+    "changed": [],
+    "pid": null
+  },
+  "kronos": {
+    "pid": 14568,
+    "mode": "paper",
+    "realExecutionEnabled": false,
+    "enabled": false,
+    "active": false,
+    "counts": {
+      "lab_trials": 0,
+      "lab_decisions": 0,
+      "lab_events": 0,
+      "lab_meta": 0,
+      "live_executions": 0,
+      "live_positions": 0,
+      "live_fills": 0
+    },
+    "integrity": [
+      {
+        "integrity_check": "ok"
+      }
+    ],
+    "changed": [
+      "src\\config.ts",
+      "src\\kronos-domain.ts",
+      "src\\kronos-lab.ts",
+      "src\\kronos-store.ts",
+      "src\\server.ts",
+      "src\\token-program.ts",
+      "public\\index.html",
+      "public\\overview.js",
+      "scripts\\build.mjs",
+      "tests\\baseline-domain.ts",
+      "tests\\kronos.test.ts",
+      "dist\\config.js",
+      "dist\\identity.json",
+      "dist\\kronos-domain.js",
+      "dist\\kronos-lab.js",
+      "dist\\kronos-store.js",
+      "dist\\server.js",
+      "dist\\token-program.js",
+      ".env.example"
+    ],
+    "envUnchanged": false,
+    "modelWorkerUnchanged": true,
+    "envWrittenByTask": false,
+    "envNote": "Byte change observed after earlier checkpoint; task did not write .env. No changed values printed."
+  },
+  "strategyParity": {
+    "validateCandles": true,
+    "decideForecast": true,
+    "validPrice": true,
+    "markPrice": true,
+    "paperFill": true
+  },
+  "credentials": {
+    "walletConfigured": false,
+    "rpcConfigured": true,
+    "gmgnConfigured": true,
+    "jupiterConfigured": false
+  },
+  "taskRealSignatures": 0,
+  "taskRealSubmissions": 0,
+  "restart": {
+    "finalReloadAttempt": "DENIED_BY_AUTOMATIC_APPROVAL_REVIEW",
+    "reason": "blocked by policy",
+    "pendingManualRestart": true
+  },
+  "tests": {
+    "passed": 51,
+    "failed": 0
+  }
+}

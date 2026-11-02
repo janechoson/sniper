@@ -1,0 +1,54 @@
+ WARN  Unsupported engine: wanted: {"node":">=22.13.0"} (current: {"node":"v20.19.3","pnpm":"10.28.2"})
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +201
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+   ╭──────────────────────────────────────────╮
+   │                                          │
+   │   Update available! 10.28.2 → 12.16.1.   │
+   │   Changelog: https://pnpm.io/v/12.16.1   │
+   │     To update, run: pnpm add -g pnpm     │
+   │                                          │
+   ╰──────────────────────────────────────────╯
+
+Progress: resolved 201, reused 50, downloaded 0, added 0
+Progress: resolved 201, reused 201, downloaded 0, added 5
+Progress: resolved 201, reused 201, downloaded 0, added 40
+Progress: resolved 201, reused 201, downloaded 0, added 72
+Progress: resolved 201, reused 201, downloaded 0, added 91
+Progress: resolved 201, reused 201, downloaded 0, added 100
+Progress: resolved 201, reused 201, downloaded 0, added 115
+Progress: resolved 201, reused 201, downloaded 0, added 170
+Progress: resolved 201, reused 201, downloaded 0, added 200
+Progress: resolved 201, reused 201, downloaded 0, added 201, done
+.../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+
+dependencies:
++ @solana/spl-token 0.4.15
++ @solana/spl-token-metadata 0.1.6
++ @solana/web3.js 1.98.4
++ dotenv 17.2.3
++ zod 4.6.7
+
+devDependencies:
++ @eslint/js 9.39.1
++ @playwright/test 1.64.1
++ @types/node 22.19.0
++ eslint 9.39.1
++ node 22.22.0
++ prettier 3.6.2
++ tsx 4.20.6
++ typescript 5.9.3
++ typescript-eslint 8.46.3
+
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: bigint-buffer@1.1.5, bufferutil@4.1.0,              │
+│   utf-8-validate@6.0.6.                                                      │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Done in 21.1s using pnpm v10.28.2

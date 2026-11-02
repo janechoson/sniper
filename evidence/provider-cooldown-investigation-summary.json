@@ -1,0 +1,296 @@
+{
+  "at": "2026-11-02T10:13:08.173Z",
+  "counts": [
+    {
+      "error": "LAB_PROVIDER_COOLDOWN",
+      "state": "REJECTED",
+      "count": 55
+    },
+    {
+      "error": "LAB_PUBLIC_PROVIDER_HTTP_429",
+      "state": "REJECTED",
+      "count": 1
+    }
+  ],
+  "timeline": [
+    {
+      "at": 1793612989421,
+      "kind": "KRONOS_DISCOVERY",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:49:49"
+    },
+    {
+      "at": 1793613151579,
+      "kind": "KRONOS_ATTEMPT_START",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:31"
+    },
+    {
+      "at": 1793613151656,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "CHEAP_FILTER",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:31"
+    },
+    {
+      "at": 1793613153856,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "CHEAP_FILTER",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:33"
+    },
+    {
+      "at": 1793613153899,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "SECURITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:33"
+    },
+    {
+      "at": 1793613156829,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "SECURITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:36"
+    },
+    {
+      "at": 1793613156840,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "COMPATIBILITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:36"
+    },
+    {
+      "at": 1793613157084,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "COMPATIBILITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:37"
+    },
+    {
+      "at": 1793613157094,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "HISTORY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:37"
+    },
+    {
+      "at": 1793613159822,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "HISTORY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:39"
+    },
+    {
+      "at": 1793613159824,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "CAPITAL_FLOW",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:39"
+    },
+    {
+      "at": 1793613159826,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "CAPITAL_FLOW",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:39"
+    },
+    {
+      "at": 1793613159827,
+      "kind": "KRONOS_INFERENCE_START",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:39"
+    },
+    {
+      "at": 1793613160561,
+      "kind": "KRONOS_INFERENCE_RESULT",
+      "stage": null,
+      "reason": null,
+      "action": "WAIT",
+      "timeBangkok": "2026-11-02 16:52:40"
+    },
+    {
+      "at": 1793613160562,
+      "kind": "KRONOS_WAIT",
+      "stage": null,
+      "reason": "DISAGREEMENT_OR_FLAT_UNCERTAIN",
+      "action": null,
+      "timeBangkok": "2026-11-02 16:52:40"
+    },
+    {
+      "at": 1793613473612,
+      "kind": "KRONOS_ATTEMPT_START",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:53"
+    },
+    {
+      "at": 1793613473615,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "CHEAP_FILTER",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:53"
+    },
+    {
+      "at": 1793613475597,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "CHEAP_FILTER",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:55"
+    },
+    {
+      "at": 1793613475600,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "SECURITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:55"
+    },
+    {
+      "at": 1793613478586,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "SECURITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:58"
+    },
+    {
+      "at": 1793613478589,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "COMPATIBILITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:58"
+    },
+    {
+      "at": 1793613478776,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "COMPATIBILITY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:58"
+    },
+    {
+      "at": 1793613478779,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "HISTORY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:57:58"
+    },
+    {
+      "at": 1793613481589,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "HISTORY",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:58:01"
+    },
+    {
+      "at": 1793613481596,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "CAPITAL_FLOW",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:58:01"
+    },
+    {
+      "at": 1793613481603,
+      "kind": "KRONOS_STAGE_PASS",
+      "stage": "CAPITAL_FLOW",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:58:01"
+    },
+    {
+      "at": 1793613481606,
+      "kind": "KRONOS_INFERENCE_START",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:58:01"
+    },
+    {
+      "at": 1793613482417,
+      "kind": "KRONOS_INFERENCE_RESULT",
+      "stage": null,
+      "reason": null,
+      "action": "WAIT",
+      "timeBangkok": "2026-11-02 16:58:02"
+    },
+    {
+      "at": 1793613482420,
+      "kind": "KRONOS_WAIT",
+      "stage": null,
+      "reason": "DISAGREEMENT_OR_FLAT_UNCERTAIN",
+      "action": null,
+      "timeBangkok": "2026-11-02 16:58:02"
+    },
+    {
+      "at": 1793613589964,
+      "kind": "KRONOS_ATTEMPT_START",
+      "stage": null,
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:59:49"
+    },
+    {
+      "at": 1793613589966,
+      "kind": "KRONOS_STAGE_CHECKING",
+      "stage": "CHEAP_FILTER",
+      "reason": null,
+      "action": null,
+      "timeBangkok": "2026-11-02 16:59:49"
+    },
+    {
+      "at": 1793613589968,
+      "kind": "KRONOS_STAGE_FAIL",
+      "stage": "CHEAP_FILTER",
+      "reason": "LAB_PROVIDER_COOLDOWN",
+      "action": null,
+      "timeBangkok": "2026-11-02 16:59:49"
+    },
+    {
+      "at": 1793613589971,
+      "kind": "KRONOS_SECURITY_REJECT",
+      "stage": null,
+      "reason": "LAB_PROVIDER_COOLDOWN",
+      "action": null,
+      "timeBangkok": "2026-11-02 16:59:49"
+    }
+  ],
+  "runtime": {
+    "pid": 15012,
+    "mode": "live",
+    "enabled": true,
+    "active": true,
+    "gmgn": {
+      "state": "OK",
+      "at": 1793614386103
+    },
+    "cooldownUntil": 1793613655688,
+    "modelSamples": 47
+  },
+  "sourceChanged": false,
+  "taskPauseRequests": 0,
+  "taskRestarts": 0
+}

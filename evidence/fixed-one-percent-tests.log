@@ -1,0 +1,353 @@
+ WARN  Unsupported engine: wanted: {"node":">=22.13.0"} (current: {"node":"v20.19.3","pnpm":"10.28.2"})
+
+> k1ll-kronos-paper-bot@1.0.0 test C:\Users\admin\Desktop\Tool\sniper
+> tsx --import ./scripts/test-env.mjs --test tests/*.test.ts
+
+TAP version 13
+# (node:9420) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 10001 trials persist beyond 201/250/300/1000/10000 without replacing existing history
+ok 1 - 10001 trials persist beyond 201/250/300/1000/10000 without replacing existing history
+  ---
+  duration_ms: 4368.305
+  type: 'test'
+  ...
+# Subtest: statistics use persisted trial boundaries, separate breakeven and no repeated UI/event inflation
+ok 2 - statistics use persisted trial boundaries, separate breakeven and no repeated UI/event inflation
+  ---
+  duration_ms: 6.3338
+  type: 'test'
+  ...
+# Subtest: decisions and events keep accumulating beyond previous 720/50000 storage caps
+ok 3 - decisions and events keep accumulating beyond previous 720/50000 storage caps
+  ---
+  duration_ms: 2.0837
+  type: 'test'
+  ...
+# Subtest: OPEN monitor prioritized over large candidate backlog without full history decoding
+ok 4 - OPEN monitor prioritized over large candidate backlog without full history decoding
+  ---
+  duration_ms: 175.581
+  type: 'test'
+  ...
+# Subtest: GMGN 429 cooldown remains in force during unlimited collection
+ok 5 - GMGN 429 cooldown remains in force during unlimited collection
+  ---
+  duration_ms: 38.712
+  type: 'test'
+  ...
+# Subtest: 5000-row actual HTTP pages stay bounded; overview does not return all history or calculate full stats
+ok 6 - 5000-row actual HTTP pages stay bounded; overview does not return all history or calculate full stats
+  ---
+  duration_ms: 13320.1412
+  type: 'test'
+  ...
+# (node:12964) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: ported real transaction/simulation validator rejects signer before signing
+ok 7 - ported real transaction/simulation validator rejects signer before signing
+  ---
+  duration_ms: 244.7578
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects recipient before signing
+ok 8 - ported real transaction/simulation validator rejects recipient before signing
+  ---
+  duration_ms: 20.4035
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects program before signing
+ok 9 - ported real transaction/simulation validator rejects program before signing
+  ---
+  duration_ms: 7.7414
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects token-authority before signing
+ok 10 - ported real transaction/simulation validator rejects token-authority before signing
+  ---
+  duration_ms: 4.9142
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects simulation before signing
+ok 11 - ported real transaction/simulation validator rejects simulation before signing
+  ---
+  duration_ms: 17.7742
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects debit before signing
+ok 12 - ported real transaction/simulation validator rejects debit before signing
+  ---
+  duration_ms: 26.6401
+  type: 'test'
+  ...
+# Subtest: ported real transaction/simulation validator rejects minimum before signing
+ok 13 - ported real transaction/simulation validator rejects minimum before signing
+  ---
+  duration_ms: 9.4539
+  type: 'test'
+  ...
+# Subtest: validated unsigned transaction reaches immediate authority callback; callback abort prevents ANY sign or submit
+ok 14 - validated unsigned transaction reaches immediate authority callback; callback abort prevents ANY sign or submit
+  ---
+  duration_ms: 9.4693
+  type: 'test'
+  ...
+# Subtest: receipt accounting leaves unknown rent/extra debit unclassified; no fee/slippage/priority double-count
+ok 15 - receipt accounting leaves unknown rent/extra debit unclassified; no fee/slippage/priority double-count
+  ---
+  duration_ms: 1.0659
+  type: 'test'
+  ...
+# (node:4012) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: empty installation has zero trials, positions, fills, history and no legacy names
+ok 16 - empty installation has zero trials, positions, fills, history and no legacy names
+  ---
+  duration_ms: 31.6822
+  type: 'test'
+  ...
+# Subtest: own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+ok 17 - own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+  ---
+  duration_ms: 14.3867
+  type: 'test'
+  ...
+# Subtest: unlimited trials beyond 200 count rejects/errors, no eviction or appearance duplicates
+ok 18 - unlimited trials beyond 200 count rejects/errors, no eviction or appearance duplicates
+  ---
+  duration_ms: 154.3111
+  type: 'test'
+  ...
+# Subtest: real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+ok 19 - real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+  ---
+  duration_ms: 16.5333
+  type: 'test'
+  ...
+# Subtest: native input / consensus / paper prices exactly match old policy, cap change is explicit
+ok 20 - native input / consensus / paper prices exactly match old policy, cap change is explicit
+  ---
+  duration_ms: 4.2079
+  type: 'test'
+  ...
+# Subtest: new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+ok 21 - new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+  ---
+  duration_ms: 16.0931
+  type: 'test'
+  ...
+# Subtest: pending PAPER sell requires valid post-decision price, no forecast/fill invented
+ok 22 - pending PAPER sell requires valid post-decision price, no forecast/fill invented
+  ---
+  duration_ms: 8.5095
+  type: 'test'
+  ...
+# Subtest: slow discovery does not block OPEN monitor; inference stays serial
+ok 23 - slow discovery does not block OPEN monitor; inference stays serial
+  ---
+  duration_ms: 8.7026
+  type: 'test'
+  ...
+# Subtest: 200 queued trials never run concurrent model inferences
+ok 24 - 200 queued trials never run concurrent model inferences
+  ---
+  duration_ms: 89.9585
+  type: 'test'
+  ...
+# Subtest: invalid model output never invents BUY or exits OPEN
+ok 25 - invalid model output never invents BUY or exits OPEN
+  ---
+  duration_ms: 35.9542
+  type: 'test'
+  ...
+# Subtest: restart own DB preserves OPEN entry and no duplicate appearance BUY
+ok 26 - restart own DB preserves OPEN entry and no duplicate appearance BUY
+  ---
+  duration_ms: 353.1854
+  type: 'test'
+  ...
+# Subtest: fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+ok 27 - fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+  ---
+  duration_ms: 83.1599
+  type: 'test'
+  ...
+# Subtest: worker env has no secrets or PATH forwarding; no JEV, BOT bridge or strategy additions
+ok 28 - worker env has no secrets or PATH forwarding; no JEV, BOT bridge or strategy additions
+  ---
+  duration_ms: 8.1997
+  type: 'test'
+  ...
+# Subtest: server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+ok 29 - server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+  ---
+  duration_ms: 537.0842
+  type: 'test'
+  ...
+# Subtest: pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+ok 30 - pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+  ---
+  duration_ms: 39013.2217
+  type: 'test'
+  ...
+# (node:3124) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: fixed 1% sizing uses fresh spendable SOL, floors lamports and preserves reserve
+ok 31 - fixed 1% sizing uses fresh spendable SOL, floors lamports and preserves reserve
+  ---
+  duration_ms: 2.1296
+  type: 'test'
+  ...
+# Subtest: retired KRONOS_MAX_BUY_SOL is ignored; LIVE config has no absolute buy cap
+ok 32 - retired KRONOS_MAX_BUY_SOL is ignored; LIVE config has no absolute buy cap
+  ---
+  duration_ms: 3.0256
+  type: 'test'
+  ...
+# Subtest: LIVE requires own credentials and ack without a buy cap; invalid/missing mode stays PAPER
+ok 33 - LIVE requires own credentials and ack without a buy cap; invalid/missing mode stays PAPER
+  ---
+  duration_ms: 12.3154
+  type: 'test'
+  ...
+# Subtest: Jupiter API key is optional; every other LIVE configuration guard remains mandatory
+ok 34 - Jupiter API key is optional; every other LIVE configuration guard remains mandatory
+  ---
+  duration_ms: 2.3152
+  type: 'test'
+  ...
+# Subtest: Jupiter quote omits x-api-key when empty and sends it when configured; no signing/submission
+ok 35 - Jupiter quote omits x-api-key when empty and sends it when configured; no signing/submission
+  ---
+  duration_ms: 60.4904
+  type: 'test'
+  ...
+# Subtest: keyless Jupiter rejection still fails closed before simulation/sign/submit
+ok 36 - keyless Jupiter rejection still fails closed before simulation/sign/submit
+  ---
+  duration_ms: 7.473
+  type: 'test'
+  ...
+# Subtest: real ledger reconciles BUY/full SELL with different signal/fill, exact receipt fees and idempotent fill
+ok 37 - real ledger reconciles BUY/full SELL with different signal/fill, exact receipt fees and idempotent fill
+  ---
+  duration_ms: 37.5482
+  type: 'test'
+  ...
+# Subtest: UNKNOWN BUY: no replay or duplicate, signed restart recovery and no fake close
+ok 38 - UNKNOWN BUY: no replay or duplicate, signed restart recovery and no fake close
+  ---
+  duration_ms: 85.009
+  type: 'test'
+  ...
+# Subtest: UNKNOWN SELL: no replay or duplicate, signed restart recovery and no fake close
+ok 39 - UNKNOWN SELL: no replay or duplicate, signed restart recovery and no fake close
+  ---
+  duration_ms: 107.2443
+  type: 'test'
+  ...
+# Subtest: DRY RUN traverses quote, 20/50/100 exits, simulation, final checks; ZERO sign/submit
+ok 40 - DRY RUN traverses quote, 20/50/100 exits, simulation, final checks; ZERO sign/submit
+  ---
+  duration_ms: 4.7671
+  type: 'test'
+  ...
+# Subtest: noRoute failure never signs or increases size
+ok 41 - noRoute failure never signs or increases size
+  ---
+  duration_ms: 2.9978
+  type: 'test'
+  ...
+# Subtest: impact failure never signs or increases size
+ok 42 - impact failure never signs or increases size
+  ---
+  duration_ms: 3.7871
+  type: 'test'
+  ...
+# Subtest: gate failure never signs or increases size
+ok 43 - gate failure never signs or increases size
+  ---
+  duration_ms: 4.7113
+  type: 'test'
+  ...
+# Subtest: active failure never signs or increases size
+ok 44 - active failure never signs or increases size
+  ---
+  duration_ms: 2.034
+  type: 'test'
+  ...
+# Subtest: existing ownership, insufficient reserve and duplicate decision are blocked
+ok 45 - existing ownership, insufficient reserve and duplicate decision are blocked
+  ---
+  duration_ms: 3.6234
+  type: 'test'
+  ...
+# Subtest: receipt below bound stays UNKNOWN, never creates OPEN
+ok 46 - receipt below bound stays UNKNOWN, never creates OPEN
+  ---
+  duration_ms: 4.9683
+  type: 'test'
+  ...
+# Subtest: failed SELL records real fee, retains actual OPEN quantity; later close includes failed fee
+ok 47 - failed SELL records real fee, retains actual OPEN quantity; later close includes failed fee
+  ---
+  duration_ms: 55.0125
+  type: 'test'
+  ...
+# Subtest: actual quote validator rejects wallet/direction/amount/slippage/stale mismatch
+ok 48 - actual quote validator rejects wallet/direction/amount/slippage/stale mismatch
+  ---
+  duration_ms: 0.9825
+  type: 'test'
+  ...
+# Subtest: duplicate BUY while SUBMITTED stays in one wallet lane
+ok 49 - duplicate BUY while SUBMITTED stays in one wallet lane
+  ---
+  duration_ms: 16.2717
+  type: 'test'
+  ...
+# Subtest: duplicate SELL while SUBMITTED stays in one wallet lane
+ok 50 - duplicate SELL while SUBMITTED stays in one wallet lane
+  ---
+  duration_ms: 24.8125
+  type: 'test'
+  ...
+# Subtest: Security/freshness and immediate authority are checked again before signing
+ok 51 - Security/freshness and immediate authority are checked again before signing
+  ---
+  duration_ms: 15.2886
+  type: 'test'
+  ...
+# Subtest: restart executor recovers signed evidence without calling execute
+ok 52 - restart executor recovers signed evidence without calling execute
+  ---
+  duration_ms: 8.4986
+  type: 'test'
+  ...
+# Subtest: unproven account rent keeps LIVE closed Net PnL and statistics UNKNOWN
+ok 53 - unproven account rent keeps LIVE closed Net PnL and statistics UNKNOWN
+  ---
+  duration_ms: 18.9504
+  type: 'test'
+  ...
+# Subtest: Kronos strategy integration uses fake execution only on BUY/SELL; no JEV/TypeSafe network
+ok 54 - Kronos strategy integration uses fake execution only on BUY/SELL; no JEV/TypeSafe network
+  ---
+  duration_ms: 9.4065
+  type: 'test'
+  ...
+# Subtest: same baseline Kronos forecast drives integrated LIVE BUY then full SELL, without paper fills
+ok 55 - same baseline Kronos forecast drives integrated LIVE BUY then full SELL, without paper fills
+  ---
+  duration_ms: 31.0757
+  type: 'test'
+  ...
+1..55
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 44706.8207

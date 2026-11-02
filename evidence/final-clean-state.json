@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-02T05:14:27.534Z",
+  "removedFixtureDirectories": 6,
+  "counts": {
+    "lab_trials": 0,
+    "lab_decisions": 0,
+    "lab_events": 0,
+    "lab_meta": 0
+  },
+  "integrity": {
+    "integrity_check": "ok"
+  },
+  "stopped": true
+}

@@ -1,0 +1,28 @@
+{
+  "blocked": {
+    "botEnv": true,
+    "outsideFile": true,
+    "writeSource": true,
+    "subprocess": true,
+    "network": true
+  },
+  "envNames": [
+    "APPDATA",
+    "DO_NOT_TRACK",
+    "HF_HUB_DISABLE_TELEMETRY",
+    "HF_HUB_OFFLINE",
+    "HOME",
+    "KRONOS_RUNTIME",
+    "LOCALAPPDATA",
+    "MKL_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED",
+    "PYTHONNOUSERSITE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "WINDIR"
+  ]
+}

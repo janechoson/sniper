@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/shiyu-coder/Kronos",
+  "commit": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+  "model": {"id": "NeoQuasar/Kronos-small", "revision": "901c26c1332695a2a8f243eb2f37243a37bea320"},
+  "tokenizer": {"id": "NeoQuasar/Kronos-Tokenizer-base", "revision": "0e0117387f39004a9016484a186a908917e22426"},
+  "python": "3.11.11",
+  "device": "cpu",
+  "threads": 2,
+  "contextLimit": 512,
+  "minimumCandles": 32,
+  "horizon": 5,
+  "samples": 3,
+  "seed": 1701,
+  "temperature": 1.0,
+  "topP": 0.9,
+  "volumeMode": "PRICE_ONLY_OPTIONAL_CHANNELS_DISABLED",
+  "policy": "KRONOS_DIRECTION_V1_UNANIMOUS_TERMINALS"
+}

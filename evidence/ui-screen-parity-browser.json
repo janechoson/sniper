@@ -1,0 +1,260 @@
+{
+  "at": "2026-11-02T10:06:07.504Z",
+  "passed": true,
+  "errors": [],
+  "mutations": 0,
+  "requests": [
+    {
+      "path": "/",
+      "method": "GET"
+    },
+    {
+      "path": "/style.css",
+      "method": "GET"
+    },
+    {
+      "path": "/overview.js",
+      "method": "GET"
+    },
+    {
+      "path": "/token-avatar.js",
+      "method": "GET"
+    },
+    {
+      "path": "/api/status",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/positions",
+      "method": "GET"
+    },
+    {
+      "path": "/api/positions",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/trial",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/logs",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/kronos",
+      "method": "GET"
+    },
+    {
+      "path": "/api/positions",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/logs",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/positions",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/logs",
+      "method": "GET"
+    },
+    {
+      "path": "/api/positions",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/overview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/history",
+      "method": "GET"
+    },
+    {
+      "path": "/api/logs",
+      "method": "GET"
+    }
+  ],
+  "geometry": [
+    {
+      "view": "positions",
+      "width": 1440,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 1404,
+        "height": 1480.09375
+      }
+    },
+    {
+      "view": "history",
+      "width": 1440,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 1404,
+        "height": 879
+      }
+    },
+    {
+      "view": "logs",
+      "width": 1440,
+      "panel": {
+        "x": 18,
+        "y": 86,
+        "width": 1404,
+        "height": 541.5
+      }
+    },
+    {
+      "view": "settings",
+      "width": 1440,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 1404,
+        "height": 998
+      }
+    },
+    {
+      "view": "positions",
+      "width": 1024,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 988,
+        "height": 1480.09375
+      }
+    },
+    {
+      "view": "history",
+      "width": 1024,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 988,
+        "height": 879
+      }
+    },
+    {
+      "view": "logs",
+      "width": 1024,
+      "panel": {
+        "x": 18,
+        "y": 86,
+        "width": 988,
+        "height": 598.390625
+      }
+    },
+    {
+      "view": "settings",
+      "width": 1024,
+      "panel": {
+        "x": 18,
+        "y": 104,
+        "width": 988,
+        "height": 1247
+      }
+    },
+    {
+      "view": "positions",
+      "width": 390,
+      "panel": {
+        "x": 10,
+        "y": 146,
+        "width": 370,
+        "height": 2353.59375
+      }
+    },
+    {
+      "view": "history",
+      "width": 390,
+      "panel": {
+        "x": 10,
+        "y": 146,
+        "width": 370,
+        "height": 898
+      }
+    },
+    {
+      "view": "logs",
+      "width": 390,
+      "panel": {
+        "x": 10,
+        "y": 131,
+        "width": 370,
+        "height": 800.15625
+      }
+    },
+    {
+      "view": "settings",
+      "width": 390,
+      "panel": {
+        "x": 10,
+        "y": 146,
+        "width": 370,
+        "height": 2334
+      }
+    }
+  ],
+  "fixtureOnly": true,
+  "backendDatasetModified": false
+}

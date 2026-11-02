@@ -1,0 +1,25 @@
+{
+  "at": "2026-11-02T09:30:38.894Z",
+  "change": "Removed only the mandatory Jupiter API-key predicate. Existing provider header behavior and all execution guards preserved.",
+  "runtime": {
+    "pid": 14568,
+    "mode": "paper",
+    "realExecutionEnabled": false,
+    "enabled": false,
+    "active": false
+  },
+  "reloadRequired": true,
+  "envWrittenByTask": false,
+  "botBModifiedByTask": false,
+  "realTransactionsByTask": 0,
+  "validation": {
+    "tests": {
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0
+    },
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS"
+  }
+}

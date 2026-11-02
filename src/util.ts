@@ -1,0 +1,146 @@
+import { createHash } from "node:crypto";
+import { Blocked, ProviderFailure } from "./domain.js";
+export const sleep = (ms: number) =>
+  new Promise<void>((r) => setTimeout(r, ms));
+export const hash = (v: unknown) =>
+  createHash("sha256").update(JSON.stringify(v)).digest("hex");
+export function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+export function json(v: unknown) {
+  const secrets = Object.entries(process.env)
+    .filter(
+      ([name, secret]) =>
+        /(?:PRIVATE_KEY|SECRET|MNEMONIC|API_KEY)/.test(name) &&
+        secret &&
+        secret.length >= 8,
+    )
+    .map(([, secret]) => secret!);
+  return JSON.stringify(v, (key, value) => {
+    if (
+      /(?:private.?key|secret|mnemonic|seed.?phrase|api.?key|authorization|signedTransaction)/i.test(
+        key,
+      )
+    )
+      return "[REDACTED]";
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "string") {
+      for (const secret of secrets)
+        value = value.split(secret).join("[REDACTED]");
+    }
+    return value;
+  });
+}
+export function log(event: string, fields: Record<string, unknown> = {}) {
+  process.stdout.write(
+    json({ at: new Date().toISOString(), event, ...fields }) + "\n",
+  );
+}
+export function safeError(e: unknown): string {
+  if (e instanceof Blocked) return e.code;
+  if (
+    e &&
+    typeof e === "object" &&
+    "code" in e &&
+    typeof e.code === "string" &&
+    /^[A-Z][A-Z0-9_]{1,60}$/.test(e.code)
+  )
+    return e.code;
+  return "OPERATION_FAILED";
+}
+export interface Health {
+  state: "READY" | "BLOCKED" | "UNKNOWN";
+  at: number;
+  latencyMs?: number;
+  reason?: string;
+}
+export class Http {
+  health: Health = { state: "UNKNOWN", at: 0 };
+  private next = 0;
+  private tail = Promise.resolve();
+  constructor(
+    readonly name: string,
+    private interval = 1000,
+  ) {}
+  async request(
+    url: string,
+    init: RequestInit = {},
+    retry = true,
+  ): Promise<unknown> {
+    const prior = this.tail;
+    let unlock!: () => void;
+    this.tail = new Promise((r) => {
+      unlock = r;
+    });
+    await prior;
+    const started = Date.now();
+    try {
+      await sleep(Math.max(0, this.next - Date.now()));
+      for (let n = 0; n < (retry ? 3 : 1); n++) {
+        this.next = Date.now() + this.interval;
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            ...init,
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch (error) {
+          const timeout =
+            error instanceof Error &&
+            (["TimeoutError", "AbortError"].includes(error.name) ||
+              /timeout/i.test(error.message));
+          throw new ProviderFailure(
+            this.name + (timeout ? "_TIMEOUT" : "_UNAVAILABLE"),
+            this.name,
+          );
+        }
+        if (
+          (response.status === 429 || response.status >= 500) &&
+          retry &&
+          n < 2
+        ) {
+          await sleep(
+            Math.min(
+              10000,
+              Math.max(
+                1000,
+                Number(response.headers.get("retry-after") || 0) * 1000,
+                1000 * 2 ** n,
+              ),
+            ),
+          );
+          continue;
+        }
+        if (!response.ok) {
+          throw new ProviderFailure(
+            this.name + "_HTTP_" + response.status,
+            this.name,
+            ![401, 403].includes(response.status),
+          );
+        }
+        let data: unknown;
+        try {
+          data = await response.json();
+        } catch {
+          throw new ProviderFailure(this.name + "_INVALID_RESPONSE", this.name);
+        }
+        this.health = {
+          state: "READY",
+          at: Date.now(),
+          latencyMs: Date.now() - started,
+        };
+        return data;
+      }
+      throw new ProviderFailure(this.name + "_RETRIES_EXHAUSTED", this.name);
+    } catch (e) {
+      this.health = { state: "BLOCKED", at: Date.now(), reason: safeError(e) };
+      throw e;
+    } finally {
+      unlock();
+    }
+  }
+}

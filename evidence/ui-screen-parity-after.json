@@ -1,0 +1,98 @@
+[
+  {
+    "name": "bot-b",
+    "view": "positions",
+    "errors": [],
+    "heading": "\n                Vị thế1 ĐANG GIỮ\n              ",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 1609.59375
+    }
+  },
+  {
+    "name": "bot-b",
+    "view": "history",
+    "errors": [],
+    "heading": "Lịch sử giao dịch",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 757
+    }
+  },
+  {
+    "name": "bot-b",
+    "view": "logs",
+    "errors": [],
+    "heading": "Log Hoạt Động",
+    "geometry": {
+      "x": 18,
+      "y": 86,
+      "width": 1404,
+      "height": 975.890625
+    }
+  },
+  {
+    "name": "bot-b",
+    "view": "settings",
+    "errors": [],
+    "heading": "Tham số chiến lược và rủi ro",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 2788
+    }
+  },
+  {
+    "name": "kronos-after",
+    "view": "positions",
+    "errors": [],
+    "heading": "\n                Vị thế0 ĐANG GIỮ\n              ",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 408.5
+    }
+  },
+  {
+    "name": "kronos-after",
+    "view": "history",
+    "errors": [],
+    "heading": "Lịch sử giao dịch",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 282
+    }
+  },
+  {
+    "name": "kronos-after",
+    "view": "logs",
+    "errors": [],
+    "heading": "Log Hoạt Động",
+    "geometry": {
+      "x": 18,
+      "y": 86,
+      "width": 1404,
+      "height": 979.5
+    }
+  },
+  {
+    "name": "kronos-after",
+    "view": "settings",
+    "errors": [],
+    "heading": "Tham số chiến lược và rủi ro",
+    "geometry": {
+      "x": 18,
+      "y": 104,
+      "width": 1404,
+      "height": 1081
+    }
+  }
+]

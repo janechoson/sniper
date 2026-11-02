@@ -1,0 +1,30 @@
+TAP version 13
+# (node:15040) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: startup reports controlled configuration, signer and filesystem/socket codes
+ok 1 - startup reports controlled configuration, signer and filesystem/socket codes
+  ---
+  duration_ms: 1.3184
+  type: 'test'
+  ...
+# Subtest: startup never echoes raw error messages, stacks, URLs or embedded secrets
+ok 2 - startup never echoes raw error messages, stacks, URLs or embedded secrets
+  ---
+  duration_ms: 0.2228
+  type: 'test'
+  ...
+# Subtest: existing installation lock blocks startup explicitly and is never overwritten
+ok 3 - existing installation lock blocks startup explicitly and is never overwritten
+  ---
+  duration_ms: 9.9981
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1636.8631

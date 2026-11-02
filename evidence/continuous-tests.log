@@ -1,0 +1,145 @@
+ WARN  Unsupported engine: wanted: {"node":">=22.13.0"} (current: {"node":"v20.19.3","pnpm":"10.28.2"})
+
+> k1ll-kronos-paper-bot@1.0.0 test C:\Users\admin\Desktop\Tool\sniper
+> tsx --import ./scripts/test-env.mjs --test tests/*.test.ts
+
+TAP version 13
+# (node:14292) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 10001 trials persist beyond 201/250/300/1000/10000 without replacing existing history
+ok 1 - 10001 trials persist beyond 201/250/300/1000/10000 without replacing existing history
+  ---
+  duration_ms: 2849.6858
+  type: 'test'
+  ...
+# Subtest: statistics use persisted trial boundaries, separate breakeven and no repeated UI/event inflation
+ok 2 - statistics use persisted trial boundaries, separate breakeven and no repeated UI/event inflation
+  ---
+  duration_ms: 7.7792
+  type: 'test'
+  ...
+# Subtest: decisions and events keep accumulating beyond previous 720/50000 storage caps
+ok 3 - decisions and events keep accumulating beyond previous 720/50000 storage caps
+  ---
+  duration_ms: 1.558
+  type: 'test'
+  ...
+# Subtest: OPEN monitor prioritized over large candidate backlog without full history decoding
+ok 4 - OPEN monitor prioritized over large candidate backlog without full history decoding
+  ---
+  duration_ms: 123.3504
+  type: 'test'
+  ...
+# Subtest: GMGN 429 cooldown remains in force during unlimited collection
+ok 5 - GMGN 429 cooldown remains in force during unlimited collection
+  ---
+  duration_ms: 73.332
+  type: 'test'
+  ...
+# Subtest: 5000-row actual HTTP pages stay bounded; overview does not return all history or calculate full stats
+ok 6 - 5000-row actual HTTP pages stay bounded; overview does not return all history or calculate full stats
+  ---
+  duration_ms: 11479.339
+  type: 'test'
+  ...
+# (node:9456) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: empty installation has zero trials, positions, fills, history and no legacy names
+ok 7 - empty installation has zero trials, positions, fills, history and no legacy names
+  ---
+  duration_ms: 1030.3259
+  type: 'test'
+  ...
+# Subtest: own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+ok 8 - own paths only, no sibling BOT directory or external DB; accidental LIVE fails closed
+  ---
+  duration_ms: 10.5703
+  type: 'test'
+  ...
+# Subtest: unlimited trials beyond 200 count rejects/errors, no eviction or appearance duplicates
+ok 9 - unlimited trials beyond 200 count rejects/errors, no eviction or appearance duplicates
+  ---
+  duration_ms: 87.5737
+  type: 'test'
+  ...
+# Subtest: real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+ok 10 - real Lab lifecycle PAPER BUY/HOLD/SELL: zero wallet/sign/send, JEV and Jupiter never requested
+  ---
+  duration_ms: 15.9114
+  type: 'test'
+  ...
+# Subtest: native input / consensus / paper prices exactly match old policy, cap change is explicit
+ok 11 - native input / consensus / paper prices exactly match old policy, cap change is explicit
+  ---
+  duration_ms: 1.7061
+  type: 'test'
+  ...
+# Subtest: new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+ok 12 - new candidate model failure has no BUY; OPEN failure never fakes SELL or calls JEV
+  ---
+  duration_ms: 7.9605
+  type: 'test'
+  ...
+# Subtest: pending PAPER sell requires valid post-decision price, no forecast/fill invented
+ok 13 - pending PAPER sell requires valid post-decision price, no forecast/fill invented
+  ---
+  duration_ms: 6.3909
+  type: 'test'
+  ...
+# Subtest: slow discovery does not block OPEN monitor; inference stays serial
+ok 14 - slow discovery does not block OPEN monitor; inference stays serial
+  ---
+  duration_ms: 16.3427
+  type: 'test'
+  ...
+# Subtest: 200 queued trials never run concurrent model inferences
+ok 15 - 200 queued trials never run concurrent model inferences
+  ---
+  duration_ms: 40.2458
+  type: 'test'
+  ...
+# Subtest: invalid model output never invents BUY or exits OPEN
+ok 16 - invalid model output never invents BUY or exits OPEN
+  ---
+  duration_ms: 11.0028
+  type: 'test'
+  ...
+# Subtest: restart own DB preserves OPEN entry and no duplicate appearance BUY
+ok 17 - restart own DB preserves OPEN entry and no duplicate appearance BUY
+  ---
+  duration_ms: 863.3614
+  type: 'test'
+  ...
+# Subtest: fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+ok 18 - fresh security, mint, M1 history and flow run directly without BOT API; reject stops model
+  ---
+  duration_ms: 46.3906
+  type: 'test'
+  ...
+# Subtest: worker env has no secrets or PATH forwarding; source/runtime graph has no execution or JEV modules
+ok 19 - worker env has no secrets or PATH forwarding; source/runtime graph has no execution or JEV modules
+  ---
+  duration_ms: 2.977
+  type: 'test'
+  ...
+# Subtest: server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+ok 20 - server starts without JEV/provider keys paused, local paths, no active loop or execution endpoints
+  ---
+  duration_ms: 126.4256
+  type: 'test'
+  ...
+# Subtest: pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+ok 21 - pinned real model produces old/new equivalent forecast and paper decisions on same fixed candles
+  ---
+  duration_ms: 16792.1508
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21398.7908

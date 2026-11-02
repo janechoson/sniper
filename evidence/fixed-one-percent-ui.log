@@ -1,0 +1,3 @@
+(node:15844) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS: LIVE mode, seven stages, actual entry, quantity, explorer, UNKNOWN PnL, mode filters and responsive Overview; zero execution.

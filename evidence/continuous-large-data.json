@@ -1,0 +1,15 @@
+{
+  "records": 5000,
+  "overviewMs": 31.398299999997107,
+  "overviewBytes": 1105,
+  "historyPage": 50,
+  "statsBytes": 731,
+  "plan": [
+    {
+      "id": 4,
+      "parent": 0,
+      "notused": 61,
+      "detail": "SEARCH lab_trials USING INDEX lab_trials_closed (<expr>=?)"
+    }
+  ]
+}
