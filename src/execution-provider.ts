@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { UNSIGNED_EXECUTION_TIMEOUT_MS } from "./execution-deadline.js";
 import {
   Keypair,
   PublicKey,
@@ -9,7 +10,7 @@ import {
   ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { z } from "zod";
-import type { LiveConfig } from "./live-config.js";
+import { env } from "./config.js";
 import {
   inspectMint,
   requireCompatibleToken,
@@ -18,7 +19,7 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from "./token-program.js";
 import { Blocked, CandidateRejected, ProviderFailure } from "./domain.js";
-import { SOL } from "./live-config.js";
+import { SOL } from "./gmgn.js";
 import { Solana } from "./solana.js";
 import { Http, deepFreeze, sleep, type Health } from "./util.js";
 
@@ -50,13 +51,13 @@ function decode58(value: string) {
     n ? Buffer.from(hex, "hex") : Buffer.alloc(0),
   ]);
 }
-export function localWallet(config: LiveConfig): Keypair {
-  if (!config.SOLANA_PRIVATE_KEY && !config.SOLANA_KEYPAIR_PATH)
+export function localWallet(): Keypair {
+  if (!env.SOLANA_PRIVATE_KEY && !env.SOLANA_KEYPAIR_PATH)
     throw new Blocked("MISSING_SOLANA_SIGNING_KEY");
   try {
     const text =
-      config.SOLANA_PRIVATE_KEY ||
-      readFileSync(config.SOLANA_KEYPAIR_PATH, "utf8").trim();
+      env.SOLANA_PRIVATE_KEY ||
+      readFileSync(env.SOLANA_KEYPAIR_PATH, "utf8").trim();
     const bytes = text.startsWith("[")
       ? Uint8Array.from(
           z
@@ -67,7 +68,7 @@ export function localWallet(config: LiveConfig): Keypair {
       : decode58(text);
     const wallet = Keypair.fromSecretKey(Uint8Array.from(bytes));
     bytes.fill(0);
-    if (wallet.publicKey.toBase58() !== config.WALLET_PUBLIC_KEY)
+    if (wallet.publicKey.toBase58() !== env.WALLET_PUBLIC_KEY)
       throw new Blocked("SOLANA_SIGNER_WALLET_MISMATCH");
     return wallet;
   } catch (e) {
@@ -226,18 +227,15 @@ function associated(wallet: PublicKey, mint: PublicKey, program = TOKEN) {
 
 /** Jupiter builds/lands; signing stays here. RPC is used only for wallet checks/simulation/confirmation. */
 export class JupiterExecutionProvider implements SolanaExecutionProvider {
-  readonly http = new Http("JUPITER", 2200);
+  readonly http = new Http("JUPITER", 2200, UNSIGNED_EXECUTION_TIMEOUT_MS);
   get health() {
     return this.http.health;
   }
   private readonly checked = new WeakSet<ExecutionQuote>();
   private readonly consumed = new WeakSet<ExecutionQuote>();
-  constructor(
-    readonly rpc: Solana,
-    readonly configuration: LiveConfig,
-  ) {}
+  constructor(readonly rpc: Solana) {}
   getWalletBalance() {
-    return this.rpc.balance(this.configuration.WALLET_PUBLIC_KEY);
+    return this.rpc.balance(env.WALLET_PUBLIC_KEY);
   }
   quoteBuy(mint: string, amount: bigint, slippageBps: number) {
     return this.quote(mint, amount, slippageBps, "BUY");
@@ -251,9 +249,7 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
     return this.quote(mint, amount, slippageBps, "SELL", routeOnly);
   }
   private headers(): Record<string, string> {
-    return this.configuration.JUPITER_API_KEY
-      ? { "x-api-key": this.configuration.JUPITER_API_KEY }
-      : {};
+    return env.JUPITER_API_KEY ? { "x-api-key": env.JUPITER_API_KEY } : {};
   }
   private async quote(
     mint: string,
@@ -263,13 +259,13 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
     routeOnly = false,
   ): Promise<ExecutionQuote> {
     new PublicKey(mint);
-    new PublicKey(this.configuration.WALLET_PUBLIC_KEY);
+    new PublicKey(env.WALLET_PUBLIC_KEY);
     if (amount <= 0n) throw new Blocked("INVALID_SWAP_AMOUNT");
     const params = new URLSearchParams({
       inputMint: side === "BUY" ? SOL : mint,
       outputMint: side === "BUY" ? mint : SOL,
       amount: amount.toString(),
-      taker: this.configuration.WALLET_PUBLIC_KEY,
+      taker: env.WALLET_PUBLIC_KEY,
       swapMode: "ExactIn",
       slippageBps: String(slippageBps),
       excludeRouters: "jupiterz,dflow,okx",
@@ -328,7 +324,7 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
     const q: ExecutionQuote = deepFreeze({
       provider: "JUPITER",
       chain: "solana",
-      wallet: this.configuration.WALLET_PUBLIC_KEY,
+      wallet: env.WALLET_PUBLIC_KEY,
       mint,
       side,
       routeOnly,
@@ -341,7 +337,7 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
       mint,
       side,
       amount,
-      wallet: this.configuration.WALLET_PUBLIC_KEY,
+      wallet: env.WALLET_PUBLIC_KEY,
       slippageBps,
       routeOnly,
     });
@@ -352,7 +348,7 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
       mint: q.mint,
       side: q.side,
       amount: BigInt(q.amount),
-      wallet: this.configuration.WALLET_PUBLIC_KEY,
+      wallet: env.WALLET_PUBLIC_KEY,
       slippageBps: q.maxSlippageBps,
     });
   }
@@ -551,7 +547,7 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
     this.validate(q);
     if (!this.checked.has(q) || this.consumed.has(q))
       throw new Blocked("UNSIMULATED_OR_DUPLICATE_QUOTE");
-    const wallet = localWallet(this.configuration);
+    const wallet = localWallet();
     const tx = VersionedTransaction.deserialize(
       Buffer.from(q.order.transaction, "base64"),
     );

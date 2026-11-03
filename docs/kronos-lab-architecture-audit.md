@@ -1,0 +1,25 @@
+# Kronos Lab — pre-implementation audit
+
+2026-11-02. Source checked before implementation; no production process/DB started or opened by this audit.
+
+Production discovery: `DiscoveryCoordinator`/`src/discovery.ts` calls `Gmgn.trending` (`src/gmgn.ts`), installed CLI `market trending`, OpenAPI `/v1/market/rank`. Parsed Trending appearances enter Store/lifecycle, `Engine.analyze` -> `oneShotEntry`.
+
+Entry current order: cheapGuard + fresh token/info; fresh Security; LIVE RPC mint compatibility; GMGN closed M1 history; attemptFlow; Structure V3 + controlled-markup evidence; JEV BUY; deterministic Risk; final analysis/ownership/quote/simulation/pre-sign; Executor/Jupiter. Production paper skips compatibility; **Lab must still perform real read-only mint compatibility**. Kronos does not call oneShotEntry because it includes trading authority and Structure/JEV qualification.
+
+Price/info normalization, fresh security normalization, `cheapGuard`, `inspectMint`/`requireCompatibleToken`, `parseMarketHistory` and `attemptFlow` are reusable functions. Normal imports transitively load `config.ts`, which reads BOT/global `.env`; an isolated Lab entrypoint must preload a credential-read blocker and allowlist process environment, or those imports would violate isolation. Production Engine/Store/Executor/JEV/Solana connection must not be constructed by Lab.
+
+Persistence: production Store is SQLite with Position/execution JSON records; use a **separate Lab dataset**, not production Store or migrations. UI `public/index.html` uses data-view navigation and `public/app.js`; localhost server has same-origin/CSRF checks. Add only Kronos tab and a narrow localhost Lab proxy; no production pipeline call or auto-start of Lab in server.
+
+Position collectors, JEV scheduler, Exit Safety V2, quote probes and wallet-wide pending locks remain production-owned. Lab has separate bounded scheduler and process; no shared production queues or authority state. Running LIVE is not inspected through its secret-bearing command line, restarted or killed. Root dist baseline retained.
+
+Upstream: https://github.com/shiyu-coder/Kronos at `67b630e67f6a18c9e9be918d9b4337c960db1e9a`. `model/kronos.py`, `module.py` use torch/numpy/pandas/einops/tqdm/HF mixin; predictor forecasts OHLCV/amount, not BUY/SELL. Predictor moves models to device but does not explicitly call eval; wrapper must call both eval and inference_mode. Predict internally averages sample_count paths; separate seeded sample_count=1 calls are needed to retain dispersion. Tiny meme prices need explicit reversible price scaling because normalization adds1e-5.
+
+Upstream requirements include unpinned numpy/torch and duplicate pandas. Training reads pickle/checkpoints and distributed env; examples fetch public data, webui spawns pip. None of training/examples/webui will be run or imported. Inference model files are safetensors + JSON, no trust_remote_code, pickle or torch.load required by the planned loader. Vendor only audited model package + LICENSE; pin source hashes, models and all resolved dependencies. No finding of a secret-exfiltration path in the selected model package; dependency/native libraries remain trust boundaries.
+
+HF API confirms `NeoQuasar/Kronos-small` revision `901c26c1332695a2a8f243eb2f37243a37bea320`, tokenizer `NeoQuasar/Kronos-Tokenizer-base` revision `0e0117387f39004a9016484a186a908917e22426`, each with config.json/model.safetensors. Default small, CPU thread cap, context<=512. Existing GMGN parser supplies <=60m; do not claim512 actual candles or re-label USD volume as token quantity. Initial adapter uses explicitly labeled price-only mode supported upstream, disables both optional volume channels, preserves real USD volume in external evidence.
+
+Machine:16GiB RAM, about6.4GiB free; only about2.1GiB disk free; no working Python initially, uv available. Docker CLI installed but daemon unavailable, nvidia-smi unavailable. Use dedicated lean CPU Python environment outside project, no production secrets. Local process with explicit env and application audit-hook restrictions is **not** an OS/container sandbox against arbitrary native code; document this honestly. Offline model inference, localhost binding and minimal data contract are required. No automatic production activation.
+
+Planned experiment policy, frozen before replay:32..60 contiguous closed M1 bars,5-minute forecast horizon,3 individually seeded sample paths. All terminal forecasts above last observed close -> PAPER_BUY; all below -> PAPER_SELL for OPEN; disagreement -> WAIT/HOLD. These samples are a sensitivity range, not calibrated confidence. Paper execution uses a fresh **post-inference** GMGN price observation, never a forecast price. Missing entry price ends trial without BUY; missing exit price is pending with bounded decision expiry. Cap50 lifecycle records including errors/rejects, no automatic deletion; reset requires explicit confirmation. No policy tuning on replay outcomes.
+
+Implementation will retain original architecture and add testable isolated files. Baseline: `kronos-lab-baseline.json` (no secret contents).

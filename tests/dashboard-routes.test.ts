@@ -1,0 +1,247 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve, dirname, basename } from "node:path";
+import { startServer } from "../src/server.js";
+import { Engine } from "../src/engine.js";
+import { TradingMemory } from "../src/trading-memory.js";
+import { env } from "../src/config.js";
+import { provider, position } from "./fixtures.js";
+
+test("dashboard routes isolate read models and never eagerly aggregate other pages", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "dashboard-route-api-"));
+  const old = {
+    mode: env.TRADING_MODE,
+    ack: env.LIVE_TRADING_ACK,
+    entries: env.NEW_ENTRIES_ENABLED,
+    scanner: env.SCANNER_ENABLED,
+    wallet: env.WALLET_PUBLIC_KEY,
+    path: env.DATABASE_PATH,
+    port: env.PORT,
+  };
+  const status = t.mock.method(Engine.prototype, "status"),
+    analytics = t.mock.method(Engine.prototype, "analytics"),
+    memory = t.mock.method(TradingMemory.prototype, "report");
+  let app: Awaited<ReturnType<typeof startServer>> | undefined;
+  try {
+    Object.assign(env, {
+      TRADING_MODE: "paper",
+      LIVE_TRADING_ACK: false,
+      NEW_ENTRIES_ENABLED: false,
+      SCANNER_ENABLED: false,
+      WALLET_PUBLIC_KEY: "",
+      DATABASE_PATH: join(dir, "fixture.sqlite"),
+      PORT: 42000 + Math.floor(Math.random() * 5000),
+    });
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const g = provider();
+    app = await startServer({
+      providers: { gmgn: g.gmgn },
+    });
+    await app.engine.stop();
+    const base = "http://127.0.0.1:" + env.PORT;
+    for (let n = 0; n < 12; n++)
+      for (const state of ["OPEN", "CLOSED"] as const)
+        app.engine.store.savePosition({
+          ...position(),
+          id: state + n,
+          mint: state + "-mint-" + n,
+          mode: "paper",
+          symbol: state + n,
+          state,
+          quantity: state === "CLOSED" ? "0" : "1000",
+          entryAt: Date.now() + n,
+        });
+    await t.test(
+      "only explicit frontend paths serve the SPA; API paths keep JSON 404",
+      async () => {
+        for (const path of [
+          "/",
+          "/positions",
+          "/history",
+          "/memory",
+          "/settings",
+          "/logs",
+          "/thongke",
+        ]) {
+          const r = await fetch(base + path);
+          assert.equal(r.status, 200);
+          assert.match(await r.text(), /routeOutlet/);
+        }
+        for (const path of [
+          "/overview",
+          "/unknown",
+          "/api/unknown",
+          "/api/history/unknown",
+        ]) {
+          const r = await fetch(base + path);
+          assert.equal(r.status, 404);
+          assert.match(r.headers.get("content-type") ?? "", /json/);
+          assert.doesNotMatch(await r.text(), /routeOutlet/);
+        }
+      },
+    );
+    await t.test(
+      "global shell is small and has no Memory/statistics/History payload",
+      async () => {
+        const data = await (await fetch(base + "/api/ui/shell")).json();
+        assert.equal(typeof data.csrf, "string");
+        assert.equal(data.capabilities.dashboardRoutes, true);
+        for (const key of [
+          "overview",
+          "learning",
+          "analytics",
+          "strategyAnalytics",
+          "settings",
+          "events",
+          "flow",
+          "trades",
+          "positionSummary",
+        ])
+          assert.equal(key in data, false);
+        assert.equal(status.mock.callCount(), 0);
+        assert.equal(analytics.mock.callCount(), 0);
+        assert.equal(memory.mock.callCount(), 0);
+      },
+    );
+    await t.test(
+      "Overview preview is capped separately from the full active Positions page",
+      async () => {
+        const preview = await (await fetch(base + "/api/overview")).json();
+        assert.equal(preview.positions.length, 10);
+        assert.equal(preview.positionTotal, 12);
+        assert.ok(preview.positions.every((p: any) => p.state === "OPEN"));
+        const page = await (
+          await fetch(base + "/api/positions?view=page")
+        ).json();
+        assert.equal(page.positions.length, 12);
+        assert.ok(page.positions.every((p: any) => p.state === "OPEN"));
+        assert.ok(Array.isArray(page.settings.takeProfits));
+        assert.equal(analytics.mock.callCount(), 0);
+        assert.equal(memory.mock.callCount(), 0);
+      },
+    );
+    await t.test(
+      "History retains server ordering/filter/pagination without requiring Positions",
+      async () => {
+        const data = await (
+          await fetch(base + "/api/history?limit=2&offset=1")
+        ).json();
+        assert.equal(data.length, 2);
+        assert.equal(data[0].state, "CLOSED");
+        assert.equal(data[0].entryAt >= data[1].entryAt, true);
+        assert.equal(analytics.mock.callCount(), 0);
+        assert.equal(memory.mock.callCount(), 0);
+      },
+    );
+    await t.test(
+      "count API returns only count and does not hydrate page data or call wallet",
+      async () => {
+        const store = app!.engine.store;
+        store.savePosition({
+          ...position(),
+          id: "unsigned-entry",
+          mode: "paper",
+          state: "PENDING_ENTRY",
+          quantity: "0",
+        });
+        const reads = [
+          t.mock.method(store, "positions", () => {
+            throw Error("No page hydration");
+          }),
+          t.mock.method(store, "executions", () => {
+            throw Error("No execution hydration");
+          }),
+          t.mock.method(app!.engine, "balance", async () => {
+            throw Error("No wallet read");
+          }),
+        ];
+        try {
+          const response = await fetch(base + "/api/positions/count");
+          assert.equal(response.status, 200);
+          assert.equal(response.headers.get("cache-control"), "no-store");
+          assert.deepEqual(await response.json(), { count: 12 });
+          for (const read of reads) assert.equal(read.mock.callCount(), 0);
+        } finally {
+          for (const read of reads) read.mock.restore();
+        }
+      },
+    );
+    await t.test(
+      "Memory and statistics aggregation start only on their dedicated read endpoints",
+      async () => {
+        await fetch(base + "/api/settings");
+        app!.engine.store.record("events", undefined, {
+          type: "ERROR",
+          reason: "ROUTE_FIXTURE_SYSTEM_ALERT",
+        });
+        const logs = await (await fetch(base + "/api/logs")).json();
+        assert.ok(
+          logs.events.some(
+            (row: any) => row.payload.reason === "ROUTE_FIXTURE_SYSTEM_ALERT",
+          ),
+        );
+        assert.equal(analytics.mock.callCount(), 0);
+        assert.equal(memory.mock.callCount(), 0);
+        assert.equal((await fetch(base + "/api/learning")).status, 200);
+        assert.equal(memory.mock.callCount(), 1);
+        assert.equal(analytics.mock.callCount(), 0);
+        assert.equal(
+          (await fetch(base + "/api/statistics?strategy=STANDARD")).status,
+          200,
+        );
+        assert.equal(analytics.mock.callCount(), 1);
+        assert.equal(
+          (await fetch(base + "/api/statistics?strategy=INVALID")).status,
+          400,
+        );
+        assert.equal(status.mock.callCount(), 0);
+        t.mock.timers.tick(10000);
+        await Promise.resolve();
+        assert.equal(
+          status.mock.callCount(),
+          0,
+          "No full-status background job without legacy SSE clients",
+        );
+        assert.equal(analytics.mock.callCount(), 1);
+        assert.equal(memory.mock.callCount(), 1);
+      },
+    );
+    await t.test("CSRF and Host protections remain in force", async () => {
+      const r = await fetch(base + "/api/settings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: base,
+          "x-csrf-token": "wrong",
+        },
+        body: "{}",
+      });
+      assert.equal(r.status, 403);
+      assert.equal(app!.engine.settings.positionSizePercent, 1);
+    });
+    assert.equal(g.calls.length, 0);
+    assert.equal(app.engine.store.executions().length, 0);
+  } finally {
+    await app?.stop();
+    t.mock.timers.reset();
+    Object.assign(env, {
+      TRADING_MODE: old.mode,
+      LIVE_TRADING_ACK: old.ack,
+      NEW_ENTRIES_ENABLED: old.entries,
+      SCANNER_ENABLED: old.scanner,
+      WALLET_PUBLIC_KEY: old.wallet,
+      DATABASE_PATH: old.path,
+      PORT: old.port,
+    });
+    assert.equal(dirname(resolve(dir)), resolve(tmpdir()));
+    assert.ok(basename(dir).startsWith("dashboard-route-api-"));
+    rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  }
+});

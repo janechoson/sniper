@@ -1,0 +1,9 @@
+# Audit trước implementation — Controlled Markup / Accounting / History
+
+Đường hiện tại: Trending → fresh attempt → history/flow/V3 → JEV → Risk → Executor → signature/confirm/receipt/deltas → atomic applyFill → positions JSON + executions + execution_fills → API positionViews/history → UI. BUY costLamports hiện bằng toàn bộ SOL debit; SELL realizedLamports dùng wallet credit trừ allocated cost; vì thế phí/rent đi vào PnL/MFE/MAE. EntryPriceUsd hiện là signal snapshot, không phải giá fill. Không có closedAt bền vững; sellSignature chỉ là SELL cuối; durable execution rows vẫn giữ partial fills.
+
+Giữ nguyên wallet/capital/reconciliation fields để bảo toàn authority; thêm accounting/economic projection dùng BigInt cho lamports và token quantity. Reuse existing positions/executions JSON persistence, không xóa/backfill tùy đoán. New execution records lưu fee/FX/effective price/rent evidence và lifecycle. Legacy thiếu evidence trả UNKNOWN, không lấy signal price giả actual price. No LIVE DB migration/restart/reset trong task.
+
+Controlled markup: bounded segment scan trên actual closed M1 candles, relative features và policy có version/parameters công khai; STRONG có confluence được test với control set và Risk không cho JEV override. Replay lấy persisted pre-BUY snapshots trong read-only DB; cohort được đóng băng trong fixture, không sử dụng future collapse bars. Không ép kết quả6/6 nếu actual pre-BUY data không đủ evidence.
+
+Valuation hiện tại là mark-to-market bằng GMGN token USD và SOL/USD, không phải guaranteed executable SELL quote. Route fee embedded/price impact/slippage đã phản ánh trong effective fill; không cộng lại thành debit fee. meta.fee là actual transaction network total (priority nằm trong tổng, không cộng estimate lần hai); ATA rent tách nếu receipt đủ evidence, legacy unresolved thì unknown. Fee USD dùng timestamped SOL snapshot, không giả exact historical rate.

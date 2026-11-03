@@ -1,4 +1,4 @@
-/* Standalone PAPER dashboard; own server and database only. */
+/* Isolated PAPER UI; only calls dedicated Lab relay endpoints. */
 (() => {
   const $ = (id) => document.getElementById(id),
     panel = $("kronos");
@@ -78,7 +78,7 @@
     const summary = s.summary ?? {};
     $("kronosStatus").textContent =
       s.error === "KRONOS_LAB_OFFLINE"
-        ? "BOT Kronos chưa kết nối"
+        ? "Lab offline · production độc lập"
         : s.enabled
           ? "PAPER collection đang chạy"
           : s.active
@@ -88,7 +88,10 @@
     $("kronosPause").disabled = !s.summary || !s.enabled;
     $("kronosReset").disabled = !s.summary || s.enabled || s.active;
     const cards = [
-      ["Records", number(summary.records, 0)],
+      [
+        "Records",
+        number(summary.records, 0) + " / " + number(summary.limit, 0),
+      ],
       ["Paper Buys", number(summary.paperBuys, 0)],
       ["Open", number(summary.open, 0)],
       ["Closed", number(summary.closed, 0)],
@@ -229,7 +232,11 @@
   $("kronosEnable").onclick = () => change({ action: "enable" });
   $("kronosPause").onclick = () => change({ action: "pause" });
   $("kronosReset").onclick = () => {
-    if (window.confirm("Xóa toàn bộ dữ liệu PAPER của BOT Kronos này?"))
+    if (
+      window.confirm(
+        "Reset all Kronos paper experiment records? Production data will remain unchanged.",
+      )
+    )
       void change({
         action: "reset",
         confirmation: "RESET KRONOS PAPER EXPERIMENT",

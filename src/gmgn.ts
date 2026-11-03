@@ -1,8 +1,16 @@
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { GmgnProviderState } from "./gmgn-provider-state.js";
+import { normalizeSmartMoney, unavailableSmartMoney } from "./smart-money.js";
+import { transportRetryDelay } from "./gmgn-rate-metadata.js";
 import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
-import type { Settings } from "./config.js";
+import { env, gmgnSigningKey, type Settings } from "./config.js";
 import {
   Blocked,
+  CandidateRejected,
   ProviderFailure,
   known,
   unknown,
@@ -10,8 +18,19 @@ import {
   type Evidence,
   type Market,
   type Security,
+  type Intelligence,
 } from "./domain.js";
+import { type Health } from "./util.js";
 import { normalizeTokenLogo } from "./token-metadata.js";
+import {
+  GmgnCoordinator,
+  gmgnRequestKey,
+  GmgnRateLimited,
+  retryDelay,
+  type ReadOptions,
+} from "./gmgn-coordinator.js";
+const require = createRequire(import.meta.url);
+export const SOL = "So11111111111111111111111111111111111111112";
 const object = z.record(z.string(), z.unknown());
 export const record = (v: unknown): Record<string, unknown> =>
   object.safeParse(v).success ? (v as Record<string, unknown>) : {};
@@ -43,6 +62,11 @@ const bool = (v: unknown): Evidence<boolean> =>
     : unknown("GMGN did not verify this authority");
 const optionalText = (v: unknown, max = 128) =>
   typeof v === "string" ? v.slice(0, max) : undefined;
+const firstPositive = (...values: unknown[]) =>
+  values.find((v) => {
+    const n = numberEvidence(v);
+    return n.state === "KNOWN" && n.value > 0;
+  });
 export function parseDiscovery(raw: unknown): Candidate[] {
   const r = object.parse(raw);
   const now =
@@ -352,4 +376,642 @@ export function normalizeSecurity(
       },
     },
   };
+}
+export function normalizeIntelligence(
+  info: unknown,
+  security: Security,
+  c: Candidate,
+  holderRaw?: unknown,
+  history?: unknown,
+): Intelligence {
+  const i = record(info),
+    stat = record(i.stat),
+    dev = record(i.dev),
+    tags = record(i.wallet_tags_stat),
+    listing = c.listing ?? {};
+  const populated = [
+    "creator_hold_rate",
+    "top_bundler_trader_percentage",
+    "top70_sniper_hold_rate",
+    "top_rat_trader_percentage",
+    "top_entrapment_trader_percentage",
+    "bot_degen_rate",
+    "fresh_wallet_rate",
+    "private_vault_hold_rate",
+    "creator_created_count",
+    "top_10_holder_rate",
+  ].some((k) => Number(stat[k]) > 0);
+  const rows = Array.isArray(record(holderRaw).list)
+    ? (record(holderRaw).list as unknown[])
+    : [];
+  const normal = rows
+    .map(record)
+    .filter((r) => r.addr_type === 0 && r.address !== c.mint)
+    .map((r) => percent(r.amount_percentage))
+    .filter((r): r is { state: "KNOWN"; value: number } => r.state === "KNOWN")
+    .sort((a, b) => b.value - a.value);
+  const top10 = percent(
+    firstPositive(
+      security.raw.top_10_holder_rate,
+      listing.top_10_holder_rate,
+      populated ? stat.top_10_holder_rate : undefined,
+    ),
+  );
+  const findings = [...security.findings];
+  const count = numberEvidence(i.holder_count);
+  const holderCount =
+    count.state === "KNOWN" && count.value > 0 ? count : unknown<number>();
+  const creatorPercent = percent(
+    firstPositive(
+      listing.creator_balance_rate,
+      security.raw.creator_balance_rate,
+      populated ? stat.creator_hold_rate : undefined,
+    ),
+  );
+  return {
+    riskEvidence:
+      record(info)._gmgnSnapshot || record(holderRaw)._gmgnSnapshot
+        ? {
+            fetchedAt: Number(
+              record(record(holderRaw)._gmgnSnapshot).fetchedAt ?? 0,
+            ),
+            freshness: String(
+              record(record(holderRaw)._gmgnSnapshot).freshness ?? "UNKNOWN",
+            ),
+            authority: "BUY_AUTHORIZING",
+          }
+        : undefined,
+    holders: {
+      count: holderCount,
+      top1: normal.length ? normal[0]! : unknown(),
+      top10:
+        top10.state === "KNOWN"
+          ? top10
+          : normal.length >= 10
+            ? known(normal.slice(0, 10).reduce((n, r) => n + r.value, 0))
+            : unknown(),
+      rows: rows.slice(0, 20).map((v) => {
+        const r = record(v);
+        return {
+          address: r.address,
+          addr_type: r.addr_type,
+          amount_percentage: r.amount_percentage,
+          maker_token_tags: r.maker_token_tags,
+        };
+      }),
+    },
+    creator: {
+      address: optionalText(dev.creator_address, 44),
+      holdPercent: creatorPercent,
+      history: history === undefined ? unknown() : known(history),
+    },
+    bundlePercent: percent(
+      populated
+        ? stat.top_bundler_trader_percentage
+        : listing.bundler_trader_amount_rate,
+    ),
+    sniperPercent: percent(populated ? stat.top70_sniper_hold_rate : undefined),
+    smartMoney: numberEvidence(tags.smart_wallets ?? listing.smart_degen_count),
+    kol: numberEvidence(tags.renowned_wallets ?? listing.renowned_count),
+    dueDiligence: {
+      source:
+        "Installed gmgn-contract-dd evidence; no composite score endpoint exists",
+      score: unknown(
+        "The installed score is an agent-derived report, not an API response",
+      ),
+      findings,
+    },
+  };
+}
+export type CliRunner = (args: string[], write: boolean) => Promise<unknown>;
+export class Gmgn {
+  private feedObservations = new Map<string, Record<string, unknown>>();
+  private rememberFeed(rows: unknown[], source: string, fetchedAt: number) {
+    for (const value of rows) {
+      const row = record(value);
+      if (typeof row.address !== "string") continue;
+      const price = record(row.price);
+      const snapshot = Object.fromEntries(
+        [
+          "address",
+          "symbol",
+          "liquidity",
+          "market_cap",
+          "usd_market_cap",
+          "holder_count",
+        ]
+          .filter((k) => row[k] !== undefined)
+          .map((k) => [k, row[k]]),
+      );
+      snapshot.price = Object.fromEntries(
+        [
+          "price",
+          ...["1m", "5m", "1h", "6h", "24h"].flatMap((w) =>
+            [
+              "price_",
+              "volume_",
+              "buy_volume_",
+              "sell_volume_",
+              "buys_",
+              "sells_",
+            ].map((k) => k + w),
+          ),
+        ]
+          .filter((k) => price[k] !== undefined)
+          .map((k) => [k, price[k]]),
+      );
+      snapshot._gmgnSnapshot = {
+        provider: "GMGN",
+        source,
+        fetchedAt,
+        freshness: "FRESH",
+        ageMs: 0,
+      };
+      const oldAt = Number(
+        record(this.feedObservations.get(row.address)?._gmgnSnapshot)
+          .fetchedAt ?? 0,
+      );
+      if (oldAt > fetchedAt) continue;
+      // Replace the whole snapshot; never merge an old directional field into a new missing field.
+      this.feedObservations.delete(row.address);
+      this.feedObservations.set(row.address, snapshot);
+    }
+    while (this.feedObservations.size > 300)
+      this.feedObservations.delete(this.feedObservations.keys().next().value!);
+  }
+  feedObservation(mint: string) {
+    const value = this.feedObservations.get(mint);
+    return value ? structuredClone(value) : undefined;
+  }
+  readonly feedFetchedAt: Partial<Record<"SNIPER" | "TRENDING", number>> = {};
+  private feedCacheMs = { SNIPER: 15000, TRENDING: 30000 };
+  health: Health = { state: "UNKNOWN", at: 0 };
+  private unavailable = new Set<string>();
+  private policy = {
+    concurrency: 3,
+    intervalMs: 2000,
+    baseBackoffMs: 10000,
+    maxBackoffMs: 300000,
+    maxQueue: 200,
+  };
+  readonly coordinator: GmgnCoordinator;
+  constructor(private runner?: CliRunner) {
+    this.coordinator = new GmgnCoordinator(
+      () => ({
+        ...this.policy,
+        intervalMs: this.runner ? 0 : this.policy.intervalMs,
+      }),
+      undefined,
+      undefined,
+      undefined,
+      this.runner
+        ? undefined
+        : new GmgnProviderState(
+            fileURLToPath(
+              new URL("../data/gmgn-provider.sqlite", import.meta.url),
+            ),
+          ),
+    );
+  }
+  configure(s: Settings) {
+    this.feedCacheMs = {
+      SNIPER: Math.floor(s.sniperPollMs / 2),
+      TRENDING: Math.floor(s.trendingPollMs / 2),
+    };
+    this.policy = {
+      concurrency: s.gmgnReadConcurrency,
+      intervalMs: s.gmgnRequestIntervalMs,
+      baseBackoffMs: s.gmgnBackoffBaseMs,
+      maxBackoffMs: s.gmgnBackoffMaxMs,
+      maxQueue: s.gmgnQueueMaxSize,
+    };
+  }
+  async run(
+    args: string[],
+    cacheMs = 0,
+    options: ReadOptions = {},
+  ): Promise<unknown> {
+    const command = args
+      .slice(
+        0,
+        args[0] === "order" && args[1] === "strategy"
+          ? 3
+          : args[0] === "swap"
+            ? 1
+            : 2,
+      )
+      .join(":");
+    if (
+      ![
+        "market:trenches",
+        "market:search",
+        "market:trending",
+        "market:kline",
+        "token:info",
+        "token:security",
+        "token:holders",
+        "portfolio:created-tokens",
+        "portfolio:activity",
+        "portfolio:holdings",
+        "track:smartmoney",
+      ].includes(command)
+    )
+      throw new Blocked(
+        "Unsupported GMGN command; this bot is single-wallet Solana only",
+      );
+    const write = false;
+    if (args.includes("--chain") && args[args.indexOf("--chain") + 1] !== "sol")
+      throw new Blocked("Only Solana is supported");
+    const capability = args.slice(0, 2).join(":");
+    if (this.unavailable.has(capability))
+      throw new Blocked("GMGN_PLAN_UPGRADE_REQUIRED");
+    const key = capability + ":" + gmgnRequestKey(args);
+    return this.coordinator.read(
+      key,
+      cacheMs,
+      async () => {
+        const at = Date.now();
+        try {
+          if (!this.runner && !env.GMGN_API_KEY)
+            throw new Blocked("MISSING_GMGN_API_KEY");
+          const data = this.runner
+            ? await this.runner(args, write)
+            : await new Promise<unknown>((resolve, reject) => {
+                execFile(
+                  process.execPath,
+                  [
+                    ...(!existsSync(
+                      new URL("./gmgn-fetch-metadata.js", import.meta.url),
+                    )
+                      ? ["--import", "tsx"]
+                      : []),
+                    "--import",
+                    new URL(
+                      existsSync(
+                        new URL("./gmgn-fetch-metadata.js", import.meta.url),
+                      )
+                        ? "./gmgn-fetch-metadata.js"
+                        : "./gmgn-fetch-metadata.ts",
+                      import.meta.url,
+                    ).href,
+                    require.resolve("gmgn-cli"),
+                    ...args,
+                    "--raw",
+                  ],
+                  {
+                    env: {
+                      PATH: process.env.PATH,
+                      SystemRoot: process.env.SystemRoot,
+                      USERPROFILE: process.env.USERPROFILE,
+                      HOME: process.env.HOME,
+                      TEMP: process.env.TEMP,
+                      TMP: process.env.TMP,
+                      GMGN_API_KEY: env.GMGN_API_KEY,
+                      GMGN_PRIVATE_KEY: gmgnSigningKey(),
+                      GMGN_DEBUG: "",
+                      GMGN_ALLOW_AUTOMATED_TRADES: "0",
+                      GMGN_RATE_LIMIT_AUTO_RETRY_MAX_WAIT_MS: "0",
+                    },
+                    timeout: 20000,
+                    maxBuffer: 4 * 1024 * 1024,
+                    windowsHide: true,
+                  },
+                  (err, stdout, stderr) => {
+                    if (err) {
+                      const code = [
+                        "PLAN_UPGRADE_REQUIRED",
+                        "ERROR_RATE_LIMIT_BLOCKED",
+                        "RATE_LIMIT_BANNED_MAX",
+                        "RATE_LIMIT_BANNED",
+                        "RATE_LIMIT_EXCEEDED",
+                      ].find((c) => stderr.includes(c));
+                      if (code === "PLAN_UPGRADE_REQUIRED") {
+                        this.unavailable.add(capability);
+                        reject(
+                          new ProviderFailure(
+                            "GMGN_PLAN_UPGRADE_REQUIRED",
+                            "GMGN",
+                            false,
+                          ),
+                        );
+                      } else if (
+                        code?.includes("RATE_LIMIT") ||
+                        stderr.includes("GMGN_RATE_METADATA:") ||
+                        /status[=: ]+429|HTTP 429/.test(stderr)
+                      ) {
+                        const delays = [
+                          transportRetryDelay(stderr),
+                          retryDelay(stderr),
+                        ].filter((v): v is number => v !== undefined);
+                        const delay = delays.length
+                          ? Math.max(...delays)
+                          : undefined;
+                        reject(
+                          new GmgnRateLimited(
+                            code === "RATE_LIMIT_BANNED_MAX"
+                              ? Math.max(300000, delay ?? 0)
+                              : delay,
+                          ),
+                        );
+                      } else if (
+                        /status[=: ]+(401|403)|HTTP (401|403)/.test(stderr)
+                      )
+                        reject(
+                          new ProviderFailure(
+                            "GMGN_AUTHORIZATION_FAILED",
+                            "GMGN",
+                            false,
+                          ),
+                        );
+                      else
+                        reject(
+                          new ProviderFailure("GMGN_COMMAND_FAILED", "GMGN"),
+                        );
+                      return;
+                    }
+                    try {
+                      resolve(JSON.parse(stdout));
+                    } catch {
+                      reject(new ProviderFailure("GMGN_INVALID_JSON", "GMGN"));
+                    }
+                  },
+                );
+              });
+          const raw = record(data);
+          if (
+            ["market:trending", "market:trenches", "token:security"].includes(
+              capability,
+            ) &&
+            Array.isArray(data)
+          )
+            throw new ProviderFailure("GMGN_INVALID_RESPONSE", "GMGN");
+          if (capability === "market:trending") parseTrending(data);
+          if (capability === "market:trenches") parseDiscovery(data);
+          if (
+            capability === "token:info" &&
+            (raw.address !== args[args.indexOf("--address") + 1] || !raw.symbol)
+          )
+            throw new CandidateRejected("TOKEN_DATA_INCOMPLETE", {
+              reason: "GMGN_TOKEN_RECORD_UNAVAILABLE",
+            });
+          if (
+            data === null ||
+            typeof data !== "object" ||
+            raw.error ||
+            (typeof raw.code === "number" && raw.code !== 0)
+          )
+            throw new ProviderFailure("GMGN_INVALID_RESPONSE", "GMGN");
+          this.health = {
+            state: "READY",
+            at: Date.now(),
+            latencyMs: Date.now() - at,
+          };
+          return data;
+        } catch (error) {
+          this.health = {
+            state: "BLOCKED",
+            at: Date.now(),
+            reason: error instanceof Blocked ? error.code : "GMGN_UNAVAILABLE",
+          };
+          throw error;
+        }
+      },
+      options,
+    );
+  }
+  async discover() {
+    const raw = await this.run(
+      ["market", "trenches", "--chain", "sol"],
+      this.feedCacheMs.SNIPER,
+      {
+        priority: 4,
+        consumer: "sniper-discovery",
+      },
+    );
+    this.feedFetchedAt.SNIPER =
+      Number(record(record(raw)._gmgnSnapshot).fetchedAt) || Date.now();
+    const result = parseDiscovery(raw),
+      r = record(raw);
+    this.rememberFeed(
+      ["new_creation", "near_completion", "pump", "completed"].flatMap((k) =>
+        Array.isArray(r[k]) ? (r[k] as unknown[]) : [],
+      ),
+      "SNIPER",
+      this.feedFetchedAt.SNIPER,
+    );
+    return result;
+  }
+  async trending(interval = "5m", limit = 100) {
+    const raw = await this.run(
+      [
+        "market",
+        "trending",
+        "--chain",
+        "sol",
+        "--interval",
+        interval,
+        "--order-by",
+        "volume",
+        "--direction",
+        "desc",
+        "--limit",
+        String(limit),
+      ],
+      this.feedCacheMs.TRENDING,
+      { priority: 2, consumer: "trending-discovery" },
+    );
+    this.feedFetchedAt.TRENDING =
+      Number(record(record(raw)._gmgnSnapshot).fetchedAt) || Date.now();
+    const result = parseTrending(raw, interval);
+    const rows = record(record(raw).data).rank;
+    this.rememberFeed(
+      Array.isArray(rows) ? rows : [],
+      "TRENDING",
+      this.feedFetchedAt.TRENDING,
+    );
+    return result;
+  }
+  async info(mint: string, cacheMs = 10000, options: ReadOptions = {}) {
+    const data = await this.run(
+      ["token", "info", "--chain", "sol", "--address", address(mint)],
+      cacheMs,
+      options,
+    );
+    const i = record(data);
+    if (i.address !== mint || !i.symbol)
+      throw new CandidateRejected("TOKEN_DATA_INCOMPLETE", {
+        mint,
+        reason: "GMGN_TOKEN_RECORD_UNAVAILABLE",
+      });
+    return data;
+  }
+  async marketHistory(
+    c: Candidate,
+    cacheMs = 0,
+    options: ReadOptions = { priority: 4, consumer: "candidate-history" },
+  ) {
+    const now = cacheMs ? Math.floor(Date.now() / 60000) * 60000 : Date.now();
+    return this.run(
+      [
+        "market",
+        "kline",
+        "--chain",
+        "sol",
+        "--address",
+        address(c.mint),
+        "--resolution",
+        "1m",
+        "--from",
+        String(Math.floor((now - 3600000) / 1000)),
+        "--to",
+        String(Math.floor(now / 1000)),
+      ],
+      cacheMs,
+      options,
+    );
+  }
+  async security(
+    c: Candidate,
+    s: Settings,
+    options: ReadOptions = {},
+    fresh = false,
+  ) {
+    return normalizeSecurity(
+      await this.run(
+        ["token", "security", "--chain", "sol", "--address", address(c.mint)],
+        fresh || options.consumer === "pre-buy" ? 0 : 10000,
+        { priority: 1, consumer: "security", ...options },
+      ),
+      c,
+      s,
+    );
+  }
+  async intelligence(
+    c: Candidate,
+    info: unknown,
+    sec: Security,
+    s: Settings,
+    authoritative = false,
+  ) {
+    let holders: unknown, history: unknown;
+    try {
+      holders = await this.run(
+        [
+          "token",
+          "holders",
+          "--chain",
+          "sol",
+          "--address",
+          c.mint,
+          "--limit",
+          "20",
+        ],
+        authoritative ? 0 : s.intelligenceCacheMs,
+        {
+          priority: authoritative ? 1 : 5,
+          consumer: "holder-enrichment",
+          staleMs: authoritative ? 0 : s.intelligenceCacheMs * 2,
+        },
+      );
+    } catch (error) {
+      if (authoritative) throw error;
+      /* Optional account coverage is retained as UNKNOWN. */
+    }
+    const creator = record(record(info).dev).creator_address;
+    if (!authoritative && typeof creator === "string") {
+      try {
+        history = await this.run(
+          [
+            "portfolio",
+            "created-tokens",
+            "--chain",
+            "sol",
+            "--wallet",
+            address(creator),
+          ],
+          s.intelligenceCacheMs,
+          {
+            priority: 5,
+            consumer: "creator-enrichment",
+            staleMs: s.intelligenceCacheMs * 2,
+          },
+        );
+      } catch {
+        /* Creator history is optional. */
+      }
+    }
+    return normalizeIntelligence(info, sec, c, holders, history);
+  }
+  advisoryIntelligence(
+    c: Candidate,
+    info: unknown,
+    sec: Security,
+    s: Settings,
+  ) {
+    const args = [
+      "token",
+      "holders",
+      "--chain",
+      "sol",
+      "--address",
+      c.mint,
+      "--limit",
+      "20",
+    ];
+    return normalizeIntelligence(
+      info,
+      sec,
+      c,
+      this.coordinator.peek(
+        "token:holders:" + gmgnRequestKey(args),
+        s.intelligenceCacheMs,
+      ),
+    );
+  }
+  async smartMoneyFeed(cacheMs = 0, options: ReadOptions = {}) {
+    // Same bounded provider snapshot for all tokens; token filtering is local.
+    // Candidate calls use TTL0. Position cache is provider data, never a verdict.
+    try {
+      return normalizeSmartMoney(
+        await this.run(
+          ["track", "smartmoney", "--chain", "sol", "--limit", "100"],
+          cacheMs,
+          { priority: 5, consumer: "smart-money-evidence", ...options },
+        ),
+        100,
+      );
+    } catch {
+      // Shared coordinator still enforces cooldown; optional absence cannot halt entry.
+      return unavailableSmartMoney();
+    }
+  }
+  async smartMoneyExits(mint: string, since: number) {
+    const data = await this.smartMoneyFeed(30000);
+    return data.events
+      .filter(
+        (r) =>
+          r.mint === mint &&
+          r.side === "sell" &&
+          r.timestamp !== null &&
+          r.timestamp >= since,
+      )
+      .map((r) => ({
+        signature: r.transactionHash,
+        at: r.timestamp!,
+        side: "sell",
+        amountUsd: numberEvidence(r.amountUsd),
+      }));
+  }
+  holdings(wallet: string) {
+    return this.run([
+      "portfolio",
+      "holdings",
+      "--chain",
+      "sol",
+      "--wallet",
+      address(wallet),
+      "--limit",
+      "50",
+    ]);
+  }
 }

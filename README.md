@@ -1,60 +1,63 @@
-# K1ll of BOT — Kronos
+# BOT B: GMGN intelligence, Jev decisions, local Solana execution
 
-Bot Kronos độc lập, **PAPER mặc định**, có execution LIVE qua Jupiter khi được cấu hình và kích hoạt rõ ràng. Không JEV/Structure/Controlled Markup. DB, wallet configuration và logs riêng; không đọc dữ liệu BOT B.
+One Node.js 22+ process, one local wallet, TypeScript, pnpm, SQLite WAL and a localhost dashboard.
 
-Đã cài dependencies và build tại máy này. Khởi động:
-
-```powershell
-cd C:\Users\admin\Desktop\Tool\sniper
-pnpm start
+```text
+GMGN discovery / market / security / holders / developer history
+  → cheap filter → TypeSafe System One (jev-1.14.0)
+  → deterministic RiskEngine → approved exact integer amount
+  → Jupiter BUY quote + 20/50/100% quote-only exit feasibility
+  → transaction inspection + simulation + fresh quote/probe binding
+  → backend wallet signature → Jupiter managed submission
+  → Solana confirmation + receipt and actual balance reconciliation
+  → persisted position → independent market monitor → bounded Jev exit scheduler
+  → user/security override → persistent exit queue → Jupiter SELL → reconciliation
 ```
 
-Mở **http://127.0.0.1:8793**. Server khởi động với collection **PAUSED**. Không tự discovery hoặc gọi model khi vừa start. Dừng bằng Ctrl+C.
+GMGN cannot execute trades: its runtime command allowlist contains data commands only. No paid GMGN trading entitlement is required. RPC never indexes discovery, holders, launchpads or developer history.
 
-Để thu thập market data, tự tạo `.env` của bot mới theo `.env.example` và điền `KRONOS_GMGN_API_KEY`. Không copy `.env`/wallet của bot khác. Sau đó restart bot này và bấm **Bắt đầu collection / trading theo mode**. PAPER không cần wallet/Jupiter; cả hai mode không dùng TypeSafe/JEV.
+Trending and Trenches/Sniper feed one deduplicated queue. Trending gets priority; bounded aging and a Sniper analysis slot prevent starvation of retained eligible candidates. BUY requires at least one configured partial exit level to cover conservative execution costs and the minimum net SOL margin. Quote-only exit estimates never sign transactions or guarantee future liquidity. Owned positions refresh these estimates in a bounded background worker for Jev context. See [implementation, verification and actual LIVE limitations](docs/trending-discovery-exit-feasibility.md).
 
-| Biến | Ý nghĩa |
-| --- | --- |
-| `TRADING_MODE` | `paper` / `live`; thiếu hoặc không hợp lệ → PAPER; LIVE thiếu cấu hình thì fail closed |
-| `KRONOS_GMGN_API_KEY` | Cần khi bắt đầu collection; không cần để mở dashboard |
-| `KRONOS_RPC_URL` | HTTP(S) Solana read-only; thiếu dùng public mainnet fallback |
-| `KRONOS_PORT` | Mặc định8793, loopback only |
-| `KRONOS_DATABASE_PATH` | `data/kronos.sqlite`, bắt buộc nằm trong project |
-| `KRONOS_RUNTIME` | `runtime`, Python/model/tmp/lock riêng |
-| `KRONOS_LOG_DIR` | `logs`, bắt buộc nằm trong project |
+Sniper entries now require observed selling, absorption and persistent buyer recovery. Otherwise eligible tokens enter a bounded Structure Watch for up to 30 minutes; Trending uses its fresh normal path. A shared GMGN coordinator adds cache metadata, single-flight, priority/aging and rate-limit cooldown/recovery. GMGN cooldown degrades intelligence rather than globally halting unrelated execution. See [V5 policy, tests and offline verification](docs/sniper-buyer-defense-v5.md). The real bot remains stopped pending the owner's next LIVE instruction.
 
-Eligibility config: `config/eligibility.json`. Tám giá trị không chứa secret được tái tạo từ effective policy của Lab tại thời điểm tách; không đọc settings/API của BOT B lúc runtime. Không có JEV/Structure/Controlled-Markup gate.
+Install with `pnpm install`. Configure `.env` from [.env.example](.env.example). Set the public wallet and either `SOLANA_PRIVATE_KEY` (base58 64-byte key or JSON byte array) or `SOLANA_KEYPAIR_PATH` (Solana CLI JSON file). The GMGN PEM authenticates its API and cannot sign Solana transactions. Secrets stay in the backend; never paste keys into chat or the dashboard.
 
-Pipeline: independent GMGN rank50/cycle120s → cheap/security/mint/M1/flow → Kronos → WAIT/PAPER BUY → OPEN monitor → HOLD/PAPER SELL. **Không giới hạn tổng lifecycle/history**; không xóa hoặc ghi đè records khi đạt số lượng nào. Một model inference tại một thời điểm, GMGN start spacing3s. PAPER PnL là gross price return; LIVE dùng token quantity/receipt đã đối soát, network fees thật và rent classification. Xem hướng dẫn LIVE bên dưới.
+`SOLANA_RPC_HTTP` is the primary RPC endpoint; `SOLANA_RPC_URL` remains a compatibility fallback. `SOLANA_RPC_WS` is optional. Jupiter supports keyless use at a lower rate; production API keys go in `JUPITER_API_KEY`.
 
-Discovery chạy tách khỏi await của model/OPEN loop; vẫn dùng chung transport GMGN tuần tự. Lỗi/timeout provider hoặc model có thể làm chậm observation; không có SLA latency. Listing lại cùng mint sau terminal state có thể thành appearance mới theo timestamp của snapshot; đây là semantics kế thừa, không phải permanent mint blacklist.
+Normal trading uses exactly `max(wallet SOL − fee reserve − pending BUY reserves, 0) / 100`, rounded down in integer lamports. It requires `TRADING_MODE=live`, `LIVE_TRADING_ACK=true`, and entries enabled. Protective exits remain available when entries are paused. Local exits require this process to be running; no GMGN native orders are created.
 
-Cài lại sạch nếu cần (Node22.22.0/pnpm10.28.2, Python3.11.11 qua `uv`):
+Normal live has **no position-count limit**. Each independently approved mint can enter while spendable capital and execution checks allow it. An existing position's attention/backoff does not pause other mints. Queue/Watch/Deferred bounds limit analysis workload only.
 
-```powershell
-pnpm install --frozen-lockfile
-pnpm exec node scripts/prepare-python.mjs
-pnpm run model:prepare
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm build
-```
+Jev decides HOLD, partial SELL or full SELL separately for each owned position. TP30/70 and trailing are context references; they do not force a strategic exit. No price stop loss or maximum-holding-time SELL remains. SELL backoff and wallet serialization do not pause market observations or asynchronous Jev analysis. Manual/security overrides and all existing execution safety checks remain in force. Capital Flow adds bounded GMGN observations, directional volume trends, observed runner memory and 20/50/75% exposure reductions. See [current implementation and live evidence](docs/capital-flow-adaptive-manager.md) and [read-only route investigation](docs/live-route-investigation-2026-10-29.md).
 
-Không copy `node_modules`, venv, DB hoặc `.env` từ bot khác. `model:prepare` chỉ tải/verify4 public pinned artifacts, khoảng115MB. Python dependency lock có hashes. Model: Kronos-small `901c26c1332695a2a8f243eb2f37243a37bea320`, tokenizer `0e0117387f39004a9016484a186a908917e22426`, vendor commit `67b630e67f6a18c9e9be918d9b4337c960db1e9a`; 3seeded paths/horizon5/price-only, không phải calibrated confidence.
+Commands:
 
-Khi chạy cùng BOT B, hai bot có thể dùng chung quota GMGN/RPC nếu cấu hình cùng credentials. Không có cache/cooldown/DB mutable dùng chung; hãy cấu hình credentials phù hợp. Các trial/trades cũ vẫn nằm ở bot cũ, không xuất hiện ở DB mới.
+- `pnpm dev`: local dashboard and configured scanner. `pnpm build && pnpm start`: compiled runtime.
+- `pnpm build && pnpm live`: explicit continuous normal live. Verifies mainnet/signer, recovers pending executions and checks existing OPEN holdings against on-chain balances before enabling entries. It preserves historical controlled records and refuses genuine system/transaction halts; it has no one-trade auto-stop. Subsequent `pnpm live` uses the existing build.
+- `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm build`: deterministic safety checks.
+- `pnpm verify:gmgn`, `pnpm verify:jev`, `pnpm verify:wallet`: read-only real provider checks.
+- `pnpm verify:execution`: read-only Jupiter BUY/reverse quotes and BUY simulation; verifies signer configuration without broadcasting.
+- `pnpm smoke:live`: isolated real BUY → SELL. Never starts Engine, scanner, Jev, normal 1% sizing, or automatic exits.
+- `pnpm live:controlled`: real scanner/Jev/Risk/ExitEngine flow, at most one completed trade, one open position, and 0.005 SOL BUY principal; stops after reconciliation and memory outcome. Requires existing normal live authorization. See [Token-2022 policy](docs/token-2022-support.md) and [actual controlled verification](docs/token-2022-controlled-verification.md).
 
-Overview lấy layout BOT B hiện tại: carousel → current token/evaluation/result/Action Log → Paper Positions. Statistics nằm ở tab riêng. History/Positions50rows/page, logs100/page, overview queue8rows; đây là giới hạn đọc, không phải cap lưu trữ. Không có giới hạn720decisions hoặc50.000events dừng analysis.
+The smoke principal cap is **0.005 SOL = 5,000,000 lamports**, explicitly revised by the owner on 2026-10-28 from the original 0.0005 request. Set `LIVE_SMOKE_TEST_SOL=0.005`; larger values fail. Fees/rent are separate, bounded by a 5,000,000-lamport reserve. The separate `LIVE_SMOKE_TEST_ACK=true` and normal live flags are required; the program never edits ACKs. Normal trading cannot inherit smoke authorization.
 
-Xem [controlled-live-jupiter.md](docs/controlled-live-jupiter.md) (trạng thái hiện tại), `docs/continuous-market-overview.md` (lịch sử PAPER), `docs/standalone-migration-report.md` (lịch sử tách bot) và `evidence/` để kiểm tra phạm vi copy, isolation và kết quả tests.
+Smoke uses only canonical Solana USDC, independently verified with [Circle](https://developers.circle.com/stablecoins/usdc-contract-addresses), then checked on-chain for the standard SPL mint and six decimals. It requires both directions before BUY, fresh quotes, inspected transaction principal, simulation, and exactly one submission per leg. SELL uses only the increase above the token balance recorded before BUY. No blind submission retries occur.
 
-## Controlled LIVE
+`data/live-smoke-test.json` and its `.once` marker are durable. A marker blocks future tests; preserve/reconcile the existing record rather than deleting it. `data/live-smoke-preflight.json` records blocked preflights separately. The previous GMGN entitlement rejection was independently reviewed against unchanged wallet balances and archived with its original marker and a review record; the normal smoke command never archives or removes markers itself.
 
-Không tự bật LIVE. Server luôn khởi động PAUSED. Xem [hướng dẫn và kết quả kiểm chứng](docs/controlled-live-jupiter.md) trước khi cấu hình ví riêng. Dùng `TRADING_MODE=live`, các tên biến ví/Jupiter trong `.env.example`, BUY cố định1% trong tab Cấu hình và ACK `KRONOS_LIVE_ACK=I_ACCEPT_REAL_TRADING`. Không dùng lại ví BOT B tự động. `KRONOS_JUPITER_API_KEY` là optional như BOT B: để trống vẫn gửi request Jupiter không có `x-api-key`; nếu provider từ chối/rate-limit thì trade vẫn bị chặn theo policy hiện hữu.
+Submission is not success. UNKNOWN keeps the reservation and pauses entries. Restart recovery queries only the saved transaction signature, verifies receipt deltas against current balances, and never replays a BUY. Legacy GMGN positions/orders require review; they are never silently adopted by Jupiter.
 
-Sizing: `floor(max(balance - reserve, 0) / 100)` theo BigInt lamports. Tỷ lệ BUY LIVE cố định1%, hiển thị trong tab Cấu hình từ backend; không cần biến giới hạn SOL tuyệt đối. Base reserve 0,02 SOL +0,005 SOL mỗi OPEN đang có; không tự tăng size để lấy route. Slippage1%, priority cap100.000lamports và fee ceiling5.000.000lamports kế thừa provider BOT B. Unknown execution khóa wallet lane cho đến reconciliation; không tự phát lại transaction.
+The established paper path is retained for existing deterministic tests and UI development. Paper is never execution evidence. Real Jupiter BUY and SELL were both finalized on 2026-10-28; see [verification and signatures](docs/VERIFICATION.md).
 
-`KRONOS_EXECUTION_DRY_RUN=true` với cấu hình LIVE hợp lệ chỉ chạy đến final validation rồi STOP BEFORE SIGN. Đặt false hoặc bỏ biến mới cho phép ký khi user chủ động bật collection. Không trộn dry-run với executed trades.
+Read [provider details](docs/solana-execution-provider.md), [GMGN capabilities](docs/gmgn-capability-map.md), [risk policy](docs/risk-policy.md), and [security](SECURITY.md).
 
-History có filter ALL/PAPER/LIVE; Statistics tách PAPER và LIVE. Actual entry/exit SOL per token được suy từ receipt; USD dùng FX evidence riêng và có thể UNKNOWN. GMGN mark/MFE/MAE là estimate, không phải executable liquidation value.
+## Trading memory and UI preview
+
+Use `pnpm ui` to inspect the dashboard safely: it forces PAPER, disables LIVE permission, scanner and entries regardless of `.env`. The current preview is at http://127.0.0.1:3000. Normal `pnpm dev` honors the configured mode; keep live flags disabled while reviewing UI.
+
+Trading memory version 1 adds immutable snapshots, confirmed execution evidence, sampled MFE/MAE, fee-inclusive outcomes, historical retrieval, typed Jev context and unapplied suggestions. See [the implementation and verification report](docs/trading-memory.md). `pnpm learning:report` reads current DB statistics; `pnpm learning:rebuild` requires the bot stopped. `pnpm learning:example` demonstrates the closed loop using isolated fixtures only. Normal sizing is now 1% by the owner’s explicit request; learning cannot change it.
+
+Token faults are isolated with a bounded Top-10 queue, Watch/Deferred lifecycle and per-position attention badges; systemic/ambiguous transactions still pause entries. See [fault isolation and actual live verification](docs/fault-isolation.md). `pnpm live:controlled --resume` reconciles/resumes the existing controlled position without granting another BUY allowance.
+
+The [Token Flow Pipeline dashboard](docs/token-flow-pipeline.md) presents actual lifecycle/execution events as a dark, animated Scanner → Queue → Watch/Deferred/Reject/Qualified flow. Database-only fast SSE frames drive the visualization; trading state remains authoritative and wallet RPC polling is unchanged.

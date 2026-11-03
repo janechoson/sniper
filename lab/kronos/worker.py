@@ -23,14 +23,14 @@ PINS = json.loads((ROOT / 'pins.json').read_text())
 os.environ.update(HF_HUB_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1', DO_NOT_TRACK='1')
 os.chdir(RUNTIME)
 sys.path.insert(0, str(ROOT / 'vendor'))
-ALLOWED = [ROOT, RUNTIME, Path(sys.base_prefix).resolve(), Path(sys.prefix).resolve()]
+ALLOWED = [ROOT, RUNTIME / 'model', RUNTIME / 'tokenizer', RUNTIME / 'tmp', Path(sys.base_prefix).resolve(), Path(sys.prefix).resolve()]
 
 def audit(event, args):
     if event == 'open' and isinstance(args[0], (str, bytes)):
         target = Path(os.fsdecode(args[0])).resolve()
         if not any(target == p or p in target.parents for p in ALLOWED):
             raise PermissionError('KRONOS_FILE_OUTSIDE_ALLOWLIST')
-        if target.name.lower() in ('.env', 'keypair.pem') or target.suffix.lower() in ('.pem', '.key'):
+        if target.name.lower().startswith('.env') or target.name.lower() in ('keypair.pem', 'wallet.json', 'id.json', 'keypair.json') or target.suffix.lower() in ('.pem', '.key'):
             raise PermissionError('KRONOS_SECRET_FILE_FORBIDDEN')
         mode = args[1] if len(args) > 1 else None
         flags = args[2] if len(args) > 2 else 0

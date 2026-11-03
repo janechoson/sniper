@@ -1,0 +1,251 @@
+import assert from "node:assert/strict";
+import { Store } from "../src/store.js";
+import { Engine } from "../src/engine.js";
+import { Jev } from "../src/jev.js";
+import { Solana } from "../src/solana.js";
+import { env } from "../src/config.js";
+import { CandidateRejected } from "../src/domain.js";
+import type { KronosDecisionStrategy } from "../src/kronos-strategy.js";
+import type { SolanaExecutionProvider } from "../src/execution-provider.js";
+import {
+  provider,
+  candidate,
+  info,
+  jev,
+  settings,
+  MINT,
+  securityRaw,
+  quote,
+  WALLET,
+} from "./fixtures.js";
+export const now = Math.floor(Date.now() / 60000) * 60000;
+export function candles(minutes = 15) {
+  const values = Array.from({ length: minutes }, () => ({
+    open: 0.94,
+    close: 0.94,
+    high: 1,
+    low: 0.93,
+  }));
+  values.splice(
+    -4,
+    4,
+    { open: 0.97, close: 0.9, high: 0.98, low: 0.88 },
+    { open: 0.9, close: 0.93, high: 0.95, low: 0.89 },
+    { open: 0.93, close: 0.96, high: 0.98, low: 0.91 },
+    { open: 0.96, close: 0.99, high: 1, low: 0.93 },
+  );
+  return {
+    list: values.map((x, i) => ({
+      ...x,
+      time: now - (minutes - i) * 60000,
+      amount: "12345",
+      volume: "1000",
+    })),
+    _gmgnSnapshot: { fetchedAt: Date.now() },
+  };
+}
+export function recentCandidate() {
+  return { ...candidate(), createdAt: now - 15 * 60000 };
+}
+export function setup(
+  options: {
+    badSecurity?: boolean;
+    missingHistory?: boolean;
+    noFlow?: boolean;
+    structureFail?: boolean;
+  } = {},
+) {
+  const store = new Store(":memory:"),
+    j = new Jev();
+  const p = provider(async (args) => {
+    if (args[0] === "market" && args[1] === "kline")
+      return options.missingHistory
+        ? { list: [] }
+        : options.structureFail
+          ? { list: [] }
+          : candles();
+    if (args[0] === "token" && args[1] === "info" && args.includes(MINT)) {
+      const r = info();
+      return {
+        ...r,
+        creation_timestamp: (now - 15 * 60000) / 1000,
+        price: options.noFlow ? { price: "1", volume_24h: "100000" } : r.price,
+      };
+    }
+    if (options.badSecurity && args[1] === "security")
+      return { ...securityRaw, renounced_mint: false };
+  });
+  let calls = 0;
+  j.decide = async (state) => {
+    calls++;
+    const input = JSON.stringify(state);
+    assert.equal(input.includes("historicalExperience"), false);
+    assert.equal(input.includes("rejectHistory"), false);
+    return jev(state);
+  };
+  store.set("strategyV2", settings);
+  const engine = new Engine(store, { gmgn: p.gmgn, jev: j });
+  store.discover(recentCandidate());
+  return { store, engine, p, j, calls: () => calls };
+}
+
+export function mockExecutionCase(
+  fail?:
+    | "SECURITY"
+    | "COMPATIBILITY"
+    | "OWNERSHIP"
+    | "CAPITAL"
+    | "JEV"
+    | "STRUCTURE"
+    | "EXIT"
+    | "SIMULATE"
+    | "PRE_SIGN"
+    | "UNKNOWN",
+  options: {
+    strategy?: "STANDARD" | "KRONOS";
+    kronos?: KronosDecisionStrategy;
+    historyMinutes?: number;
+  } = {},
+) {
+  const saved = {
+    mode: env.TRADING_MODE,
+    ack: env.LIVE_TRADING_ACK,
+    wallet: env.WALLET_PUBLIC_KEY,
+    fetch: globalThis.fetch,
+  };
+  env.TRADING_MODE = "live";
+  env.LIVE_TRADING_ACK = true;
+  env.WALLET_PUBLIC_KEY = WALLET;
+  globalThis.fetch = async () => {
+    throw Error("NETWORK_FORBIDDEN_IN_MOCK_EXECUTION_TEST");
+  };
+  const store = new Store(":memory:"),
+    rpc = new Solana(),
+    j = new Jev();
+  let sol = fail === "CAPITAL" ? 0n : 1000000000n,
+    tokens = fail === "OWNERSHIP" ? 1n : 0n,
+    principal = 0n,
+    signed = 0,
+    simulated = 0,
+    securityCalls = 0;
+  const probes: bigint[] = [],
+    order: string[] = [];
+  const g = provider(async (args) => {
+    if (args[1] === "kline")
+      return fail === "STRUCTURE"
+        ? {
+            ...candles(),
+            list: candles().list.map((c) => ({ ...c, close: c.open })),
+          }
+        : candles(options.historyMinutes);
+    if (args[1] === "security") {
+      securityCalls++;
+      return {
+        ...securityRaw,
+        renounced_freeze_account: !(fail === "SECURITY" && securityCalls > 1),
+      };
+    }
+  });
+  j.decide = async () => ({
+    ...jev(),
+    action: fail === "JEV" ? "SKIP" : "BUY",
+  });
+  rpc.balance = async () => sol;
+  rpc.tokenBalance = async () => tokens;
+  rpc.inspectMint = async () => {
+    if (fail === "COMPATIBILITY")
+      throw new CandidateRejected("UNSUPPORTED_TOKEN_EXTENSION");
+    return {
+      decision: "ALLOW",
+      decimals: 6,
+      tokenProgram: "SPL_TOKEN",
+      extensions: [],
+      extensionRisk: "NONE",
+    } as never;
+  };
+  rpc.connection.getParsedAccountInfo = async () =>
+    ({
+      value: { data: { parsed: { type: "mint", info: { decimals: 6 } } } },
+    }) as never;
+  rpc.receipt = async () =>
+    fail === "UNKNOWN"
+      ? null
+      : ({
+          slot: 1,
+          meta: { err: null, fee: 5000 },
+          transaction: { signatures: ["mock-one-shot-signature"] },
+        } as never);
+  rpc.deltas = () => ({
+    sol: -principal - 5000n,
+    tokens: 1000000n,
+    beforeSol: sol + principal + 5000n,
+    afterSol: sol,
+    beforeTokens: 0n,
+    afterTokens: tokens,
+  });
+  const execution: SolanaExecutionProvider = {
+    health: { state: "READY", at: Date.now() },
+    getWalletBalance: async () => sol,
+    quoteBuy: async (_m, n) => {
+      order.push("BUY_QUOTE");
+      principal = n;
+      return quote("BUY", n);
+    },
+    quoteSell: async (_m, n, _bps, routeOnly) => {
+      order.push("EXIT_PROBE");
+      probes.push(n);
+      if (fail === "EXIT") throw new CandidateRejected("NO_SELL_ROUTE");
+      return quote("SELL", n, WALLET, routeOnly);
+    },
+    simulate: async () => {
+      order.push("SIMULATE");
+      simulated++;
+      if (fail === "SIMULATE")
+        throw new CandidateRejected("TOKEN_SIMULATION_FAILED");
+    },
+    execute: async (_q, persist, check) => {
+      if (fail === "PRE_SIGN") store.dismissCandidate(MINT, "live");
+      check?.();
+      order.push("PRE_SIGN");
+      signed++;
+      persist("mock-one-shot-signature");
+      if (fail !== "UNKNOWN") {
+        sol -= principal + 5000n;
+        tokens = 1000000n;
+      }
+      return "mock-one-shot-signature";
+    },
+    confirm: async () => (fail === "UNKNOWN" ? "UNKNOWN" : "CONFIRMED"),
+  };
+  store.set("strategyV2", {
+    ...settings,
+    entryStrategy: options.strategy ?? "STANDARD",
+  });
+  const e = new Engine(store, {
+    gmgn: g.gmgn,
+    rpc,
+    jev: j,
+    execution,
+    kronos: options.kronos,
+  });
+  store.discover({
+    ...recentCandidate(),
+    createdAt: now - (options.historyMinutes ?? 15) * 60000,
+  });
+  return {
+    e,
+    g,
+    store,
+    probes,
+    order,
+    stats: () => ({ signed, simulated }),
+    async close() {
+      await e.stop();
+      store.close();
+      env.TRADING_MODE = saved.mode;
+      env.LIVE_TRADING_ACK = saved.ack;
+      env.WALLET_PUBLIC_KEY = saved.wallet;
+      globalThis.fetch = saved.fetch;
+    },
+  };
+}

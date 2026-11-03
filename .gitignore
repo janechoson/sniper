@@ -1,15 +1,10 @@
+node_modules/
+dist/
 .env
 .env.*
 !.env.example
-node_modules/
-dist/
 data/
-logs/
-runtime/
-__pycache__/
-*.pyc
-
-# Generated verification artifacts are temporary, not project source.
-/docs/previews/
-/evidence/
-/.discovery-build-check/
+*.log
+secrets/
+backups/
+patches/bigint-buffer-work/

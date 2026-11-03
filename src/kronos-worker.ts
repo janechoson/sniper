@@ -2,12 +2,16 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { kronosForecastSchema } from "./kronos-strategy.js";
 import { setPriority, constants, freemem } from "node:os";
 import { KRONOS, type LabCandle, type Forecast } from "./kronos-domain.js";
-export function kronosWorkerEnvironment(runtime: string): NodeJS.ProcessEnv {
+export function kronosWorkerEnvironment(
+  runtime: string,
+  systemRoot = "C:\\Windows",
+): NodeJS.ProcessEnv {
   return {
-    SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
-    WINDIR: process.env.WINDIR ?? "C:\\Windows",
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
     HOME: runtime,
     USERPROFILE: runtime,
     APPDATA: runtime,
@@ -44,6 +48,7 @@ export class KronosWorker {
     readonly script = fileURLToPath(
       new URL("../lab/kronos/worker.py", import.meta.url),
     ),
+    readonly systemRoot = "C:\\Windows",
   ) {}
   async forecast(candles: LabCandle[], decisionAt: number): Promise<Forecast> {
     if (this.pending) throw Error("KRONOS_WORKER_BUSY");
@@ -57,7 +62,7 @@ export class KronosWorker {
       this.stderr = "";
       const child = spawn(this.python, ["-I", "-B", "-u", this.script], {
         cwd: this.runtime,
-        env: kronosWorkerEnvironment(this.runtime),
+        env: kronosWorkerEnvironment(this.runtime, this.systemRoot),
         windowsHide: true,
         stdio: "pipe",
       });
@@ -85,13 +90,10 @@ export class KronosWorker {
         if (!p) return;
         try {
           const data = JSON.parse(line);
-          if (data.error)
-            throw Error(
-              "KRONOS_INFERENCE_FAILED:" + String(data.error).slice(0, 200),
-            );
-          if (!data.result) throw Error("KRONOS_INVALID_OUTPUT");
-          if (data.result.rssBytes > 768 * 1024 * 1024)
-            throw Error("KRONOS_MEMORY_SOFT_LIMIT");
+          if (data.error) throw Error("KRONOS_INFERENCE_FAILED");
+          if (!data.result || Object.keys(data).length !== 1)
+            throw Error("KRONOS_INVALID_OUTPUT");
+          const result = kronosForecastSchema.parse(data.result);
           this.pending = undefined;
           clearTimeout(p.timer);
           this.latencies.push(data.result.latencyMs);
@@ -100,9 +102,9 @@ export class KronosWorker {
             rssBytes: data.result.rssBytes,
           };
           this.latencies = this.latencies.slice(-100);
-          p.resolve(data.result);
-        } catch (e) {
-          this.fail(e instanceof Error ? e.message : "KRONOS_INVALID_OUTPUT");
+          p.resolve(result);
+        } catch {
+          this.fail("KRONOS_INVALID_OUTPUT");
         }
       });
       child.stderr.on("data", (x) => {
@@ -112,7 +114,7 @@ export class KronosWorker {
       child.on("exit", () => {
         if (this.child === child) {
           this.child = undefined;
-          this.fail("KRONOS_WORKER_EXITED:" + this.stderr.slice(-400));
+          this.fail("KRONOS_WORKER_EXITED");
         }
       });
     }

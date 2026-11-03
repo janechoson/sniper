@@ -3,31 +3,36 @@ import {
   PublicKey,
   type VersionedTransactionResponse,
 } from "@solana/web3.js";
+import { env } from "./config.js";
 import { Blocked, ProviderFailure } from "./domain.js";
 import { Http } from "./util.js";
 import { inspectMint } from "./token-program.js";
 export class Solana {
   readonly http = new Http("RPC", 400);
   readonly connection: Connection;
-  constructor(rpcUrl: string) {
-    this.connection = new Connection(rpcUrl, {
-      commitment: "confirmed",
-      disableRetryOnRateLimit: true,
-      fetch: async (url, init) => {
-        const data = await this.http.request(String(url), init);
-        if (data && typeof data === "object" && "error" in data) {
-          this.http.health = {
-            state: "BLOCKED",
-            at: Date.now(),
-            reason: "RPC_RESPONSE_ERROR",
-          };
-          throw new ProviderFailure("RPC_RESPONSE_ERROR", "RPC");
-        }
-        return new Response(JSON.stringify(data), {
-          headers: { "Content-Type": "application/json" },
-        });
+  constructor() {
+    this.connection = new Connection(
+      env.SOLANA_RPC_HTTP ?? env.SOLANA_RPC_URL,
+      {
+        commitment: "confirmed",
+        wsEndpoint: env.SOLANA_RPC_WS,
+        disableRetryOnRateLimit: true,
+        fetch: async (url, init) => {
+          const data = await this.http.request(String(url), init);
+          if (data && typeof data === "object" && "error" in data) {
+            this.http.health = {
+              state: "BLOCKED",
+              at: Date.now(),
+              reason: "RPC_RESPONSE_ERROR",
+            };
+            throw new ProviderFailure("RPC_RESPONSE_ERROR", "RPC");
+          }
+          return new Response(JSON.stringify(data), {
+            headers: { "Content-Type": "application/json" },
+          });
+        },
       },
-    });
+    );
   }
   async balance(wallet: string) {
     return BigInt(

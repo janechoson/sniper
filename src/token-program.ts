@@ -1,7 +1,5 @@
 import { PublicKey, type AccountInfo } from "@solana/web3.js";
 import {
-  unpackAccount,
-  getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ExtensionType,
@@ -15,11 +13,13 @@ import {
   getMintCloseAuthority,
   getPermanentDelegate,
   getTransferFeeConfig,
+  getAssociatedTokenAddressSync,
+  unpackAccount,
 } from "@solana/spl-token";
 import { unpack as unpackMetadata } from "@solana/spl-token-metadata";
 import {
-  Blocked,
   CandidateRejected,
+  Blocked,
   type TokenExecutionReport,
   type TokenExtensionReport,
 } from "./domain.js";
@@ -209,7 +209,6 @@ export function requireCompatibleToken(report: TokenExecutionReport) {
       { token: report },
     );
 }
-
 export const tokenAccountAddress = (
   wallet: PublicKey,
   mint: PublicKey,

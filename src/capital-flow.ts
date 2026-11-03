@@ -1,5 +1,9 @@
-import type { Market } from "./domain.js";
+import type { Store } from "./store.js";
+import type { Settings } from "./config.js";
+import type { Market, Position, Mode } from "./domain.js";
 import { numberEvidence, record } from "./gmgn.js";
+import { hash } from "./util.js";
+
 export type FlowRegime =
   | "STRONG_INFLOW"
   | "INFLOW_ACCELERATING"
@@ -283,4 +287,293 @@ export function regimeFor(f: FlowFeatures, minimumChange: number): FlowRegime {
   )
     return "HEALTHY_EXPANSION";
   return (p ?? 0) >= 0.65 ? "STRONG_INFLOW" : "NEUTRAL";
+}
+const bucket = (v: number | null) =>
+  v === null ? null : Math.sign(v) * Math.round(Math.log1p(Math.abs(v)) * 10);
+export function evolveFlow(
+  previous: CapitalFlowState | undefined,
+  positionId: string,
+  mint: string,
+  observation: FlowObservation,
+  s: Settings,
+  retracement: number | null = null,
+): CapitalFlowState {
+  const observations = [
+    ...(previous?.observations ?? []).filter(
+      (x) => x.at < observation.at && observation.at - x.at <= s.flowHistoryMs,
+    ),
+    observation,
+  ].slice(-s.flowMaxObservations);
+  const features = deriveFlow(observations, retracement),
+    same = observations.filter((x) => x.window === observation.window),
+    spanMs = same.at(-1)!.at - same[0]!.at;
+  const fields = Object.entries(observation).filter(
+    ([k]) => !["at", "window", "provenance"].includes(k),
+  );
+  const available = fields.filter(([, v]) => v !== null).map(([k]) => k),
+    missing = fields.filter(([, v]) => v === null).map(([k]) => k);
+  const ready =
+    same.length >= s.flowMinObservations && spanMs >= s.flowMinSpanMs;
+  let confidence = Math.min(
+    0.95,
+    (available.length / fields.length) * 0.35 +
+      Math.min(1, same.length / s.flowMinObservations) * 0.35 +
+      Math.min(1, spanMs / Math.max(1, s.flowMinSpanMs)) * 0.25,
+  );
+  if (["1h", "6h", "24h"].includes(observation.window))
+    confidence = Math.min(0.55, confidence);
+  const candidate = ready
+    ? regimeFor(features, s.flowMeaningfulChangePercent)
+    : "INSUFFICIENT_DATA";
+  if (!ready || candidate === "INSUFFICIENT_DATA")
+    confidence = Math.min(0.4, confidence);
+  let regime = previous?.regime ?? "INSUFFICIENT_DATA",
+    pending = previous?.pendingRegime;
+  const reversal =
+    features.netFlowUsd !== null &&
+    features.netFlowUsd < 0 &&
+    (features.buyPressure ?? 1) < 0.3;
+  if (candidate !== regime) {
+    pending = {
+      regime: candidate,
+      count: pending?.regime === candidate ? pending.count + 1 : 1,
+    };
+    if (
+      regime === "INSUFFICIENT_DATA" ||
+      candidate === "INSUFFICIENT_DATA" ||
+      reversal ||
+      pending.count >= s.flowRegimeConfirmations
+    ) {
+      regime = candidate;
+      pending = undefined;
+    }
+  } else pending = undefined;
+  const transitioned = regime !== (previous?.regime ?? "INSUFFICIENT_DATA");
+  const lookbacks = Object.fromEntries(
+    [1, 3, 5, 15, 30].map((minutes) => {
+      const target = observation.at - minutes * 60000;
+      const base = same
+        .filter((x) => x.at < observation.at)
+        .sort((a, b) => Math.abs(a.at - target) - Math.abs(b.at - target))[0];
+      if (!base || Math.abs(base.at - target) > Math.max(30000, minutes * 6000))
+        return [minutes + "m", null];
+      return [
+        minutes + "m",
+        {
+          fromAt: base.at,
+          toAt: observation.at,
+          actualElapsedMs: observation.at - base.at,
+          priceChangePercent: percent(observation.priceUsd, base.priceUsd),
+          volumeChangePercent: percent(observation.volumeUsd, base.volumeUsd),
+          netFlowChangeUsd: subtract(
+            subtract(observation.buyVolumeUsd, observation.sellVolumeUsd),
+            subtract(base.buyVolumeUsd, base.sellVolumeUsd),
+          ),
+        },
+      ];
+    }),
+  );
+  const signalKey = hash({
+    regime,
+    window: observation.window,
+    net: bucket(features.netFlowUsd),
+    pressure:
+      features.buyPressure === null
+        ? null
+        : Math.round(features.buyPressure * 10),
+    volume: bucket(observation.volumeUsd),
+    liquidity: bucket(observation.liquidityUsd),
+    momentum:
+      features.priceMomentumPercent === null
+        ? null
+        : Math.round(features.priceMomentumPercent / 5),
+    quality: Math.floor(confidence * 5),
+  });
+  return {
+    positionId,
+    mint,
+    regime,
+    confidence: Number(confidence.toFixed(3)),
+    window: observation.window,
+    at: observation.at,
+    lastMeaningfulAt:
+      signalKey !== previous?.signalKey
+        ? observation.at
+        : previous.lastMeaningfulAt,
+    signalKey,
+    features,
+    lookbacks,
+    quality: {
+      status: !ready
+        ? "WARMING_UP"
+        : candidate === "INSUFFICIENT_DATA"
+          ? "DEGRADED"
+          : "READY",
+      observations: same.length,
+      spanMs,
+      available,
+      missing,
+      basis:
+        "GMGN rolling-window directional DEX volume in USD; changes are changes of rolling totals, not capital deposits",
+      stale: false,
+    },
+    transitions: [
+      ...(previous?.transitions ?? []),
+      ...(transitioned
+        ? [
+            {
+              at: observation.at,
+              from: previous?.regime ?? ("INSUFFICIENT_DATA" as FlowRegime),
+              to: regime,
+              confidence,
+              reason: reversal
+                ? "MATERIAL_NEGATIVE_REVERSAL"
+                : "OBSERVED_REGIME_CHANGE",
+            },
+          ]
+        : []),
+    ].slice(-s.flowMaxTransitions),
+    observations,
+    pendingRegime: pending,
+  };
+}
+export function flowSummary(state: CapitalFlowState): CapitalFlowSummary {
+  const { observations: _, pendingRegime: __, ...summary } = state;
+  void _;
+  void __;
+  return summary;
+}
+export class CapitalFlowEngine {
+  observeCandidate(
+    c: import("./domain.js").Candidate,
+    market: Market,
+    info: unknown,
+    now = Date.now(),
+  ) {
+    const fetched = record(record(info)._gmgnSnapshot).fetchedAt;
+    if (typeof fetched === "number") now = fetched;
+    const row = this.store.db
+      .prepare("SELECT payload FROM candidate_flow_states WHERE mint=?")
+      .get(c.mint);
+    const previous = row
+      ? (JSON.parse(String(row.payload)) as CapitalFlowState)
+      : undefined;
+    if (
+      previous &&
+      now - previous.at < this.settings().flowObservationIntervalMs
+    )
+      return flowSummary(previous);
+    const next = evolveFlow(
+      previous,
+      "candidate:" + c.mint,
+      c.mint,
+      normalizeFlowObservation(market, info, now),
+      this.settings(),
+    );
+    this.store.db
+      .prepare(
+        "INSERT INTO candidate_flow_states VALUES(?,?,?) ON CONFLICT(mint) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload",
+      )
+      .run(c.mint, now, JSON.stringify(next));
+    this.store.db
+      .prepare(
+        "DELETE FROM candidate_flow_states WHERE updated_at<? OR mint IN (SELECT mint FROM candidate_flow_states ORDER BY updated_at DESC LIMIT -1 OFFSET 250)",
+      )
+      .run(now - this.settings().flowHistoryMs);
+    return flowSummary(next);
+  }
+  private observations = 0;
+  private transitions = 0;
+  private totalMs = 0;
+  constructor(
+    private store: Store,
+    private settings: () => Settings,
+  ) {}
+  state(positionId: string): CapitalFlowState | undefined {
+    const row = this.store.db
+      .prepare("SELECT payload FROM capital_flow_states WHERE position_id=?")
+      .get(positionId);
+    return row ? JSON.parse(String(row.payload)) : undefined;
+  }
+  observe(p: Position, market: Market, info: unknown, now = Date.now()) {
+    const fetched = record(record(info)._gmgnSnapshot).fetchedAt;
+    if (typeof fetched === "number") now = fetched;
+    const started = performance.now(),
+      previous = this.state(p.id),
+      s = this.settings();
+    if (previous && previous.mint !== p.mint)
+      throw new Error("FLOW_POSITION_IDENTITY_MISMATCH");
+    if (previous && now - previous.at < s.flowObservationIntervalMs)
+      return flowSummary(previous);
+    const observation = normalizeFlowObservation(market, info, now);
+    const retracement =
+      p.state === "OPEN" &&
+      BigInt(p.highWaterLamports) > 0n &&
+      p.lastValueLamports !== undefined
+        ? 100 * (1 - Number(p.lastValueLamports) / Number(p.highWaterLamports))
+        : null;
+    const next = evolveFlow(
+      previous,
+      p.id,
+      p.mint,
+      observation,
+      s,
+      retracement,
+    );
+    this.store.db
+      .prepare(
+        "INSERT INTO capital_flow_states VALUES(?,?,?,?,?) ON CONFLICT(position_id) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload",
+      )
+      .run(p.id, p.mode, p.mint, now, JSON.stringify(next));
+    this.observations++;
+    this.totalMs += performance.now() - started;
+    if (
+      next.regime !== previous?.regime &&
+      next.regime !== "INSUFFICIENT_DATA"
+    ) {
+      this.transitions++;
+      this.store.event("CAPITAL_FLOW_TRANSITION", p.mint, next.regime);
+    }
+    return flowSummary(next);
+  }
+  degraded(p: Position, now = Date.now()): CapitalFlowSummary | undefined {
+    const previous = this.state(p.id);
+    if (!previous) return;
+    const summary = flowSummary(previous);
+    return {
+      ...summary,
+      confidence: 0,
+      quality: {
+        ...summary.quality,
+        status: "DEGRADED",
+        stale: now - previous.at > this.settings().flowStaleMs,
+      },
+    };
+  }
+  prune(mode: Mode, activeIds: string[]) {
+    const active = new Set(activeIds);
+    for (const row of this.store.db
+      .prepare("SELECT position_id FROM capital_flow_states WHERE mode=?")
+      .all(mode))
+      if (!active.has(String(row.position_id)))
+        this.store.db
+          .prepare("DELETE FROM capital_flow_states WHERE position_id=?")
+          .run(String(row.position_id));
+  }
+  status() {
+    const storage = this.store.db
+      .prepare(
+        "SELECT count(*) rows,coalesce(sum(length(payload)),0) payloadBytes FROM capital_flow_states",
+      )
+      .get()!;
+    return {
+      observations: this.observations,
+      transitions: this.transitions,
+      averageComputationMs: this.observations
+        ? Number((this.totalMs / this.observations).toFixed(3))
+        : null,
+      retainedPositions: Number(storage.rows),
+      retainedPayloadBytes: Number(storage.payloadBytes),
+    };
+  }
 }

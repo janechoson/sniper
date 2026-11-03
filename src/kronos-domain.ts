@@ -1,4 +1,4 @@
-/** Pure Kronos strategy contracts. Model/PAPER decision functions remain unchanged. */
+/** Paper-only contracts. No Engine, signer, wallet or execution imports. */
 export const KRONOS = Object.freeze({
   commit: "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
   model: {
@@ -13,6 +13,8 @@ export const KRONOS = Object.freeze({
   maximumCandles: 60,
   horizon: 5,
   samples: 3,
+  maxRecords: 300,
+  decisionCap: 720,
   forecastTimeoutMs: 90000,
   inferenceIntervalMs: 60000,
   priceMaxAgeMs: 45000,
@@ -52,7 +54,7 @@ export interface Forecast {
 export interface LabPrice {
   value: number;
   observedAt: number;
-  source: "GMGN_TOKEN_INFO" | "RECONCILED_USD" | "RECONCILED_SOL";
+  source: "GMGN_TOKEN_INFO";
 }
 export type PaperAction =
   | "WAIT"
@@ -70,27 +72,6 @@ export interface LabDecision {
   terminalRangePct?: [number, number];
 }
 export interface LabTrial {
-  discoveryBatch?: { batchId: string; fetchedAt: number; expiresAt: number };
-  mode?: "PAPER" | "LIVE";
-  live?: import("./live-types.js").LivePosition;
-  execution?: {
-    id: string;
-    state: import("./live-types.js").ExecutionState;
-    side: "BUY" | "SELL";
-    signature?: string;
-    error?: string;
-  };
-  gatePasses?: Record<string, true>;
-  evaluation?: {
-    at: number;
-    monitor: boolean;
-    stages: Record<
-      string,
-      "PENDING" | "SKIPPED" | "CHECKING" | "PASS" | "FAIL"
-    >;
-    error?: string;
-  };
-  checkedAt?: number;
   logo?: string | null;
   id: string;
   mint: string;
@@ -108,7 +89,6 @@ export interface LabTrial {
     | "CLOSED"
     | "REJECTED"
     | "ERROR"
-    | "EXPIRED_UNPROCESSED"
     | "SELL_DECIDED_PRICE_PENDING";
   gates: Record<
     string,

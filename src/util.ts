@@ -65,6 +65,7 @@ export class Http {
   constructor(
     readonly name: string,
     private interval = 1000,
+    private totalTimeoutMs?: number,
   ) {}
   async request(
     url: string,
@@ -76,18 +77,45 @@ export class Http {
     this.tail = new Promise((r) => {
       unlock = r;
     });
-    await prior;
-    const started = Date.now();
+    let started = Date.now();
+    let acquired = false;
+    const controller = this.totalTimeoutMs ? new AbortController() : undefined;
+    const expired = new ProviderFailure(
+      this.name + "_REQUEST_TIMEOUT",
+      this.name,
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = controller
+      ? new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort(expired);
+            reject(expired);
+          }, this.totalTimeoutMs);
+        })
+      : undefined;
+    const wait = <T>(work: Promise<T>) =>
+      timeout ? Promise.race([work, timeout]) : work;
     try {
-      await sleep(Math.max(0, this.next - Date.now()));
+      await wait(prior);
+      acquired = true;
+      if (!controller) started = Date.now();
+      await wait(sleep(Math.max(0, this.next - Date.now())));
       for (let n = 0; n < (retry ? 3 : 1); n++) {
         this.next = Date.now() + this.interval;
         let response: Response;
         try {
-          response = await fetch(url, {
-            ...init,
-            signal: AbortSignal.timeout(15000),
-          });
+          response = await wait(
+            fetch(url, {
+              ...init,
+              signal: controller
+                ? AbortSignal.any([
+                    AbortSignal.timeout(15000),
+                    controller.signal,
+                    ...(init.signal ? [init.signal] : []),
+                  ])
+                : AbortSignal.timeout(15000),
+            }),
+          );
         } catch (error) {
           const timeout =
             error instanceof Error &&
@@ -103,13 +131,15 @@ export class Http {
           retry &&
           n < 2
         ) {
-          await sleep(
-            Math.min(
-              10000,
-              Math.max(
-                1000,
-                Number(response.headers.get("retry-after") || 0) * 1000,
-                1000 * 2 ** n,
+          await wait(
+            sleep(
+              Math.min(
+                10000,
+                Math.max(
+                  1000,
+                  Number(response.headers.get("retry-after") || 0) * 1000,
+                  1000 * 2 ** n,
+                ),
               ),
             ),
           );
@@ -124,7 +154,7 @@ export class Http {
         }
         let data: unknown;
         try {
-          data = await response.json();
+          data = await wait(response.json());
         } catch {
           throw new ProviderFailure(this.name + "_INVALID_RESPONSE", this.name);
         }
@@ -137,10 +167,18 @@ export class Http {
       }
       throw new ProviderFailure(this.name + "_RETRIES_EXHAUSTED", this.name);
     } catch (e) {
-      this.health = { state: "BLOCKED", at: Date.now(), reason: safeError(e) };
-      throw e;
+      const error = controller?.signal.aborted ? expired : e;
+      this.health = {
+        state: "BLOCKED",
+        at: Date.now(),
+        reason: safeError(error),
+      };
+      throw error;
     } finally {
-      unlock();
+      clearTimeout(timer);
+      // A queued timeout must not let followers overtake an active predecessor.
+      if (acquired) unlock();
+      else void prior.then(unlock, unlock);
     }
   }
 }

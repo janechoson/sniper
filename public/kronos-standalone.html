@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kronos Paper Trading Lab</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="kronos-standalone">
+    <main>
+      <section id="kronos" class="view kronos-lab">
+        <article class="panel">
+          <div class="panel-title">
+            <div>
+              <h2>
+                Kronos Paper Trading Lab
+                <span class="kronos-paper">PAPER ONLY</span>
+              </h2>
+              <p class="muted">
+                Dữ liệu thị trường live · BUY/SELL giả lập · Không giao dịch
+                bằng ví thật.
+              </p>
+            </div>
+          </div>
+          <p class="kronos-warning">
+            PAPER TRADING ONLY · Kronos không ký/gửi giao dịch. Paper PnL không
+            gồm slippage, price impact hoặc phí thực thi.
+          </p>
+          <div class="kronos-controls">
+            <span id="kronosStatus" role="status">Đang kết nối Lab…</span
+            ><button id="kronosEnable" disabled>Bắt đầu paper collection</button
+            ><button id="kronosPause" disabled>Tạm dừng</button
+            ><button id="kronosReset" disabled>Reset Experiment</button>
+          </div>
+          <div id="kronosSummary" class="kronos-summary"></div>
+          <p id="kronosMetrics" class="muted"></p>
+          <p class="muted">
+            Giới hạn trial theo bộ đếm Records, gồm reject/error. Kết quả thử nghiệm chưa chứng
+            minh lợi nhuận thực tế. Lab hoạt động riêng, BOT trading hiện tại
+            được giữ nguyên.
+          </p>
+          <div class="kronos-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Status</th>
+                  <th>Security</th>
+                  <th>Kronos Decision</th>
+                  <th>Entry Price</th>
+                  <th>Current / Exit</th>
+                  <th>Paper PnL %</th>
+                  <th>MFE</th>
+                  <th>MAE</th>
+                  <th>Entry Time</th>
+                  <th>Exit Time</th>
+                  <th>Hold Time</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="kronosRows"></tbody>
+            </table>
+          </div>
+          <p id="kronosEmpty" class="empty">
+            Chưa có trial. Lab sẽ lấy token từ discovery hiện có của BOT.
+          </p>
+        </article>
+      </section>
+    </main>
+    <script src="/token-avatar.js"></script>
+    <script src="/kronos.js"></script>
+  </body>
+</html>

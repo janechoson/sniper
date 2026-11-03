@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { tokenLogo } from "./token-metadata.js";
 import { PublicKey } from "@solana/web3.js";
 import {
   normalizeMarket,
   normalizeSecurity,
   record,
   numberEvidence,
+  address,
   parseTrending,
 } from "./gmgn.js";
 import { cheapGuard } from "./risk.js";
-import { defaultSettings, type Settings } from "./config.js";
+import { settingsSchema } from "./config.js";
 import type { Candidate } from "./domain.js";
 import { parseMarketHistory, attemptFlow } from "./market-history.js";
 import { inspectMint, requireCompatibleToken } from "./token-program.js";
@@ -19,10 +21,6 @@ import {
 } from "./kronos-domain.js";
 export interface LabMarket {
   discover(): Promise<Candidate[]>;
-  discoveryMetadata?():
-    | { fetchedAt: number; rawReceivedCount: number }
-    | undefined;
-  retryAt?(): number;
   prepare(
     c: Candidate,
     stage: (name: string, work: () => Promise<unknown>) => Promise<unknown>,
@@ -33,23 +31,13 @@ export interface LabMarket {
 /** Fixed GET-only GMGN routes and a single read-only RPC method. No CLI/signing. */
 export class KronosMarket implements LabMarket {
   private next = 0;
-  private tail: Promise<void> = Promise.resolve();
   private requests = 0;
   private cooldown = 0;
-  private lastDiscovery?: { fetchedAt: number; rawReceivedCount: number };
-  private gmgnHealth: { state: string; at: number; error?: string } = {
-    state: "UNKNOWN",
-    at: 0,
-  };
-  private rpcHealth: { state: string; at: number; error?: string } = {
-    state: "UNKNOWN",
-    at: 0,
-  };
-
+  private settings = settingsSchema.parse({});
   constructor(
     private apiKey: string,
     private rpcUrl = "https://api.mainnet-beta.solana.com",
-    private settings: Settings = defaultSettings(),
+    private botPort = 3000,
   ) {}
   private async json(url: string, init: RequestInit = {}) {
     const r = await fetch(url, {
@@ -67,34 +55,6 @@ export class KronosMarket implements LabMarket {
     return JSON.parse(text);
   }
   private async gmgn(route: string, query: Record<string, string | number>) {
-    const prior = this.tail;
-    let unlock!: () => void;
-    this.tail = new Promise<void>((r) => {
-      unlock = r;
-    });
-    await prior;
-    try {
-      const result = await this.readGmgn(route, query);
-      this.gmgnHealth = { state: "OK", at: Date.now() };
-      return result;
-    } catch (error) {
-      this.gmgnHealth = {
-        state: Date.now() < this.cooldown ? "RATE_LIMITED" : "ERROR",
-        at: Date.now(),
-        error:
-          error instanceof Error
-            ? error.message.replace(/[^A-Z0-9_]/g, "").slice(0, 80)
-            : "PROVIDER_ERROR",
-      };
-      throw error;
-    } finally {
-      unlock();
-    }
-  }
-  private async readGmgn(
-    route: string,
-    query: Record<string, string | number>,
-  ) {
     if (
       ![
         "/v1/token/info",
@@ -129,38 +89,37 @@ export class KronosMarket implements LabMarket {
     };
   }
   async discover() {
-    // Independent bounded GMGN discovery; no BOT bridge or shared runtime.
+    // Reuse cached production discovery; never launch another broad scanner.
+    const rows = await this.json(`http://127.0.0.1:${this.botPort}/api/tokens`);
+    if (!Array.isArray(rows)) throw Error("DISCOVERY_BRIDGE_SCHEMA");
+    const candidates = rows
+      .filter(
+        (x: Candidate) =>
+          x.discovery?.sources.includes("TRENDING") &&
+          !!x.discovery.trending &&
+          Date.now() - x.discovery.trending.lastSeenAt <= 180000,
+      )
+      .slice(0, 50)
+      .map((x: Candidate) => ({
+        mint: address(x.mint),
+        symbol: x.symbol,
+        name: x.name,
+        logo: tokenLogo(x),
+        source: "gmgn:trending",
+        discoveredAt: x.discoveredAt,
+        createdAt: x.createdAt,
+        discovery: x.discovery,
+      }));
+    if (candidates.length) return candidates;
+    // Production can stop discovery while its trading queue drains. One bounded
+    // read-only snapshot per Lab discovery cycle keeps the experiment independent.
     const raw = await this.gmgn("/v1/market/rank", {
       interval: "5m",
       order_by: "volume",
       direction: "desc",
       limit: 50,
     });
-    const fetchedAt = Number(record(raw._gmgnSnapshot).fetchedAt);
-    const rank = record(raw).rank;
-    this.lastDiscovery = {
-      fetchedAt,
-      rawReceivedCount: Array.isArray(rank) ? rank.length : 0,
-    };
-    const candidates = parseTrending(raw, "5m").slice(0, 50);
-    for (const c of candidates) {
-      const listing = record(c.listing),
-        value = listing.sequenceStartedAt ?? listing.sequence_started_at;
-      const n = typeof value === "number" ? value : NaN;
-      const sequence = n > 0 && n < 1e12 ? n * 1000 : n;
-      const t = c.discovery!.trending!;
-      if (Number.isFinite(sequence) && sequence > 0 && sequence <= fetchedAt) {
-        t.sequenceStartedAt = sequence;
-        t.sequenceOrigin = "PROVIDER";
-      } else t.sequenceOrigin = "LOCAL_SNAPSHOT";
-    }
-    return candidates;
-  }
-  discoveryMetadata() {
-    return this.lastDiscovery;
-  }
-  retryAt() {
-    return this.cooldown;
+    return parseTrending(raw, "5m").slice(0, 50);
   }
   async history(c: Candidate) {
     const now = Date.now(),
@@ -187,6 +146,25 @@ export class KronosMarket implements LabMarket {
     c: Candidate,
     stage: (name: string, work: () => Promise<unknown>) => Promise<unknown>,
   ) {
+    // Older running BOT versions already expose public settings in /api/status.
+    // Compatibility fallback avoids restarting a live trading process for Lab.
+    let settings: unknown;
+    try {
+      settings = await this.json(
+        `http://127.0.0.1:${this.botPort}/api/kronos/settings`,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "LAB_PUBLIC_PROVIDER_HTTP_404"
+      )
+        throw error;
+      const status = await this.json(
+        `http://127.0.0.1:${this.botPort}/api/status`,
+      );
+      settings = record(status).settings;
+    }
+    this.settings = settingsSchema.parse(settings);
     let info: Record<string, unknown> = {};
     await stage("CHEAP_FILTER", async () => {
       info = await this.gmgn("/v1/token/info", { address: c.mint });
@@ -201,14 +179,7 @@ export class KronosMarket implements LabMarket {
         liquidity.value < this.settings.minLiquidityUsd
       )
         throw Error("Liquidity is below the configured entry policy");
-      return {
-        ...result,
-        market: normalizeMarket(info),
-        metadata: {
-          holders: numberEvidence(info.holder_count),
-          createdAt: c.createdAt,
-        },
-      };
+      return result;
     });
     await stage("SECURITY", async () => {
       const sec = normalizeSecurity(
@@ -239,16 +210,9 @@ export class KronosMarket implements LabMarket {
           method: "getAccountInfo",
           params: [c.mint, { encoding: "base64", commitment: "confirmed" }],
         }),
-      }).catch((error) => {
-        this.rpcHealth = { state: "ERROR", at: Date.now() };
-        throw error;
       });
       const a = raw.result?.value;
-      if (!a || raw.error) {
-        this.rpcHealth = { state: "ERROR", at: Date.now() };
-        throw Error("LAB_RPC_MINT_UNAVAILABLE");
-      }
-      this.rpcHealth = { state: "OK", at: Date.now() };
+      if (!a || raw.error) throw Error("LAB_RPC_MINT_UNAVAILABLE");
       const report = inspectMint(c.mint, {
         data: Buffer.from(a.data[0], "base64"),
         executable: a.executable,
@@ -295,15 +259,9 @@ export class KronosMarket implements LabMarket {
   status() {
     return {
       requests: this.requests,
-      gmgn: {
-        ...this.gmgnHealth,
-        state:
-          Date.now() < this.cooldown ? "RATE_LIMITED" : this.gmgnHealth.state,
-      },
-      rpc: this.rpcHealth,
       cooldownUntil: this.cooldown,
       spacingMs: 3000,
-      discovery: "INDEPENDENT_GMGN_TRENDING_50_BATCH_EXHAUSTED_OR_5M",
+      discovery: "EXISTING_BOT_FIRST_BOUNDED_GMGN_FALLBACK_50_PER_120S",
     };
   }
 }
