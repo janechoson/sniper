@@ -94,10 +94,7 @@ try {
   await page.waitForSelector(
     '#routeOutlet[data-state="ready"][data-route="/settings"]',
   );
-  assert.equal(
-    await page.locator('[name="entryStrategy"]').count(),
-    0,
-  );
+  assert.equal(await page.locator('[name="entryStrategy"]').count(), 0);
   await page.locator('a[data-route][href="/"]').click();
   await page.waitForSelector(
     '#routeOutlet[data-state="ready"][data-route="/"]',
@@ -172,6 +169,51 @@ try {
     (strategy === "STANDARD" ? standard : kronos).locator(
       '[data-stage="' + name + '"]',
     );
+  await show(frame("STANDARD", false));
+  assert.equal(
+    await page.locator("#trendingBatchProgress").innerText(),
+    "Chưa có dữ liệu batch",
+  );
+  const batch = {
+    id: "paper:fixture",
+    total: 100,
+    completed: 71,
+    processing: 1,
+    waiting: 28,
+    state: "PROCESSING",
+    legacy: false,
+  };
+  await show({ ...frame("STANDARD", false), batch });
+  assert.equal(
+    await page.locator("#trendingBatchProgress").innerText(),
+    "Batch: 100 · Đã xử lý: 71 · Đang kiểm tra: 1 · Còn chờ: 28",
+  );
+  await show({
+    ...frame("STANDARD", false),
+    batch: { ...batch, completed: 72 },
+  });
+  assert.equal(
+    await page.locator("#trendingBatchProgress").innerText(),
+    "Chưa có tiến độ batch hợp lệ",
+  );
+  await show({
+    ...frame("STANDARD", false),
+    batch: {
+      ...batch,
+      total: null,
+      completed: null,
+      legacy: true,
+      backlogRemaining: 35,
+    },
+  });
+  assert.match(
+    await page.locator("#trendingBatchProgress").innerText(),
+    /Backlog cũ.*35/,
+  );
+  assert.doesNotMatch(
+    await page.locator("#trendingBatchProgress").innerText(),
+    /100/,
+  );
   const common = [
     "CHEAP_FILTER",
     "SECURITY",

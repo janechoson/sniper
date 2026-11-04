@@ -37,12 +37,13 @@ test("flow transition IDs record actual lifecycle changes, not rank refreshes or
   }
 });
 test("read model exposes true 0/1/9/10 queue occupancy, bounded lists and no invented approvals or confirmed BUYs", () => {
-  const db = new Store(":memory:");
-  try {
-    const life = new CandidateLifecycle(db, () => settings);
-    for (const count of [0, 1, 9, 10]) {
+  for (const count of [0, 1, 9, 10]) {
+    const db = new Store(":memory:");
+    try {
+      const life = new CandidateLifecycle(db, () => settings);
+      const base = candidate();
       const items = Array.from({ length: count }, (_, i) => ({
-        ...candidate(),
+        ...structuredClone(base),
         mint: `flow-${i}`,
         symbol: `T${i}`,
       }));
@@ -55,9 +56,9 @@ test("read model exposes true 0/1/9/10 queue occupancy, bounded lists and no inv
       assert.equal(view.scannerRunning, true);
       assert.equal(view.counts.traded, 0);
       assert.equal(view.counts.approved, 0);
+    } finally {
+      db.close();
     }
-  } finally {
-    db.close();
   }
 });
 test("candidate rejection events reflect terminal backend classification without changing decisions", () => {

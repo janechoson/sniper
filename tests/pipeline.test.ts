@@ -153,12 +153,22 @@ test("unsupported candidate does not pause entries or prevent the next candidate
   const engine = new Engine(store, { gmgn: p.gmgn });
   const calls: string[] = [];
   const second = "So11111111111111111111111111111111111111112";
+  const base = candidate();
   p.gmgn.trending = async () => [
-    { ...candidate(), mint: MINT },
-    { ...candidate(), mint: second },
+    { ...structuredClone(base), mint: MINT },
+    { ...structuredClone(base), mint: second },
   ];
   engine.analyze = async (mint) => {
     calls.push(mint);
+    const row = engine.candidates.get(mint)!;
+    store.atomic(() => {
+      engine.candidates.setState(mint, "ANALYZING");
+      engine.attempts.begin(store.token(mint)!, {
+        appearanceId: row.appearanceId!,
+        batchId: row.batchId!,
+      });
+    });
+    engine.attempts.end("REJECTED");
     if (calls.length === 1)
       throw new CandidateRejected("UNSUPPORTED_TOKEN_EXTENSION");
   };

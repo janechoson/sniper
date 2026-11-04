@@ -23,6 +23,7 @@ import {
 import { json } from "./util.js";
 import { learningMigration } from "./learning-schema.js";
 import { mergeDiscovery } from "./discovery.js";
+import type { TrendingBatch, TrendingBatchBinding } from "./trending-batch.js";
 import {
   size,
   positionSizeMatches,
@@ -206,23 +207,254 @@ export class Store {
       return !old;
     });
   }
-  enqueueTrending(candidates: Candidate[], mode = env.TRADING_MODE) {
+  enqueueTrending(
+    candidates: Candidate[],
+    mode = env.TRADING_MODE,
+    fetchedAt?: number,
+  ) {
     const key = "oneShotAppearanceWatermark:" + mode;
     const watermark = this.get<number>(key) ?? 0;
     let newest = watermark;
     this.atomic(() => {
+      const wasBusy = this.trendingWorkPending(mode);
+      const inserted: Array<{ id: number; mint: string; seen: number }> = [];
       for (const c of candidates) {
         const seen = c.discovery?.trending?.lastSeenAt;
         if (seen === undefined || seen <= watermark) continue;
-        this.db
+        const result = this.db
           .prepare(
             "INSERT OR IGNORE INTO trending_appearances(mode,mint,seen_at,payload) VALUES(?,?,?,?)",
           )
           .run(mode, c.mint, seen, JSON.stringify(c));
+        if (result.changes)
+          inserted.push({
+            id: Number(result.lastInsertRowid),
+            mint: c.mint,
+            seen,
+          });
         newest = Math.max(newest, seen);
       }
       if (newest > watermark) this.set(key, newest);
+      // Only the complete discovery response establishes an exact total.
+      // A cached snapshot with no new IDs must not re-arm the batch.
+      if (
+        fetchedAt !== undefined &&
+        !wasBusy &&
+        (inserted.length || !candidates.length)
+      ) {
+        const seen = inserted[0]?.seen ?? fetchedAt;
+        const rows = inserted.filter((r) => r.seen === seen);
+        this.set("trendingBatchV1:" + mode, {
+          id: mode + ":" + seen,
+          mode,
+          fetchedAt: seen,
+          legacy: false,
+          total: rows.length,
+          entries: rows.map((r) => ({
+            appearanceId: r.id,
+            mint: r.mint,
+            status: "WAITING",
+          })),
+        } satisfies TrendingBatch);
+      }
     });
+  }
+  trendingBatch(mode = env.TRADING_MODE) {
+    return this.get<TrendingBatch>("trendingBatchV1:" + mode);
+  }
+  /** Admission/startup only; dashboard reads never synthesize batch metadata. */
+  prepareTrendingBatch(mode = env.TRADING_MODE) {
+    const current = this.trendingBatch(mode);
+    if (current?.entries.some((r) => r.status !== "COMPLETE")) return current;
+    const first = this.db
+      .prepare(
+        "SELECT seen_at FROM trending_appearances WHERE mode=? AND consumed=0 ORDER BY id LIMIT 1",
+      )
+      .get(mode);
+    if (!first) return current;
+    const seen = Number(first.seen_at);
+    const rows = this.db
+      .prepare(
+        "SELECT id,mint FROM trending_appearances WHERE mode=? AND seen_at=? AND consumed=0 ORDER BY id",
+      )
+      .all(mode, seen);
+    const batch: TrendingBatch = {
+      id: mode + ":" + seen,
+      mode,
+      fetchedAt: seen,
+      legacy: true,
+      total: null,
+      entries: rows.map((r) => ({
+        appearanceId: Number(r.id),
+        mint: String(r.mint),
+        status: "WAITING",
+      })),
+    };
+    this.set("trendingBatchV1:" + mode, batch);
+    return batch;
+  }
+  trendingWorkPending(mode = env.TRADING_MODE) {
+    return (
+      !!this.db
+        .prepare(
+          "SELECT 1 FROM trending_appearances WHERE mode=? AND consumed=0 LIMIT 1",
+        )
+        .get(mode) ||
+      !!this.db
+        .prepare(
+          "SELECT 1 FROM candidate_lifecycle WHERE mode=? AND json_extract(payload,'$.state') IN ('QUEUED','ANALYZING','QUALIFIED','APPROVED') LIMIT 1",
+        )
+        .get(mode) ||
+      !!this.db
+        .prepare(
+          "SELECT 1 FROM candidate_attempts WHERE mode=? AND result IN ('RUNNING','RECONCILING') LIMIT 1",
+        )
+        .get(mode) ||
+      !!this.trendingBatch(mode)?.entries.some((r) => r.status !== "COMPLETE")
+    );
+  }
+  startTrendingAppearance(
+    binding: TrendingBatchBinding,
+    attemptId: string,
+    mode = env.TRADING_MODE,
+  ) {
+    const batch = this.prepareTrendingBatch(mode);
+    const row = batch?.entries.find(
+      (r) => r.appearanceId === binding.appearanceId,
+    );
+    if (
+      !batch ||
+      batch.id !== binding.batchId ||
+      !row ||
+      row.status !== "WAITING"
+    )
+      throw Error("TRENDING_APPEARANCE_ALREADY_CLAIMED");
+    row.status = "PROCESSING";
+    row.attemptId = attemptId;
+    this.set("trendingBatchV1:" + mode, batch);
+    this.db
+      .prepare(
+        "UPDATE trending_appearances SET consumed=1 WHERE id=? AND mode=?",
+      )
+      .run(binding.appearanceId, mode);
+  }
+  settleTrendingAppearance(
+    a: TrendingBatchBinding & {
+      attemptId: string;
+      result: string;
+      endedAt?: number;
+      mode: string;
+    },
+  ) {
+    if (a.mode !== "paper" && a.mode !== "live") return;
+    const batch = this.trendingBatch(a.mode);
+    const row = batch?.entries.find((r) => r.appearanceId === a.appearanceId);
+    if (
+      !batch ||
+      batch.id !== a.batchId ||
+      !row ||
+      row.attemptId !== a.attemptId ||
+      row.status === "COMPLETE"
+    )
+      return;
+    row.result = a.result;
+    if (["BOUGHT", "REJECTED"].includes(a.result)) {
+      row.status = "COMPLETE";
+      row.endedAt = a.endedAt;
+    }
+    this.set("trendingBatchV1:" + a.mode, batch);
+  }
+  finishUnboundTrendingAppearance(id: number, mode = env.TRADING_MODE) {
+    const batch = this.trendingBatch(mode);
+    const row = batch?.entries.find((r) => r.appearanceId === id);
+    const consumed = this.db
+      .prepare(
+        "SELECT consumed FROM trending_appearances WHERE id=? AND mode=?",
+      )
+      .get(id, mode)?.consumed;
+    // Legacy lifecycle-only callers; bound attempts always need durable outcomes.
+    if (!batch || !batch.legacy || !row || row.attemptId || !consumed) return;
+    row.status = "COMPLETE";
+    row.result = "LEGACY_LIFECYCLE_FINISHED";
+    this.set("trendingBatchV1:" + mode, batch);
+  }
+  recoverTrendingBatch(mode = env.TRADING_MODE) {
+    const batch = this.trendingBatch(mode);
+    for (const entry of batch?.entries ?? []) {
+      if (entry.status !== "PROCESSING" || !entry.attemptId) continue;
+      const row = this.db
+        .prepare("SELECT payload FROM candidate_attempts WHERE id=? AND mode=?")
+        .get(entry.attemptId, mode);
+      if (row)
+        this.settleTrendingAppearance({
+          ...JSON.parse(String(row.payload)),
+          appearanceId: entry.appearanceId,
+          batchId: batch!.id,
+        });
+    }
+  }
+  trendingBatchProgress(mode = env.TRADING_MODE) {
+    const batch = this.trendingBatch(mode);
+    const waitingAll = Number(
+      this.db
+        .prepare(
+          "SELECT count(*) n FROM trending_appearances WHERE mode=? AND consumed=0",
+        )
+        .get(mode)!.n,
+    );
+    const active = Number(
+      this.db
+        .prepare(
+          "SELECT count(*) n FROM candidate_attempts WHERE mode=? AND result IN ('RUNNING','RECONCILING')",
+        )
+        .get(mode)!.n,
+    );
+    if (!batch)
+      return {
+        id: null,
+        total: null,
+        completed: null,
+        processing: active,
+        waiting: waitingAll,
+        backlogRemaining: waitingAll,
+        legacy: !!waitingAll,
+        state: waitingAll || active ? "RECOVERY" : "EMPTY",
+      };
+    const running = batch.entries.filter((r) => r.status === "PROCESSING");
+    const processing = batch.legacy
+      ? Math.max(running.length, active)
+      : running.length;
+    const waiting = batch.entries.filter((r) => r.status === "WAITING").length;
+    const completed = batch.entries.filter(
+      (r) => r.status === "COMPLETE",
+    ).length;
+    const recovery =
+      active > running.length ||
+      running.some(
+        (r) =>
+          r.result === "RECONCILING" ||
+          !r.attemptId ||
+          !this.db
+            .prepare(
+              "SELECT 1 FROM candidate_attempts WHERE id=? AND result='RUNNING'",
+            )
+            .get(r.attemptId),
+      );
+    return {
+      id: batch.id,
+      fetchedAt: batch.fetchedAt,
+      total: batch.total,
+      completed: batch.legacy ? null : completed,
+      processing,
+      waiting,
+      backlogRemaining: waitingAll,
+      legacy: batch.legacy,
+      state: recovery
+        ? "RECOVERY"
+        : processing || waiting
+          ? "PROCESSING"
+          : "COMPLETE",
+    };
   }
   token(mint: string): Candidate | undefined {
     const r = this.db

@@ -172,19 +172,13 @@ export class DiscoveryCoordinator {
     private store: Store,
     private gmgn: Gmgn,
     private settings: () => Settings,
+    private analysisBusy: () => boolean = () => false,
   ) {}
   async poll(now = Date.now()) {
     if (this.stopped) return;
-    const waiting = Number(
-      this.store.db
-        .prepare(
-          "SELECT count(*) n FROM trending_appearances WHERE mode=? AND consumed=0",
-        )
-        .get(env.TRADING_MODE)!.n,
-    );
-    // Backpressure the source instead of dropping appearances or accumulating
-    // an unbounded retry backlog. Every fetched appearance is still attempted.
-    if (waiting >= this.settings().candidateQueueSize) {
+    // This gate applies only to discovery of a NEW list, never shared GMGN
+    // reads, dashboard polling, candidate evidence or Position/SELL monitoring.
+    if (this.analysisBusy() || this.store.trendingWorkPending()) {
       this.feeds.TRENDING.state = "BACKPRESSURE";
       this.feeds.TRENDING.reason = "CANDIDATE_QUEUE_DRAINING";
       return;
@@ -208,6 +202,8 @@ export class DiscoveryCoordinator {
     const f = this.feeds[source],
       s = this.settings();
     f.lastAttemptAt = now;
+    f.state = "FETCHING";
+    f.reason = null;
     f.calls = [...f.calls.filter((t) => now - t < 60000), now].slice(-120);
     const interval = source === "TRENDING" ? s.trendingPollMs : s.sniperPollMs;
     f.nextAt = now + interval;
@@ -226,7 +222,12 @@ export class DiscoveryCoordinator {
         )
           this.counters.multiSourceCandidates++;
       }
-      if (source === "TRENDING") this.store.enqueueTrending(candidates);
+      if (source === "TRENDING")
+        this.store.enqueueTrending(
+          candidates,
+          env.TRADING_MODE,
+          this.gmgn.feedFetchedAt[source] ?? Date.now(),
+        );
       if (source === "TRENDING")
         this.counters.trendingDiscovered += candidates.length;
       else this.counters.sniperDiscovered += candidates.length;
@@ -260,6 +261,7 @@ export class DiscoveryCoordinator {
       ),
       ...this.counters,
       mode: env.TRADING_MODE,
+      batch: this.store.trendingBatchProgress(),
     };
   }
   async stop() {

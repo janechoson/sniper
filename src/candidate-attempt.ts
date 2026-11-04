@@ -3,6 +3,7 @@ import type { Store } from "./store.js";
 import type { Candidate, Strategy, RiskResult } from "./domain.js";
 import { env } from "./config.js";
 import { safeError } from "./util.js";
+import type { TrendingBatchBinding } from "./trending-batch.js";
 
 export const ATTEMPT_STAGES = [
   "CHEAP_FILTER",
@@ -41,6 +42,8 @@ export interface StrategyEvaluation {
   stages: Partial<Record<AttemptStage, StageStatus>>;
 }
 export interface CandidateAttempt {
+  appearanceId?: number;
+  batchId?: string;
   attemptId: string;
   mode: string;
   mint: string;
@@ -100,6 +103,7 @@ export class CandidateAttempts {
         .prepare("UPDATE candidate_attempts SET result=?,payload=? WHERE id=?")
         .run(a.result, JSON.stringify(a), a.attemptId);
     }
+    store.recoverTrendingBatch();
     const latest = store.db
       .prepare(
         "SELECT payload FROM candidate_attempts WHERE mode=? ORDER BY started_at DESC LIMIT 1",
@@ -140,26 +144,32 @@ export class CandidateAttempts {
       this.persist();
     }
   }
-  begin(candidate: Candidate) {
+  begin(candidate: Candidate, binding?: TrendingBatchBinding) {
     if (this.current?.result === "RUNNING")
       throw Error("CANDIDATE_ATTEMPT_BUSY");
-    this.current = {
-      attemptId: randomUUID(),
-      mode: env.TRADING_MODE,
-      mint: candidate.mint,
-      symbol: candidate.symbol,
-      source: "GMGN_TRENDING",
-      startedAt: Date.now(),
-      result: "RUNNING",
-      stage: "CHEAP_FILTER",
-      stages: Object.fromEntries(
-        ATTEMPT_STAGES.map((s) => [s, "PENDING"]),
-      ) as CandidateAttempt["stages"],
-      summaries: {},
-      logs: [],
+    const begin = () => {
+      const attemptId = randomUUID();
+      if (binding) this.store.startTrendingAppearance(binding, attemptId);
+      this.current = {
+        ...binding,
+        attemptId,
+        mode: env.TRADING_MODE,
+        mint: candidate.mint,
+        symbol: candidate.symbol,
+        source: "GMGN_TRENDING",
+        startedAt: Date.now(),
+        result: "RUNNING",
+        stage: "CHEAP_FILTER",
+        stages: Object.fromEntries(
+          ATTEMPT_STAGES.map((s) => [s, "PENDING"]),
+        ) as CandidateAttempt["stages"],
+        summaries: {},
+        logs: [],
+      };
+      this.update("CHEAP_FILTER", "CHECKING", "Bắt đầu Fresh Attempt");
+      return this.current;
     };
-    this.update("CHEAP_FILTER", "CHECKING", "Bắt đầu Fresh Attempt");
-    return this.current;
+    return this.store.db.isTransaction ? begin() : this.store.atomic(begin);
   }
   update(
     stage: AttemptStage,
@@ -315,23 +325,33 @@ export class CandidateAttempts {
   }
   private persist(a = this.current!) {
     a.logs = a.logs.slice(-100);
-    this.store.db
-      .prepare(
-        "INSERT INTO candidate_attempts VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET result=excluded.result,failed_stage=excluded.failed_stage,payload=excluded.payload",
-      )
-      .run(
-        a.attemptId,
-        a.mode,
-        a.mint,
-        a.startedAt,
-        a.result,
-        a.failedStage ?? null,
-        JSON.stringify(a),
-      );
+    const save = () => {
+      this.store.db
+        .prepare(
+          "INSERT INTO candidate_attempts VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET result=excluded.result,failed_stage=excluded.failed_stage,payload=excluded.payload",
+        )
+        .run(
+          a.attemptId,
+          a.mode,
+          a.mint,
+          a.startedAt,
+          a.result,
+          a.failedStage ?? null,
+          JSON.stringify(a),
+        );
+      if (a.appearanceId !== undefined && a.batchId)
+        this.store.settleTrendingAppearance({
+          ...a,
+          appearanceId: a.appearanceId,
+          batchId: a.batchId,
+        });
+    };
+    if (this.store.db.isTransaction) save();
+    else this.store.atomic(save);
     // Bound both the active UI frame and persistent audit history.
     this.store.db
       .prepare(
-        "DELETE FROM candidate_attempts WHERE id IN (SELECT id FROM candidate_attempts WHERE result!='RUNNING' ORDER BY started_at DESC LIMIT -1 OFFSET 2000)",
+        "DELETE FROM candidate_attempts WHERE id IN (SELECT id FROM candidate_attempts WHERE result NOT IN ('RUNNING','RECONCILING') ORDER BY started_at DESC LIMIT -1 OFFSET 2000)",
       )
       .run();
     for (const listener of this.listeners) {

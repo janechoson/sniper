@@ -88,6 +88,13 @@
             <section class="token-scanner" id="scannerPanel">
               <h2>Tokens đang quét</h2>
               <p id="terminalScanCaption">Đang chờ GMGN Trending…</p>
+              <p
+                id="trendingBatchProgress"
+                class="trending-batch-progress"
+                role="status"
+              >
+                Chưa có dữ liệu batch
+              </p>
               <div
                 id="tokenCarousel"
                 class="token-carousel"
@@ -256,9 +263,19 @@
             <div class="control buy-permission-control">
               <label for="kill">Cho phép mua:</label>
               <label class="buy-permission-switch">
-                <input id="kill" type="checkbox" role="switch" aria-label="Cho phép mua" />
+                <input
+                  id="kill"
+                  type="checkbox"
+                  role="switch"
+                  aria-label="Cho phép mua"
+                />
                 <span class="buy-permission-track" aria-hidden="true"></span>
-                <span id="buyPermissionState" class="buy-permission-state" aria-hidden="true">OFF</span>
+                <span
+                  id="buyPermissionState"
+                  class="buy-permission-state"
+                  aria-hidden="true"
+                  >OFF</span
+                >
               </label>
             </div>
           </div>

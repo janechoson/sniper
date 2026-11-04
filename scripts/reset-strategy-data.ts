@@ -41,6 +41,7 @@ const transientPrefixes = [
   "candidateAuthority:",
   "learningPostAttempt:",
   "discoveryTrendingStreak:",
+  "trendingBatchV1:",
   "oneShotAppearanceWatermark:",
 ];
 const tables = (db: DatabaseSync) =>

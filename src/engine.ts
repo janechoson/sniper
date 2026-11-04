@@ -205,6 +205,10 @@ export class Engine {
       store,
       this.gmgn,
       () => this.settings,
+      () =>
+        this.stopping ||
+        this.analyzing.size > 0 ||
+        this.entryEvaluations.size > 0,
     );
     this.exitLiquidity = new ExitLiquidityMonitor(
       this.executor.provider,
@@ -728,6 +732,7 @@ export class Engine {
     this.scanning = true;
     try {
       await this.executor.recover(this.settings);
+      this.attempts.reconcile();
       void this.monitor().catch(() => {
         this.lastError = "Position monitoring failed";
       });
@@ -738,11 +743,15 @@ export class Engine {
       const inspected = new Set<string>();
       while (!this.stopping && processed < this.settings.candidatesPerCycle) {
         const queue = this.candidates.refill(this.store.tokens());
-        const mint = queue.find((m) => !inspected.has(m));
-        if (!mint) break;
+        const mint = queue[0];
+        if (
+          !mint ||
+          inspected.has(mint) ||
+          this.attempts.current?.result === "RECONCILING"
+        )
+          break;
         inspected.add(mint);
         processed++;
-        this.candidates.setState(mint, "ANALYZING");
         try {
           await this.analyze(mint);
         } catch (error) {
@@ -782,9 +791,17 @@ export class Engine {
     const candidate = this.store.token(mint);
     if (!candidate)
       throw new CandidateRejected("TOKEN_DATA_INCOMPLETE", { mint });
+    this.store.atomic(() => {
+      const row = this.candidates.get(mint);
+      this.candidates.setState(mint, "ANALYZING");
+      this.attempts.begin(
+        candidate,
+        row?.appearanceId && row.batchId
+          ? { appearanceId: row.appearanceId, batchId: row.batchId }
+          : undefined,
+      );
+    });
     this.analyzing.add(mint);
-    this.candidates.setState(mint, "ANALYZING");
-    this.attempts.begin(candidate);
     this.store.metric("TRENDINGAnalyzed");
     this.store.event("ATTEMPT_STARTED", mint, this.attempts.current!.attemptId);
     try {
@@ -2359,15 +2376,19 @@ export class Engine {
     const held = this.store
       .positions(env.TRADING_MODE)
       .filter((p) => !p.dismissal && !["CLOSED", "FAILED"].includes(p.state));
-    const positions = positionViews(
-      held,
-      this.store.executions(),
-      (mint) => this.store.token(mint),
+    const positions = positionViews(held, this.store.executions(), (mint) =>
+      this.store.token(mint),
     ).filter((p) => p.relevant);
     const preview = positions.slice(0, 10);
     const mints = new Set(preview.map((p) => p.mint));
     return {
       attempt: a ?? null,
+      batch: {
+        ...this.store.trendingBatchProgress(),
+        sourceState: this.discovery.feeds.TRENDING.state,
+        analysisPending:
+          this.analyzing.size > 0 || this.entryEvaluations.size > 0,
+      },
       queue: this.candidates
         .list()
         .filter((r) => r.state === "QUEUED")

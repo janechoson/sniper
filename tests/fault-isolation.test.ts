@@ -24,8 +24,9 @@ function fault(mint = MINT, now = Date.now()): FailureInfo {
   );
 }
 function candidates(count: number) {
+  const base = candidate(); // One response has one snapshot timestamp.
   return Array.from({ length: count }, (_, i) => ({
-    ...candidate(),
+    ...structuredClone(base),
     mint: i === 0 ? MINT : `fixture-${i}`,
     symbol: i === 0 ? "IMAGINE" : `C${i}`,
     listing: { liquidity: 1000000 - i * 10000, volume: 10000 },
@@ -41,6 +42,15 @@ test("candidate failure releases the queue slot immediately and permits the next
   g.gmgn.trending = async () => candidates(11);
   e.analyze = async (mint) => {
     seen.push(mint);
+    const row = e.candidates.get(mint)!;
+    db.atomic(() => {
+      e.candidates.setState(mint, "ANALYZING");
+      e.attempts.begin(db.token(mint)!, {
+        appearanceId: row.appearanceId!,
+        batchId: row.batchId!,
+      });
+    });
+    e.attempts.end("REJECTED"); // Deterministic stub; no executor.
     if (mint === MINT) throw new CandidateRejected("TOKEN_SAFETY_FAILED");
   };
   try {

@@ -291,7 +291,54 @@ export async function mount(ctx) {
         root.replaceChildren(...rows);
       }
     }
+    function renderBatch(batch) {
+      const root = $("trendingBatchProgress");
+      if (!root) return;
+      root.dataset.state = batch?.state || "UNKNOWN";
+      root.title =
+        "Carousel chỉ xem nhanh một phần queue. Bộ đếm bao gồm cả token chưa vào queue làm việc.";
+      if (!batch) {
+        root.textContent = "Chưa có dữ liệu batch";
+        return;
+      }
+      const counts = [batch.processing, batch.waiting];
+      if (!counts.every((n) => Number.isSafeInteger(n) && n >= 0)) {
+        root.textContent = "Chưa có tiến độ batch hợp lệ";
+        return;
+      }
+      if (batch.legacy) {
+        root.textContent = `Backlog cũ · Đang xử lý: ${batch.processing} · Chờ trong batch: ${batch.waiting} · Tổng chờ backlog: ${batch.backlogRemaining ?? batch.waiting}`;
+        return;
+      }
+      if (
+        !Number.isSafeInteger(batch.total) ||
+        !Number.isSafeInteger(batch.completed) ||
+        batch.total < 0 ||
+        batch.completed < 0 ||
+        batch.total !== batch.completed + batch.processing + batch.waiting
+      ) {
+        root.textContent =
+          batch.state === "EMPTY"
+            ? "Đang chờ batch Trending đầu tiên"
+            : "Chưa có tiến độ batch hợp lệ";
+        return;
+      }
+      const state =
+        batch.sourceState === "FETCHING"
+          ? " · Đang lấy batch mới"
+          : batch.sourceState === "DEGRADED"
+            ? " · Nguồn dữ liệu đang lỗi"
+            : batch.state === "RECOVERY"
+              ? " · Chờ đối soát/phục hồi"
+              : batch.analysisPending && batch.completed === batch.total
+                ? " · Đang hoàn tất phân tích"
+                : batch.state === "COMPLETE"
+                  ? " · Hoàn tất"
+                  : "";
+      root.textContent = `Batch: ${batch.total} · Đã xử lý: ${batch.completed} · Đang kiểm tra: ${batch.processing} · Còn chờ: ${batch.waiting}${state}`;
+    }
     function renderCandidate(o) {
+      renderBatch(o.batch);
       const a = o.attempt,
         t = a?.summaries?.token || o.token || {},
         m = a?.summaries?.market || {},

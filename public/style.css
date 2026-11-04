@@ -5948,3 +5948,10 @@ tbody tr:hover {
     margin-top: 18px;
   }
 }
+.trending-batch-progress {
+  margin: 6px 14px 0;
+  color: var(--muted, #756b58);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
