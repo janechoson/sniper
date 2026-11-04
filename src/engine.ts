@@ -2397,6 +2397,7 @@ export class Engine {
         dashboardRoutes: true,
         positionBadgeCount: true,
         configurablePositionSize: true,
+        fixedSolPositionSize: true,
         firstBuyWins: true,
         kronosIntegration: true,
         candidateOneShot: true,
@@ -2432,7 +2433,7 @@ export class Engine {
               balance,
               BigInt(this.settings.feeReserveLamports),
               pending,
-              this.settings.positionSizePercent,
+              this.settings,
             );
     const lifecycle = this.candidates.list();
     const flow = this.flowStatus(lifecycle);
@@ -2443,6 +2444,7 @@ export class Engine {
       runtime: runtimeInfo,
       capabilities: {
         configurablePositionSize: true,
+        fixedSolPositionSize: true,
         firstBuyWins: true,
         kronosIntegration: true,
         candidateOneShot: true,

@@ -121,7 +121,7 @@ async function preflight() {
         balance,
         BigInt(settings.feeReserveLamports),
         0n,
-        settings.positionSizePercent,
+        settings,
       ).amount;
     if (amount <= 0n) throw new Blocked("INSUFFICIENT_AVAILABLE_SOL");
     if (amount > CONTROLLED_BUY_CAP)

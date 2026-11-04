@@ -78,17 +78,17 @@ try {
   await page.goto(base);
   await page.waitForSelector('#routeOutlet[data-state="ready"]');
   await page.locator('[data-view="settings"]').click();
-  await page.waitForSelector('input[name="entryStrategy"]', {
-    state: "attached",
-  });
+  await page.waitForSelector(
+    '#routeOutlet[data-state="ready"][data-route="/settings"]',
+  );
   await page.evaluate(() => {
     (window as any).stream?.close();
   });
   assert.equal(await page.locator('[data-view="kronos"]').count(), 0);
   await page.locator('[data-view="settings"]').click();
   assert.equal(
-    await page.locator('input[name="entryStrategy"]').inputValue(),
-    "FIRST_BUY_WINS",
+    await page.locator('[name="entryStrategy"]').count(),
+    0,
   );
   const updated = await page.evaluate(
     async ({ base, csrf, settings }) => {

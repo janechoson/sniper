@@ -253,27 +253,21 @@
       <template id="page-settings"
         ><section id="settings" class="view">
           <div class="settings-operator-controls">
-            <div class="control">
-              <label>Điều khiển giao dịch</label
-              ><select id="kill">
-                <option value="true">Cho phép mua mới</option>
-                <option value="false">Tắt mua mới · vẫn quản lý bán</option>
-              </select>
+            <div class="control buy-permission-control">
+              <label for="kill">Cho phép mua:</label>
+              <label class="buy-permission-switch">
+                <input id="kill" type="checkbox" role="switch" aria-label="Cho phép mua" />
+                <span class="buy-permission-track" aria-hidden="true"></span>
+                <span id="buyPermissionState" class="buy-permission-state" aria-hidden="true">OFF</span>
+              </label>
             </div>
-            <button id="scan">Quét ngay ↗</button>
           </div>
           <article class="panel settings">
             <div class="panel-title"><h2>Tham số chiến lược và rủi ro</h2></div>
             <form id="settingsForm">
               <fieldset id="settingsControls">
                 <div id="settingFields" class="setting-fields"></div>
-                <label>Các mốc chốt lời tham khảo cho Jev (JSON)</label
-                ><textarea
-                  id="takeProfits"
-                  rows="4"
-                  spellcheck="false"
-                ></textarea
-                ><button type="submit">Lưu tham số</button
+                <button type="submit">Lưu tham số</button
                 ><span id="saved" role="status"></span>
               </fieldset>
             </form>
@@ -412,14 +406,48 @@
           ></p></section
       ></template>
       <template id="page-statistics"
-        ><section id="statistics" class="view">
-          <h2>Thống kê</h2>
-          <select id="statisticsStrategy" aria-label="Statistics strategy">
-            <option value="ALL">ALL</option>
-            <option value="STANDARD">STANDARD</option>
-            <option value="KRONOS">KRONOS</option>
-          </select>
-          <div id="terminalStatistics"></div></section
+        ><section id="statistics" class="view stats-dashboard">
+          <div class="stats-heading">
+            <div class="stats-heading-title">
+              <span
+                id="statisticsHeadingIcon"
+                class="stats-heading-icon"
+                aria-hidden="true"
+              ></span>
+              <div>
+                <h2>Thống kê giao dịch</h2>
+                <p>Tổng quan hiệu suất và hoạt động của BOT</p>
+              </div>
+            </div>
+            <label class="stats-strategy"
+              >Strategy<select
+                id="statisticsStrategy"
+                aria-label="Statistics strategy"
+              >
+                <option value="ALL">ALL</option>
+                <option value="STANDARD">STANDARD</option>
+                <option value="KRONOS">KRONOS</option>
+              </select></label
+            >
+          </div>
+          <div id="statisticsError" class="stats-error" role="alert" hidden>
+            <strong>Không thể tải dữ liệu thống kê</strong>
+            <p>Vui lòng thử lại sau.</p>
+            <button id="statisticsRetry" type="button">Thử lại</button>
+          </div>
+          <div
+            id="terminalStatistics"
+            aria-label="Thống kê giao dịch"
+            aria-busy="true"
+          ></div>
+          <div class="stats-footer">
+            <p id="statisticsFx"></p>
+            <span
+              id="statisticsFeedback"
+              role="status"
+              aria-live="polite"
+            ></span>
+          </div></section
       ></template>
       <template id="page-watchlist"
         ><section id="watchlist" class="view">

@@ -10,6 +10,7 @@ import {
 } from "./domain.js";
 import { requireCompatibleToken } from "./token-program.js";
 import { cheapGuard, size } from "./risk.js";
+import { positionSizeMatches } from "./position-sizing.js";
 import {
   parseMarketHistory,
   attemptFlow,
@@ -738,7 +739,7 @@ export async function oneShotEntry(
           ctx.balance,
           BigInt(e.settings.feeReserveLamports),
           ctx.pending,
-          e.settings.positionSizePercent,
+          e.settings,
         ).amount > CONTROLLED_BUY_CAP
       )
         reject("CONTROLLED_PRINCIPAL_CAP");
@@ -757,7 +758,7 @@ export async function oneShotEntry(
     const check = () => {
       assertAuthority();
       e.store.assertBuyOwnership(intent);
-      if (intent.positionSizePercent !== e.settings.positionSizePercent)
+      if (!positionSizeMatches(intent, e.settings))
         reject("POSITION_SIZE_SETTING_CHANGED");
       if (protectiveBusy()) reject("PROTECTIVE_WORK_PRIORITY");
       if (
@@ -782,7 +783,7 @@ export async function oneShotEntry(
             ctx.balance,
             BigInt(e.settings.feeReserveLamports),
             ctx.pending,
-            e.settings.positionSizePercent,
+            e.settings,
           ).amount !== BigInt(intent.amount)
         )
           reject("EXACT_SIZE_CHANGED");

@@ -249,7 +249,7 @@ export class Executor {
             before.sol,
             BigInt(s.feeReserveLamports),
             this.store.reserved("live") - BigInt(i.amount),
-            s.positionSizePercent,
+            s,
           ).amount !== BigInt(i.amount)
         )
           throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {

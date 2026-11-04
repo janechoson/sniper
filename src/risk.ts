@@ -13,32 +13,14 @@ import {
   type Position,
 } from "./domain.js";
 import { deepFreeze, hash, log } from "./util.js";
+import { size } from "./position-sizing.js";
+export { size } from "./position-sizing.js";
 import { validRecoveryBypass } from "./recovery-guard.js";
 import {
   hasTimelyStructurePass,
   hasEligibleStructurePass,
   ENTRY_WATCH_POLICY,
 } from "./sniper-structure.js";
-export function size(
-  balance: bigint,
-  reserve: bigint,
-  pending = 0n,
-  percent = 1,
-) {
-  const basisPoints = Math.round(percent * 100);
-  if (
-    !Number.isFinite(percent) ||
-    percent < 0.01 ||
-    percent > 100 ||
-    Math.abs(percent * 100 - basisPoints) > 1e-8
-  )
-    throw new Blocked("INVALID_POSITION_SIZE_PERCENT");
-  const available = balance - reserve - pending;
-  return {
-    available: available > 0n ? available : 0n,
-    amount: available > 0n ? (available * BigInt(basisPoints)) / 10000n : 0n,
-  };
-}
 export function decision(
   outcome: RiskResult["outcome"],
   reason: string,
@@ -284,12 +266,8 @@ export class RiskEngine {
     )
       return decision("SKIP_JEV", "Jev did not approve this entry");
     if (
-      size(
-        ctx.balance,
-        BigInt(s.feeReserveLamports),
-        ctx.pending,
-        s.positionSizePercent,
-      ).amount <= 0n
+      size(ctx.balance, BigInt(s.feeReserveLamports), ctx.pending, s).amount <=
+      0n
     )
       return decision(
         "SKIP_RISK",
@@ -331,12 +309,14 @@ export class RiskEngine {
       mint: snap.candidate.mint,
       side: "BUY",
       mode,
+      positionSizeMode: s.positionSizeMode,
       positionSizePercent: s.positionSizePercent,
+      positionSizeSol: s.positionSizeSol,
       amount: size(
         ctx.balance,
         BigInt(s.feeReserveLamports),
         ctx.pending,
-        s.positionSizePercent,
+        s,
       ).amount.toString(),
       createdAt: Date.now(),
       expiresAt: Date.now() + s.maxSnapshotAgeMs,

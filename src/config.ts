@@ -3,6 +3,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
+import { fixedSolLamports } from "./position-sizing.js";
 config({ quiet: true });
 // Match the official CLI's global GMGN credential precedence without logging values.
 const globalFile = join(homedir(), ".config", "gmgn", ".env");
@@ -85,12 +86,24 @@ export const settingsSchema = z.preprocess(
             : value,
         z.literal("FIRST_BUY_WINS"),
       ),
+      positionSizeMode: z.enum(["PERCENT", "SOL"]).default("PERCENT"),
       positionSizePercent: z
         .number()
         .min(0.01)
         .max(100)
         .multipleOf(0.01)
         .default(1),
+      positionSizeSol: z
+        .number()
+        .refine((value) => {
+          try {
+            fixedSolLamports(value);
+            return true;
+          } catch {
+            return false;
+          }
+        }, "SOL must be positive, safely representable and have at most 9 decimal places")
+        .default(0.2),
       feeReserveLamports: z.string().regex(/^\d+$/).default("20000000"),
       maxAgeSeconds: z.number().positive().default(3600),
       minLiquidityUsd: z.number().nonnegative().default(10000),

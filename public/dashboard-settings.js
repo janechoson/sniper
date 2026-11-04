@@ -25,14 +25,109 @@ export const obsoleteSettingsFields = new Set([
   "deferredMaxRechecks", // Retired candidate retry lists.
 ]);
 
+// Operator-requested UI exclusions. These settings remain active in the backend
+// and are preserved by the settingsData copy when other fields are saved.
+const hiddenSettingsFields = new Set([
+  "entryStrategy",
+  "tokenFailureThreshold",
+  "recentRejectTtlMs",
+  "jevExitDecisionMaxAgeMs",
+  "flowMaxTransitions",
+  "flowObservationIntervalMs",
+  "jevExitTradeCooldownMs",
+  "flowRegimeConfirmations",
+  "exitProbeMaxImpactPercent",
+  "positionRecheckMs",
+  "gmgnQueueMaxSize",
+  "exitProbeEntryBps",
+  "positionExitProbeMs",
+  "jevExitQueueSize",
+  "jevExitRecheckMs",
+  "positionExitProbeSpacingMs",
+  "jevExitConcurrency",
+  "exitProbeMaxAgeMs",
+  "structureMaxGapMs",
+  "intelligenceCacheMs",
+  "trailingStopBps",
+  "gmgnBackoffMaxMs",
+  "trendingInterval",
+  "maxDecisionPriceMovePercent",
+  "trailingActivationBps",
+  "gmgnBackoffBaseMs",
+  "trendingPollMs",
+  "jevExitMaterialPnlPoints",
+  "flowMaxObservations",
+  "flowMinSpanMs",
+  "flowHistoryMs",
+  "flowMeaningfulChangePercent",
+  "trendingFreshMs",
+  "candidateQueueSize",
+  "jevExitMinIntervalMs",
+  "paperFeeLamports",
+  "exitProbeMinNetLamports",
+  "flowStaleMs",
+  "liquidityCollapseBps",
+  "maxSnapshotAgeMs",
+  "criticalRugRatio",
+  "exitProbeFeeBudgetLamports",
+  "flowMinObservations",
+  "feeReserveLamports",
+  "warningRugRatio",
+  "gmgnRequestIntervalMs",
+]);
+
+const settingsGroups = [
+  {
+    id: "sizing",
+    title: "Quy mô lệnh & vốn",
+    fields: [
+      "positionSizeMode",
+      "positionSizePercent",
+      "positionSizeSol",
+      "slippagePercent",
+    ],
+  },
+  {
+    id: "risk",
+    title: "Rủi ro & bảo mật",
+    fields: [
+      "minLiquidityUsd",
+      "maxTop1Percent",
+      "maxTop10Percent",
+      "maxCreatorPercent",
+      "maxTaxPercent",
+    ],
+  },
+  {
+    id: "discovery",
+    title: "Nguồn token & xử lý",
+    fields: [
+      "trendingMaxAgeSeconds",
+      "trendingLimit",
+      "candidatesPerCycle",
+      "gmgnReadConcurrency",
+      "positionCollectorConcurrency",
+    ],
+  },
+  {
+    id: "exits",
+    title: "Thoát lệnh",
+    fields: [
+      "smartMoneyExitMode",
+      "jevExitMinConfidence",
+      "exitExecutionsPerCycle",
+    ],
+  },
+];
+
 export async function mount(ctx) {
   const $ = (id) => document.getElementById(id),
-    post = ctx.post,
-    error = ctx.error;
+    post = ctx.post;
   let statusData = ctx.shell(),
     settingsData,
     editing = false,
     saving = false,
+    entryControlPending = false,
     toastVersion = 0;
   const showToast = (kind, message) => {
     const version = ++toastVersion,
@@ -52,26 +147,60 @@ export async function mount(ctx) {
     $("settingsToast").hidden = true;
     toastVersion++;
   };
+  function updateSizeControls() {
+    const mode = $("setting-positionSizeMode"),
+      percent = $("setting-positionSizePercent"),
+      sol = $("setting-positionSizeSol"),
+      fixedSupported = !!statusData?.capabilities?.fixedSolPositionSize;
+    if (mode) mode.disabled = !fixedSupported;
+    const hint = $("positionSizeModeHint");
+    if (hint)
+      hint.textContent = fixedSupported
+        ? ""
+        : "Backend đang chạy chưa hỗ trợ mode SOL cố định. Cần nạp backend mới để sử dụng; mode % hiện tại vẫn hoạt động.";
+    if (percent)
+      percent.disabled =
+        !statusData?.capabilities?.configurablePositionSize ||
+        mode?.value === "SOL";
+    if (sol) sol.disabled = !fixedSupported || mode?.value !== "SOL";
+  }
   function renderSettings(settings) {
-    $("settingFields").replaceChildren(
-      ...Object.entries(settings)
+    // Keep the sizing controls visible on an older running backend as well.
+    // Display-only defaults are never added to that backend's save payload.
+    const displayed = {
+      positionSizeMode: settings.positionSizeMode ?? "PERCENT",
+      positionSizePercent: settings.positionSizePercent,
+      positionSizeSol: settings.positionSizeSol ?? 0.2,
+      ...settings,
+    };
+    const fields = new Map(
+      Object.entries(displayed)
         .filter(
           ([key]) =>
             key !== "takeProfits" &&
             key !== "stopLossBps" &&
-            !obsoleteSettingsFields.has(key),
+            !obsoleteSettingsFields.has(key) &&
+            !hiddenSettingsFields.has(key),
         )
         .map(([key, value]) => {
-          const d = el("div");
+          const d = el("div", undefined, "setting-field");
           const label = el(
             "label",
             {
+              positionSizeMode: "Chế độ quy mô lệnh mua",
+              positionSizePercent: "Quy mô lệnh mua (%)",
+              positionSizeSol: "Số SOL cố định mỗi lệnh mua",
               tokenFailureThreshold: "Số lần lỗi Position trước backoff dài",
               recentRejectTtlMs: "Backoff dài khi Position gặp lỗi (ms)",
             }[key] || key,
           );
           label.htmlFor = "setting-" + key;
           d.append(label);
+          if (key === "positionSizeMode") {
+            const hint = el("small");
+            hint.id = "positionSizeModeHint";
+            d.append(hint);
+          }
           if (key === "recentRejectTtlMs" || key === "tokenFailureThreshold")
             d.append(
               el(
@@ -83,6 +212,7 @@ export async function mount(ctx) {
           if (
             typeof value === "boolean" ||
             key === "smartMoneyExitMode" ||
+            key === "positionSizeMode" ||
             key === "trendingInterval" ||
             (key === "entryStrategy" && value !== "FIRST_BUY_WINS")
           ) {
@@ -95,12 +225,22 @@ export async function mount(ctx) {
                   : key === "trendingInterval"
                     ? ["1m", "5m", "1h", "6h", "24h"]
                     : ["OFF", "WARNING", "EXIT"];
-            options.forEach((v) => {
-              const o = el("option", v);
+            const choices =
+              key === "positionSizeMode" ? ["PERCENT", "SOL"] : options;
+            choices.forEach((v) => {
+              const o = el(
+                "option",
+                key === "positionSizeMode"
+                  ? v === "SOL"
+                    ? "SOL cố định"
+                    : "% tài khoản"
+                  : v,
+              );
               o.value = v;
               input.append(o);
             });
             input.value = String(value);
+            if (key === "positionSizeMode") input.onchange = updateSizeControls;
           } else {
             input = el("input");
             input.value = Array.isArray(value) ? JSON.stringify(value) : value;
@@ -122,7 +262,18 @@ export async function mount(ctx) {
                   "small",
                   input.readOnly
                     ? "Cần nạp backend mới để thay đổi quy mô lệnh."
-                    : "",
+                    : "Tính trên SOL khả dụng sau khi trừ phí dự phòng và vốn đang giữ chỗ.",
+                ),
+              );
+            }
+            if (key === "positionSizeSol") {
+              input.min = "0.000000001";
+              input.step = "0.000000001";
+              input.inputMode = "decimal";
+              d.append(
+                el(
+                  "small",
+                  "Chỉ dùng ở mode SOL cố định. Mặc định 0.2 SOL; thiếu vốn thì chặn lệnh, không tự giảm số SOL.",
                 ),
               );
             }
@@ -132,10 +283,35 @@ export async function mount(ctx) {
           input.name = key;
           input.id = "setting-" + key;
           d.append(input);
-          return d;
+          // Descriptions belong below the control, so they cannot shift its baseline.
+          for (const note of d.querySelectorAll("small")) d.append(note);
+          return [key, d];
         }),
     );
-    $("takeProfits").value = JSON.stringify(settings.takeProfits, null, 2);
+    const groups = [];
+    const addGroup = (id, title, keys) => {
+      const controls = keys.flatMap((key) => {
+        const control = fields.get(key);
+        if (!control) return [];
+        fields.delete(key);
+        return [control];
+      });
+      if (!controls.length) return;
+      const section = el("section", undefined, "settings-group"),
+        heading = el("h3", title, "settings-group-title"),
+        grid = el("div", undefined, "settings-group-grid");
+      section.dataset.group = id;
+      heading.id = "settings-group-" + id;
+      section.setAttribute("aria-labelledby", heading.id);
+      grid.append(...controls);
+      section.append(heading, grid);
+      groups.push(section);
+    };
+    for (const group of settingsGroups)
+      addGroup(group.id, group.title, group.fields);
+    addGroup("other", "Cấu hình khác", [...fields.keys()]);
+    $("settingFields").replaceChildren(...groups);
+    updateSizeControls();
   }
 
   const refresh = async () => {
@@ -143,14 +319,53 @@ export async function mount(ctx) {
     if (!editing) renderSettings(settingsData);
   };
   ctx.setRefresh(refresh);
+  function renderBuyPermission(enabled) {
+    $("kill").checked = enabled === true;
+    $("buyPermissionState").textContent = enabled === true ? "ON" : "OFF";
+  }
   ctx.onShell((s) => {
     statusData = s;
-    $("kill").value = String(s.newEntriesEnabled);
+    if (!entryControlPending) renderBuyPermission(s.newEntriesEnabled);
+    updateSizeControls();
   });
-  $("kill").value = String(statusData.newEntriesEnabled);
-  $("kill").onchange = (event) =>
-    post("/api/kill", { enabled: event.target.value === "true" }).catch(error);
-  $("scan").onclick = () => post("/api/scan", {}).catch(error);
+  renderBuyPermission(statusData.newEntriesEnabled);
+  $("kill").onchange = async (event) => {
+    if (entryControlPending) return;
+    const enabled = event.target.checked;
+    entryControlPending = true;
+    $("kill").disabled = true;
+    $("kill").setAttribute("aria-busy", "true");
+    renderBuyPermission(enabled);
+    try {
+      const result = await post(
+        "/api/kill",
+        { enabled },
+        { refreshGlobal: false },
+      );
+      if (!ctx.active()) return;
+      if (result?.ok !== true) throw Error("API chưa xác nhận thay đổi.");
+      statusData = { ...statusData, newEntriesEnabled: enabled };
+      renderBuyPermission(enabled);
+      showToast(
+        "success",
+        enabled ? "Đã bật cho phép mua." : "Đã tắt cho phép mua.",
+      );
+    } catch (e) {
+      if (!ctx.active()) return;
+      renderBuyPermission(statusData.newEntriesEnabled);
+      showToast(
+        "error",
+        "Không thay đổi được quyền mua: " +
+          (e.message || "Không kết nối được API."),
+      );
+    } finally {
+      entryControlPending = false;
+      if (ctx.active()) {
+        $("kill").disabled = false;
+        $("kill").removeAttribute("aria-busy");
+      }
+    }
+  };
   $("settingsForm").oninput = () => {
     editing = true;
     $("saved").textContent = "";
@@ -167,17 +382,16 @@ export async function mount(ctx) {
       const settings = { ...settingsData };
       document
         .querySelectorAll("#settingFields input,#settingFields select")
-        .forEach(
-          (i) =>
-            (settings[i.name] = Array.isArray(settings[i.name])
-              ? JSON.parse(i.value)
-              : typeof settings[i.name] === "boolean"
-                ? i.value === "true"
-                : typeof settings[i.name] === "string"
-                  ? i.value
-                  : Number(i.value)),
-        );
-      settings.takeProfits = JSON.parse($("takeProfits").value);
+        .forEach((i) => {
+          if (!Object.hasOwn(settings, i.name)) return;
+          settings[i.name] = Array.isArray(settings[i.name])
+            ? JSON.parse(i.value)
+            : typeof settings[i.name] === "boolean"
+              ? i.value === "true"
+              : typeof settings[i.name] === "string"
+                ? i.value
+                : Number(i.value);
+        });
       const result = await post("/api/settings", settings, {
         refreshGlobal: false,
       });

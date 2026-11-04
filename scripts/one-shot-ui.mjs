@@ -332,7 +332,7 @@ try {
   });
   await page.locator("[data-view=settings]").click();
   assert.equal(await page.locator("#kill").isVisible(), true);
-  assert.equal(await page.locator("#scan").isVisible(), true);
+  assert.equal(await page.locator("#scan").count(), 0);
   await page.locator("input[name=minLiquidityUsd]").fill("25000");
   await page.locator("#settingsForm button[type=submit]").click();
   await page.waitForFunction(

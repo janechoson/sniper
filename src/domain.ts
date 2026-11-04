@@ -152,7 +152,9 @@ export interface Snapshot extends StrategyTrace {
   tokenExecution?: TokenExecutionReport;
 }
 export interface Intent extends StrategyTrace {
+  positionSizeMode?: "PERCENT" | "SOL";
   positionSizePercent?: number;
+  positionSizeSol?: number;
   entryAuthority?: Snapshot["entryAuthority"];
   id: string;
   key: string;

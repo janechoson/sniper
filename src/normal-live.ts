@@ -67,11 +67,13 @@ export async function activateNormalLive(engine: Engine) {
       openPositions: positions.length,
       balanceLamports: balance.toString(),
       positionSizePercent: engine.settings.positionSizePercent,
+      positionSizeMode: engine.settings.positionSizeMode,
+      positionSizeSol: engine.settings.positionSizeSol,
     });
     engine.store.event(
       "NORMAL_LIVE_STARTED",
       undefined,
-      `Normal continuous live: ${engine.settings.positionSizePercent}% spendable SOL per BUY; no position-count limit; existing positions recovered`,
+      `Normal continuous live: ${engine.settings.positionSizeMode === "SOL" ? engine.settings.positionSizeSol + " fixed SOL" : engine.settings.positionSizePercent + "% spendable SOL"} per BUY; no position-count limit; existing positions recovered`,
     );
   });
 }

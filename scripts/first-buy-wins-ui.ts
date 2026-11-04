@@ -95,14 +95,8 @@ try {
     '#routeOutlet[data-state="ready"][data-route="/settings"]',
   );
   assert.equal(
-    await page.locator('input[name="entryStrategy"]').inputValue(),
-    "FIRST_BUY_WINS",
-  );
-  assert.equal(
-    (await page
-      .locator('input[name="entryStrategy"]')
-      .getAttribute("readonly")) !== null,
-    true,
+    await page.locator('[name="entryStrategy"]').count(),
+    0,
   );
   await page.locator('a[data-route][href="/"]').click();
   await page.waitForSelector(

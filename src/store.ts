@@ -23,7 +23,11 @@ import {
 import { json } from "./util.js";
 import { learningMigration } from "./learning-schema.js";
 import { mergeDiscovery } from "./discovery.js";
-import { size } from "./risk.js";
+import {
+  size,
+  positionSizeMatches,
+  type PositionSizing,
+} from "./position-sizing.js";
 export class Store {
   private exitRetentionWrites = 0;
   readonly db: DatabaseSync;
@@ -1060,18 +1064,15 @@ export class Store {
             throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {
               reason: "WAITING_FOR_CAPITAL: INSUFFICIENT_SPENDABLE_BALANCE",
             });
-          const percent =
-            this.get<{ positionSizePercent?: number }>("strategyV2")
-              ?.positionSizePercent ?? 1;
+          const sizing = this.get<PositionSizing>("strategyV2") ?? {};
           if (
-            (i.positionSizePercent !== undefined &&
-              i.positionSizePercent !== percent) ||
+            !positionSizeMatches(i, sizing) ||
             BigInt(i.amount) !==
               size(
                 capital.balance,
                 capital.reserve,
                 this.reserved(i.mode),
-                percent,
+                sizing,
               ).amount
           )
             throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {
