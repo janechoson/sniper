@@ -1,5 +1,5 @@
 import type { AttemptStage, StageStatus } from "./candidate-attempt.js";
-import { env } from "./config.js";
+
 import { CONTROLLED_BUY_CAP } from "./controlled-session.js";
 import {
   CandidateRejected,
@@ -28,6 +28,7 @@ export async function oneShotEntry(
   let owned: BuyOwnershipClaim | undefined;
   try {
     let candidate = e.store.token(mint)!;
+    e.chartLearning.charts.watch(mint, e.mode, 4, "ENTRY_CANDIDATE");
     const attemptId = e.attempts.current!.attemptId;
     e.attempts.summary("strategy", "KRONOS");
     const run = <T>(stage: AttemptStage, work: () => Promise<T> | T) =>
@@ -41,13 +42,13 @@ export async function oneShotEntry(
       throw new CandidateRejected("TEMPORARY_RISK_CHANGE", { mint, reason });
     };
     const authority: NonNullable<Snapshot["entryAuthority"]> = {
-      revision: e.store.candidateAuthority(mint, env.TRADING_MODE).revision,
+      revision: e.store.candidateAuthority(mint, e.mode).revision,
       path: "TRENDING",
       policy: "TRENDING_ONE_SHOT_V1",
     };
     const assertAuthority = () => {
       if (e.entriesStopping) reject("ENGINE_STOPPING");
-      e.store.assertEntryAuthority(mint, env.TRADING_MODE, authority);
+      e.store.assertEntryAuthority(mint, e.mode, authority);
     };
     const info = await run("CHEAP_FILTER", async () => {
       try {
@@ -59,14 +60,13 @@ export async function oneShotEntry(
         reject("TRENDING_ORIGIN_REQUIRED");
       if (
         e.store
-          .positions(env.TRADING_MODE)
+          .positions(e.mode)
           .some(
             (p) => p.mint === mint && !["CLOSED", "FAILED"].includes(p.state),
           )
       )
         reject("OPEN_POSITION_DUPLICATE");
-      if (e.store.entryBlocked(mint, env.TRADING_MODE))
-        reject("DURABLE_BUY_DUPLICATE");
+      if (e.store.entryBlocked(mint, e.mode)) reject("DURABLE_BUY_DUPLICATE");
       const data = await e.gmgn.info(mint, 0, {
         priority: 4,
         consumer: "candidate-analysis",
@@ -212,6 +212,23 @@ export async function oneShotEntry(
     };
 
     e.store.pipelineEvent("COMMON_PIPELINE_PASS", mint, { attemptId });
+    const guard = await run("CODEX_GUARD", async () => {
+      const d = await e.chartLearning.decide(
+        candidate,
+        history,
+        market,
+        e.mode,
+      );
+      e.attempts.summary("codexGuard", d);
+      e.store.pipelineEvent("CODEX_" + d.action, mint, {
+        attemptId,
+        decisionId: d.id,
+        reason: d.reason,
+      });
+      if (d.action !== "PASS") reject("CODEX_" + d.action + ": " + d.reason);
+      return d;
+    });
+    e.attempts.summary("codexGuardDecisionId", guard.id);
     type Winner = {
       snapshot: Snapshot;
       claim: BuyOwnershipClaim;
@@ -230,8 +247,7 @@ export async function oneShotEntry(
         try {
           assertAuthority();
           const value = await work();
-          if (!e.store.buyOwnership(mint, env.TRADING_MODE, attemptId))
-            assertAuthority();
+          if (!e.store.buyOwnership(mint, e.mode, attemptId)) assertAuthority();
           e.attempts.branchStage(attemptId, strategy, stage, "PASS");
           return value;
         } catch (error) {
@@ -285,7 +301,7 @@ export async function oneShotEntry(
             );
             e.store.record("kronos_decisions", mint, {
               ...d,
-              mode: env.TRADING_MODE,
+              mode: e.mode,
               attemptId: common.attemptId,
             });
             e.store.pipelineEvent("KRONOS_" + d.action, mint, {
@@ -320,13 +336,12 @@ export async function oneShotEntry(
         };
 
         const acquire = () => {
-          if (!e.store.buyOwnership(mint, env.TRADING_MODE, attemptId))
-            assertAuthority();
+          if (!e.store.buyOwnership(mint, e.mode, attemptId)) assertAuthority();
           const decisionId = snapshot.kronos!.decisionId;
           const decisionAt = snapshot.kronos!.decisionAt;
           const result = e.store.claimMintForBuy(
             {
-              mode: env.TRADING_MODE,
+              mode: e.mode,
               mint,
               attemptId,
               strategy,
@@ -383,7 +398,7 @@ export async function oneShotEntry(
           });
           selected = { snapshot, claim: result.claim };
         };
-        if (e.store.buyOwnership(mint, env.TRADING_MODE, attemptId)) {
+        if (e.store.buyOwnership(mint, e.mode, attemptId)) {
           e.attempts.strategy(attemptId, strategy, {
             stages: { RISK: "SKIPPED" },
           });
@@ -391,7 +406,7 @@ export async function oneShotEntry(
           return;
         }
         const ctx = await context(undefined, owned?.id);
-        if (e.store.buyOwnership(mint, env.TRADING_MODE, attemptId)) {
+        if (e.store.buyOwnership(mint, e.mode, attemptId)) {
           e.attempts.strategy(attemptId, strategy, {
             stages: { RISK: "SKIPPED" },
           });
@@ -416,7 +431,7 @@ export async function oneShotEntry(
           ...risk,
           attemptId,
           strategy,
-          mode: env.TRADING_MODE,
+          mode: e.mode,
         });
         if (!risk.allowed) {
           e.attempts.branchStage(
@@ -460,7 +475,7 @@ export async function oneShotEntry(
             const a = JSON.parse(String(row.payload));
             e.store.record("strategy_evaluations", mint, {
               attemptId,
-              mode: env.TRADING_MODE,
+              mode: e.mode,
               ...a.summaries.strategies[strategy],
             });
           }
@@ -501,7 +516,7 @@ export async function oneShotEntry(
         e.settings,
         { priority: 3, consumer: "pre-buy" },
       );
-      if (env.TRADING_MODE === "live" || env.TRADING_MODE === "demo") {
+      if (e.mode === "live" || e.mode === "demo") {
         tokenExecution = await e.rpc.inspectMint(mint);
         requireCompatibleToken(tokenExecution);
         if (tokenExecution.decimals !== fresh.decimals)
@@ -555,12 +570,7 @@ export async function oneShotEntry(
         ).amount > CONTROLLED_BUY_CAP
       )
         reject("CONTROLLED_PRINCIPAL_CAP");
-      const approved = e.risk.approve(
-        snapshot,
-        e.settings,
-        ctx,
-        env.TRADING_MODE,
-      );
+      const approved = e.risk.approve(snapshot, e.settings, ctx, e.mode);
       return { ...approved, key: approved.key + ":" + snapshot.attemptId };
     });
     e.attempts.summary("entryAmountLamports", intent.amount);
@@ -609,7 +619,7 @@ export async function oneShotEntry(
     await run("POSITION", () => {
       if (
         !e.store
-          .positions(env.TRADING_MODE)
+          .positions(e.mode)
           .some((p) => p.id === intent.positionId && p.state === "OPEN")
       )
         reject("POSITION_NOT_RECONCILED");

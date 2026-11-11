@@ -12,7 +12,7 @@
         <span class="brandmark"
           ><span class="brand-word bot-icon">Rug</span
           ><span class="brand-word">Killer</span></span
-        ><span id="overviewMode" class="terminal-live">ĐANG KẾT NỐI</span>
+        ><span id="overviewMode" class="terminal-live">Đang kết nối</span>
       </div>
       <div class="micro">BẢNG GIAO DỊCH SOLANA RIÊNG</div>
       <nav>
@@ -32,13 +32,40 @@
         <a data-view="settings" data-route="" href="/settings">Cấu hình</a>
         <a data-view="logs" data-route="" href="/logs">Log</a
         ><a data-view="statistics" data-route="" href="/thongke">Thống kê</a>
+        <a data-view="learning" data-route="" href="/chart-learning"
+          >Chart Learning</a
+        >
       </nav>
-      <div class="terminal-wallet">
-        <span id="terminalBalance">SOL: N/A</span
-        ><small id="terminalUsd">USD: N/A</small>
-      </div>
-      <div class="terminal-running">
-        <i id="terminalDot"></i><span id="terminalRunning">Đang kết nối</span>
+      <div class="header-trading-controls">
+        <div class="mode-selector" role="group" aria-label="Trading mode">
+          <button id="selectDemo" type="button" aria-pressed="false">
+            DEMO
+          </button>
+          <button id="selectLive" type="button" aria-pressed="false">
+            LIVE
+          </button>
+        </div>
+        <div class="terminal-wallet">
+          <span id="terminalBalance">SOL: N/A</span
+          ><small id="terminalUsd">USD: N/A</small>
+        </div>
+        <div class="terminal-running">
+          <i id="terminalDot"></i><span id="terminalRunning">Đang kết nối</span>
+        </div>
+        <details id="modeAccount" class="session-menu">
+          <summary aria-label="Điều khiển session">
+            Session <span aria-hidden="true">⌄</span>
+          </summary>
+          <div class="session-popover">
+            <strong id="accountModeTitle">Đang kết nối</strong>
+            <p id="modeState" role="status">Đang đọc trạng thái session…</p>
+            <div class="session-actions">
+              <button id="stopMode" type="button">Dừng session</button
+              ><button id="resetDemo" type="button" hidden>Reset Demo</button>
+            </div>
+            <small id="accountAssumptions" class="muted"></small>
+          </div>
+        </details>
       </div>
       <div class="aside-bottom">
         <span class="dot"></span>KẾT NỐI NỘI BỘ<br /><small
@@ -51,64 +78,93 @@
       <header>
         <div>
           <div class="micro">KHÔNG GIAN LÀM VIỆC / MẠNG CHÍNH SOLANA</div>
-          <h1 id="title">Luồng xử lý token</h1>
+          <h1 id="title">Tổng quan</h1>
           <p class="header-subtitle">
-            Theo dõi quá trình quét, đánh giá và giao dịch theo thời gian thực
+            Trạng thái giao dịch và quét thị trường thời gian thực
           </p>
         </div>
         <div class="header-actions">
-          <span id="mode" class="pill">ĐANG KẾT NỐI</span
+          <span class="overview-strategy">KRONOS · Solana</span
+          ><span id="mode" class="pill">ĐANG KẾT NỐI</span
           ><span id="clock" class="muted"></span>
         </div>
       </header>
       <div id="notice" role="status" class="notice">
         Đang kết nối với bộ máy giao dịch…
       </div>
-      <section
-        id="modeAccount"
-        class="panel mode-account"
-        aria-label="Trading account"
-      >
-        <div class="terminal-panel-head">
-          <h2 id="accountModeTitle">KRONOS · Đang kết nối</h2>
-          <div class="mode-selector" role="group" aria-label="Trading mode">
-            <button id="selectDemo" type="button">DEMO</button
-            ><button id="selectLive" type="button">LIVE</button>
-          </div>
-          <div>
-            <button id="stopMode" type="button">Dừng session</button>
-            <button id="resetDemo" type="button" hidden>Reset Demo</button>
-          </div>
-        </div>
-        <p id="modeState" role="status"></p>
-        <div id="accountMetrics" class="stats"></div>
-        <svg
-          id="accountChart"
-          viewBox="0 0 800 120"
-          role="img"
-          aria-label="Lịch sử số dư tài khoản trong 24 giờ"
-        ></svg>
-        <small id="accountAssumptions" class="muted"></small>
-      </section>
       <div id="routeOutlet" aria-live="off"></div>
       <template id="page-overview"
         ><section id="overview" class="view">
           <div id="terminalOverview" class="terminal-overview">
-            <section class="token-scanner" id="scannerPanel">
-              <h2>Tokens đang quét</h2>
-              <p id="terminalScanCaption">Đang chờ GMGN Trending…</p>
-              <p
-                id="trendingBatchProgress"
-                class="trending-batch-progress"
-                role="status"
+            <div
+              id="accountMetrics"
+              class="overview-kpis"
+              aria-label="Chỉ số tài khoản"
+            >
+              <article class="overview-kpi">
+                <span class="overview-kpi-icon" aria-hidden="true">◉</span>
+                <div class="overview-kpi-copy">
+                  <span>Equity</span><strong id="kpiEquity">Đang tải…</strong
+                  ><small id="kpiEquityNote">Theo mode đang hoạt động</small>
+                </div>
+              </article>
+              <article class="overview-kpi">
+                <span class="overview-kpi-icon is-green" aria-hidden="true"
+                  >↗</span
+                >
+                <div class="overview-kpi-copy">
+                  <span>PnL thực hiện</span
+                  ><strong id="kpiRealized">Đang tải…</strong
+                  ><small id="kpiPnlNote">Kết quả đã ghi nhận</small>
+                </div>
+              </article>
+              <article class="overview-kpi">
+                <span class="overview-kpi-icon is-purple" aria-hidden="true"
+                  >▥</span
+                >
+                <div class="overview-kpi-copy">
+                  <span>PnL chưa thực hiện</span
+                  ><strong id="kpiUnrealized">Đang tải…</strong
+                  ><small>Định giá theo dữ liệu khả dụng</small>
+                </div>
+              </article>
+              <article class="overview-kpi">
+                <span class="overview-kpi-icon is-purple" aria-hidden="true"
+                  >◈</span
+                >
+                <div class="overview-kpi-copy">
+                  <span>Positions</span
+                  ><strong id="kpiPositions">Đang tải…</strong
+                  ><small>Vị thế đang mở trong mode</small>
+                </div>
+              </article>
+              <article class="overview-kpi">
+                <span class="overview-kpi-icon is-cyan" aria-hidden="true"
+                  >⌗</span
+                >
+                <div class="overview-kpi-copy">
+                  <span>Tiến độ quét</span
+                  ><strong id="kpiScanner">Đang tải…</strong
+                  ><progress
+                    id="scannerProgress"
+                    max="1"
+                    value="0"
+                    aria-label="Tiến độ batch"
+                  ></progress>
+                </div>
+              </article>
+            </div>
+            <section
+              class="scanner-bar"
+              id="scannerPanel"
+              aria-label="Trạng thái Scanner"
+            >
+              <strong>Scanner</strong
+              ><span id="terminalScanCaption">Đang chờ GMGN Trending…</span>
+              <span id="trendingBatchProgress" role="status"
+                >Chưa có dữ liệu batch</span
               >
-                Chưa có dữ liệu batch
-              </p>
-              <div
-                id="tokenCarousel"
-                class="token-carousel"
-                aria-live="polite"
-              ></div>
+              <span id="batchDuration" hidden></span>
             </section>
             <section class="terminal-panel current-token">
               <h2>Token hiện tại</h2>
@@ -121,19 +177,11 @@
             >
               <h2 id="kronosEvaluationTitle">
                 Đánh giá hiện tại – <span>KRONOS</span>
+                <button id="currentDecisionEvidence" type="button" disabled>
+                  Chi tiết
+                </button>
               </h2>
               <div id="kronosStages"></div>
-            </section>
-            <section class="terminal-panel action-log">
-              <div class="terminal-panel-head">
-                <h2 id="terminalLogTitle">Action Log</h2>
-                <select id="terminalLogFilter" aria-label="Lọc Action Log">
-                  <option value="ALL">Tất cả</option>
-                  <option value="FAIL">Lỗi</option>
-                  <option value="PASS">Hoàn tất</option>
-                </select>
-              </div>
-              <div id="terminalLogs" role="log" aria-live="polite"></div>
             </section>
             <section class="terminal-panel overview-positions">
               <div class="terminal-panel-head">
@@ -443,6 +491,51 @@
             ></span>
           </div></section
       ></template>
+      <template id="page-learning">
+        <section class="view" id="learning">
+          <header class="learning-heading">
+            <div><h2>Chart Learning</h2>
+              <p>Học từ dữ liệu thị trường thực · RUG_30 là nhãn sụp giá, không phải bằng chứng gian lận.</p></div>
+            <span class="learning-scope">SHARED LEARNING</span>
+          </header>
+          <section id="learningHealth" aria-label="Tình trạng học">
+            <article><span>Market Collector</span><strong id="learningCollector">Đang kiểm tra</strong><small id="learningCollectorDetail"></small></article>
+            <article><span>Codex Learning</span><strong id="learningProvider">Đang kiểm tra</strong><small id="learningProviderDetail"></small></article>
+            <article><span>Learning Queue</span><strong id="learningQueueHealth">Đang kiểm tra</strong><small id="learningQueueDetail"></small></article>
+            <article><span>Rule Validation</span><strong id="learningValidation">Đang kiểm tra</strong><small id="learningValidationDetail"></small></article>
+          </section>
+          <p id="learningStatus" role="status"></p>
+          <section id="learningOverview" aria-label="Chỉ số học"></section>
+          <details id="learningMoreStats"><summary>Chi tiết thống kê</summary><div id="learningSecondaryStats"></div></details>
+          <nav id="learningTabs" aria-label="Learning sections"></nav>
+          <section id="learningWorkspace" class="learning-workspace">
+            <aside class="learning-event-panel">
+              <header><h3>Danh sách sự kiện</h3><span id="learningEventCount"></span></header>
+              <input id="learningEventSearch" type="search" placeholder="Tìm symbol hoặc mint" aria-label="Tìm sự kiện" />
+              <div id="learningEventFilters" class="learning-filters"></div>
+              <div id="learningEventList" role="list"></div>
+              <p class="learning-list-note">Hiển thị tối đa 100 sự kiện gần nhất.</p>
+            </aside>
+            <section class="learning-chart-panel">
+              <header><div><h3 id="learningChartTitle">Chọn một sự kiện</h3><p id="learningChartMeta"></p></div><span id="learningChartTag"></span></header>
+              <div id="learningChart"></div>
+              <div id="learningChartControls" class="learning-chart-controls"><span>Nến 1m</span><div id="learningWindowControls" class="learning-window-controls"></div><span id="learningCandleCount"></span><label><input id="learningVolumeToggle" type="checkbox" checked /> Volume</label><label><input id="learningMarkerToggle" type="checkbox" checked /> Ký hiệu quyết định</label><label><input id="learningRugToggle" type="checkbox" checked /> Vùng RUG_30</label></div>
+              <section class="learning-ai-panel"><div><h3>Phân tích AI</h3><p id="learningAiSummary">Chọn sự kiện để xem dữ liệu phân tích.</p><small id="learningAiMeta"></small></div></section>
+            </section>
+            <aside class="learning-insights-panel">
+              <section><header><h3>Kết quả học</h3><span id="learningInsightTag"></span></header><div id="learningEventSummary"></div></section>
+              <section><header><h3>Tín hiệu trước sự kiện</h3></header><div id="learningSignals"></div></section>
+              <section><header><h3>Rules liên quan</h3></header><div id="learningRelatedRules"></div></section>
+            </aside>
+          </section>
+          <div id="learningRows"></div>
+          <article
+            id="learningDetail"
+            class="panel"
+            aria-live="polite"
+          ></article>
+        </section>
+      </template>
       <footer>
         <span id="scanner">Bộ quét đang chờ trạng thái</span
         ><span

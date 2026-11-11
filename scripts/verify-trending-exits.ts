@@ -1,3 +1,4 @@
+import { tradingDatabasePath } from "../src/database-session.js";
 import { writeFileSync } from "node:fs";
 import { env, settingsSchema } from "../src/config.js";
 import { Gmgn } from "../src/gmgn.js";
@@ -7,7 +8,7 @@ import { JupiterExecutionProvider } from "../src/execution-provider.js";
 import { probeExits, assertEntryExit } from "../src/exit-feasibility.js";
 import { safeError } from "../src/util.js";
 // Provider contract verification ONLY. No Engine/Executor, signing, migration, DB writes or broadcast.
-const db = new Store(env.DATABASE_PATH, { readOnly: true });
+const db = new Store(tradingDatabasePath("live"), { readOnly: true });
 try {
   const settings = settingsSchema.parse(db.get("strategyV2")),
     g = new Gmgn();

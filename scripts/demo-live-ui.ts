@@ -55,8 +55,8 @@ try {
       document.getElementById("accountModeTitle")?.textContent ===
       "KRONOS · DEMO",
   );
-  await page.waitForFunction(() =>
-    document.getElementById("accountMetrics")?.textContent?.includes("100 SOL"),
+  await page.waitForFunction(
+    () => document.getElementById("kpiEquity")?.textContent === "100.00 SOL",
   );
   assert.equal(await page.locator('[data-strategy="STANDARD"]').count(), 0);
   assert.equal(await page.locator('a[href="/memory"]').count(), 0);
@@ -65,7 +65,7 @@ try {
     0,
   );
   assert.equal(await page.locator("#resetDemo").isDisabled(), true);
-  assert.equal((await page.locator("#accountChart circle").count()) > 0, true);
+  assert.equal(await page.locator("#accountChart").count(), 0);
   const held = {
     ...position(),
     mode: "demo" as const,
@@ -124,6 +124,12 @@ try {
       "KRONOS · DEMO",
   );
   await second.waitForSelector(".position-card");
+  if (
+    !(await page
+      .locator("#modeAccount")
+      .evaluate((el) => (el as HTMLDetailsElement).open))
+  )
+    await page.locator("#modeAccount summary").click();
   await page.locator("#stopMode").click();
   await page.waitForFunction(
     () =>

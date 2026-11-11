@@ -10,7 +10,10 @@ import { size } from "./risk.js";
 import { acquireLock, startServer } from "./server.js";
 import { SMOKE_MAINNET_GENESIS, SMOKE_USDC } from "./smoke-policy.js";
 import { Solana } from "./solana.js";
-import { Store } from "./store.js";
+
+import { DatabaseRegistry } from "./database-registry.js";
+import { databaseDirectory } from "./database-session.js";
+import { migrateDatabases } from "./database-migration.js";
 import { json, log, safeError, sleep } from "./util.js";
 
 async function preflight() {
@@ -20,8 +23,13 @@ async function preflight() {
     throw new Blocked("SCANNER_AND_ENTRIES_MUST_BE_CONFIGURED_BY_OWNER");
   const wallet = localWallet();
   wallet.secretKey.fill(0);
-  const release = acquireLock(env.DATABASE_PATH),
-    store = new Store(env.DATABASE_PATH);
+  const directory = databaseDirectory(),
+    release = acquireLock(resolve(directory, "registry"));
+  await migrateDatabases(env.DATABASE_PATH, directory, {
+    lockOwnerPid: process.pid,
+  });
+  const registry = new DatabaseRegistry(directory),
+    store = registry.live;
   try {
     const settings = settingsSchema.parse(
       store.get("strategyV2") ?? defaultSettings(),
@@ -159,7 +167,7 @@ async function preflight() {
     });
     return session.id;
   } finally {
-    store.close();
+    registry.close();
     release();
   }
 }

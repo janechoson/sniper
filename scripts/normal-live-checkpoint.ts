@@ -1,3 +1,4 @@
+import { tradingDatabasePath } from "../src/database-session.js";
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { env } from "../src/config.js";
 import { Store } from "../src/store.js";
@@ -6,7 +7,7 @@ import { hash, json } from "../src/util.js";
 import type { Position } from "../src/domain.js";
 
 // Independent read-only evidence. Never signs, submits, clears halts or changes DB state.
-const db = new Store(env.DATABASE_PATH, { readOnly: true });
+const db = new Store(tradingDatabasePath("live"), { readOnly: true });
 try {
   const status = await fetch(`http://127.0.0.1:${env.PORT}/api/status`).then(
     (r) => r.json(),

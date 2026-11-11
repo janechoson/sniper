@@ -1,5 +1,5 @@
 import type { Store } from "./store.js";
-import { env, type Settings } from "./config.js";
+import { type Settings } from "./config.js";
 import type { Market, Position, Mode } from "./domain.js";
 import { numberEvidence, record } from "./gmgn.js";
 import { hash } from "./util.js";
@@ -480,9 +480,9 @@ export class CapitalFlowEngine {
         "DELETE FROM candidate_flow_states WHERE (mint LIKE 'demo:%')=? AND (updated_at<? OR mint IN (SELECT mint FROM candidate_flow_states WHERE (mint LIKE 'demo:%')=? ORDER BY updated_at DESC LIMIT -1 OFFSET 250))",
       )
       .run(
-        Number(env.TRADING_MODE === "demo"),
+        Number(this.store.mode === "demo"),
         now - this.settings().flowHistoryMs,
-        Number(env.TRADING_MODE === "demo"),
+        Number(this.store.mode === "demo"),
       );
     return flowSummary(next);
   }

@@ -33,12 +33,17 @@ import { demoAccountView } from "./demo-account-view.js";
 import { discoveryContext } from "./discovery.js";
 import { Blocked } from "./domain.js";
 import { Engine } from "./engine.js";
+import { chartLearningView } from "./chart-api.js";
+import { DatabaseRegistry } from "./database-registry.js";
+import { migrateDatabases } from "./database-migration.js";
+import { ChartLearning } from "./chart-learning.js";
+import { Gmgn } from "./gmgn.js";
 import { kronosMigrationPreflight } from "./kronos-migration-preflight.js";
 import { ModeManager, migrationSafetyCodes } from "./mode-manager.js";
 import { activateNormalLive } from "./normal-live.js";
 import { positionViews } from "./position-view.js";
 import { entrySource } from "./sniper-structure.js";
-import { Store } from "./store.js";
+
 import { TOKEN_IMAGE_CSP } from "./token-metadata.js";
 import { json, log, safeError, sleep } from "./util.js";
 export function acquireLock(path: string) {
@@ -69,13 +74,23 @@ export async function startServer(
   options: {
     controlledRunId?: string;
     normalLive?: boolean;
+    demoOnly?: boolean;
+    verifyLive?: (engine: Engine) => Promise<void>;
     providers?: ConstructorParameters<typeof Engine>[1];
   } = {},
 ) {
   if (options.controlledRunId)
     throw new Blocked("CONTROLLED_START_REQUIRES_MODE_MANAGER_CONFIRMATION");
   // Inspect authoritative recovery state before writable Store migrations or engine construction.
-  if (existsSync(env.DATABASE_PATH)) {
+  if (
+    existsSync(env.DATABASE_PATH) &&
+    !existsSync(
+      join(
+        resolve(env.DATABASE_DIRECTORY ?? dirname(resolve(env.DATABASE_PATH))),
+        "database-split-manifest.json",
+      ),
+    )
+  ) {
     const readOnly = new DatabaseSync(env.DATABASE_PATH, { readOnly: true });
     try {
       readOnly.exec("PRAGMA query_only=ON; BEGIN");
@@ -92,28 +107,64 @@ export async function startServer(
       readOnly.close();
     }
   }
-  const release = acquireLock(env.DATABASE_PATH);
-  const store = new Store(env.DATABASE_PATH),
+  const directory = resolve(
+    env.DATABASE_DIRECTORY ?? dirname(resolve(env.DATABASE_PATH)),
+  );
+  const release = acquireLock(join(directory, "registry"));
+  try {
+    await migrateDatabases(env.DATABASE_PATH, directory, {
+      lockOwnerPid: process.pid,
+    });
+  } catch (e) {
+    release();
+    throw e;
+  }
+  const registry = new DatabaseRegistry(directory);
+  const unsafe = registry.learning
+    .prepare(
+      "SELECT count(*) n FROM migration_quarantine WHERE table_name IN ('positions','executions','intents','manual_exits','execution_fills','buy_ownership_claims')",
+    )
+    .get()!.n;
+  if (Number(unsafe)) {
+    registry.close();
+    release();
+    throw new Blocked("QUARANTINED_CUSTODY_REQUIRES_REVIEW");
+  }
+  const store = registry.demo,
     csrf = randomBytes(32).toString("hex");
+  const sharedGmgn = options.providers?.gmgn ?? new Gmgn();
+  const learning = new ChartLearning(
+    store,
+    sharedGmgn,
+    options.providers?.codex,
+    [registry.demo, registry.live],
+  );
+  const sharedProviders = { ...options.providers, gmgn: sharedGmgn, learning };
   let engine!: Engine;
   let unsubscribeAttempts = () => {};
   const manager = new ModeManager(
     store,
-    () => {
+    (mode) => {
       unsubscribeAttempts();
-      engine = new Engine(store, options.providers);
+      const context = registry.context(mode);
+      engine = new Engine(context.database, {
+        ...sharedProviders,
+        generation: context.generation,
+      });
       unsubscribeAttempts = subscribeAttempts();
       return engine;
     },
-    activateNormalLive,
+    options.verifyLive ?? activateNormalLive,
     async () => {
       await accountHistory.stop();
     },
+    undefined,
+    registry,
   );
   const streams = new Set<ServerResponse>();
   const executionMarker = () => {
     const pending = Number(
-      store.db
+      registry.live.db
         .prepare(
           "SELECT count(*) n FROM executions WHERE json_extract(payload,'$.intent.mode')='live' AND state NOT IN ('CONFIRMED','FAILED')",
         )
@@ -121,7 +172,7 @@ export async function startServer(
     );
     if (pending) throw Error("ACCOUNT_EXECUTION_PENDING");
     return Number(
-      store.db
+      registry.live.db
         .prepare(
           "SELECT coalesce(max(rowid),0) n FROM executions WHERE json_extract(payload,'$.intent.mode')='live'",
         )
@@ -129,8 +180,8 @@ export async function startServer(
     );
   };
   const positionMarker = () =>
-    store
-      .managedPositions(env.TRADING_MODE)
+    registry.live
+      .managedPositions("live")
       .filter((p) => !["CLOSED", "FAILED"].includes(p.state))
       .map((p) => [p.id, p.state, p.quantity].join(":"))
       .sort()
@@ -150,7 +201,7 @@ export async function startServer(
       const wallet = await engine.balance();
       const at = Date.now(),
         value = accountPositionValue(
-          store.managedPositions(env.TRADING_MODE),
+          registry.live.managedPositions("live"),
           at,
         );
       if (
@@ -160,6 +211,14 @@ export async function startServer(
         value.positionLamports === null
       )
         throw Error("ACCOUNT_OBSERVATION_INCOMPLETE");
+      registry.live.record("portfolio_snapshots", undefined, {
+        at,
+        walletLamports: wallet.toString(),
+        positionLamports: value.positionLamports,
+        totalLamports: (wallet + BigInt(value.positionLamports)).toString(),
+        positionCount: value.positionCount,
+        source: "RECONCILED_BLOCKCHAIN",
+      });
       return {
         at,
         walletLamports: wallet.toString(),
@@ -239,6 +298,21 @@ export async function startServer(
     return JSON.parse(text || "{}") as unknown;
   };
   const server = createServer(async (req, res) => {
+    // Capture the request's immutable trading database. A later switch cannot
+    // retarget an in-flight read or write into the other financial environment.
+    const requestEngine = engine;
+    if (!requestEngine) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end('{"error":"ENGINE_INITIALIZING"}');
+      return;
+    }
+    const store = requestEngine.store;
+    const readBody = async () => {
+      const value = await body(req);
+      if (requestEngine !== engine || manager.isTransitioning)
+        throw new Blocked("MODE_CHANGED_RELOAD_REQUIRED");
+      return value;
+    };
     res.setHeader(
       "Content-Security-Policy",
       `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src ${TOKEN_IMAGE_CSP}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
@@ -257,6 +331,7 @@ export async function startServer(
         req.method === "POST" &&
         url.pathname.startsWith("/api/") &&
         url.pathname !== "/api/mode" &&
+        !url.pathname.startsWith("/api/chart-learning") &&
         manager.isTransitioning
       )
         throw new Blocked("MODE_TRANSITION_IN_PROGRESS");
@@ -264,6 +339,7 @@ export async function startServer(
         req.method === "GET" &&
         url.pathname.startsWith("/api/") &&
         url.pathname !== "/api/mode" &&
+        !url.pathname.startsWith("/api/chart-learning") &&
         manager.isTransitioning
       )
         return reply(res, 409, { error: "MODE_TRANSITION_IN_PROGRESS" });
@@ -275,6 +351,12 @@ export async function startServer(
         )
           return reply(res, 403, { error: "LOCAL_ORIGIN_AND_CSRF_REQUIRED" });
       }
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/api/chart-learning" ||
+          url.pathname.startsWith("/api/chart-learning/"))
+      )
+        return reply(res, 200, chartLearningView(engine, url));
       if (req.method === "GET" && url.pathname === "/api/status")
         return reply(res, 200, { ...((await fullStatus()) as object), csrf });
       if (req.method === "GET" && url.pathname === "/favicon.ico") {
@@ -287,7 +369,7 @@ export async function startServer(
       if (req.method === "GET" && url.pathname === "/api/positions/count")
         return reply(res, 200, dashboardPositionCount(store, env.TRADING_MODE));
       if (req.method === "GET" && url.pathname === "/api/overview")
-        return reply(res, 200, engine.overviewStatus());
+        return reply(res, 200, requestEngine.overviewStatus());
       if (req.method === "GET" && url.pathname === "/api/mode")
         return reply(res, 200, manager.status());
       if (req.method === "GET" && url.pathname === "/api/demo-account") {
@@ -306,12 +388,12 @@ export async function startServer(
         );
       }
       if (req.method === "GET" && url.pathname === "/api/settings")
-        return reply(res, 200, engine.settings);
+        return reply(res, 200, requestEngine.settings);
       if (req.method === "GET" && url.pathname === "/api/statistics") {
         const strategy = z
           .enum(["ALL", "KRONOS"])
           .parse(url.searchParams.get("strategy") ?? "ALL");
-        const data = engine.analytics(
+        const data = requestEngine.analytics(
           strategy === "ALL" ? undefined : strategy,
         );
         return reply(
@@ -348,7 +430,7 @@ export async function startServer(
         );
       }
       if (req.method === "GET" && url.pathname === "/api/kronos/settings")
-        return reply(res, 200, engine.settings);
+        return reply(res, 200, requestEngine.settings);
       if (
         (req.method === "GET" && url.pathname === "/api/kronos") ||
         (req.method === "POST" && url.pathname === "/api/kronos/control")
@@ -357,7 +439,7 @@ export async function startServer(
           ? reply(res, 200, {
               integrated: true,
               strategy: "KRONOS",
-              model: engine.kronos.status(),
+              model: requestEngine.kronos.status(),
             })
           : reply(res, 410, { error: "KRONOS_IS_INTEGRATED_USE_SETTINGS" });
       }
@@ -414,10 +496,10 @@ export async function startServer(
             ? {
                 ...c,
                 exitFeasibility: store.latest("exit_feasibility", mint),
-                sniperStructure: engine.structure.get(mint),
+                sniperStructure: requestEngine.structure.get(mint),
                 entryDiscoverySource: c.discovery?.sources.includes("TRENDING")
                   ? "TRENDING"
-                  : entrySource(c, engine.settings),
+                  : entrySource(c, requestEngine.settings),
               }
             : { error: "CANDIDATE_NOT_FOUND" },
         );
@@ -470,8 +552,8 @@ export async function startServer(
             discovery: discoveryContext(
               store.token(p.mint),
               Date.now(),
-              engine.settings.trendingFreshMs,
-              engine.discovery.feeds.TRENDING,
+              requestEngine.settings.trendingFreshMs,
+              requestEngine.discovery.feeds.TRENDING,
             ),
           })),
         );
@@ -482,7 +564,7 @@ export async function startServer(
             confirmation: z.string().optional(),
           })
           .strict()
-          .parse(await body(req));
+          .parse(await readBody());
         const result = await manager.switch(v.mode, v.confirmation);
         if (env.TRADING_MODE === "live") await accountHistory.start();
         cached = undefined;
@@ -498,7 +580,7 @@ export async function startServer(
         const v = z
           .object({ confirmation: z.string() })
           .strict()
-          .parse(await body(req));
+          .parse(await readBody());
         const result = await manager.resetDemo(v.confirmation);
         cached = undefined;
         shellCache = undefined;
@@ -508,7 +590,7 @@ export async function startServer(
         const v = z
           .object({ enabled: z.boolean() })
           .strict()
-          .parse(await body(req));
+          .parse(await readBody());
         if (
           v.enabled &&
           store
@@ -544,9 +626,9 @@ export async function startServer(
         return reply(res, 200, { ok: true });
       }
       if (req.method === "POST" && url.pathname === "/api/settings") {
-        const input = z.record(z.string(), z.unknown()).parse(await body(req));
+        const input = z.record(z.string(), z.unknown()).parse(await readBody());
         // Permission has its own operator command; stale parameter forms must not re-enable BUY.
-        engine.updateSettings(input);
+        requestEngine.updateSettings(input);
         cached = undefined;
         shellCache = undefined;
         return reply(res, 200, { ok: true });
@@ -558,8 +640,8 @@ export async function startServer(
             sellPercent: z.number().min(0.01).max(100).optional(),
           })
           .strict()
-          .parse(await body(req));
-        engine.emergency(
+          .parse(await readBody());
+        requestEngine.emergency(
           v.positionId,
           Math.round((v.sellPercent ?? 100) * 100),
         );
@@ -569,8 +651,8 @@ export async function startServer(
         const v = z
           .object({ positionId: z.string().uuid() })
           .strict()
-          .parse(await body(req));
-        engine.dismissPosition(v.positionId);
+          .parse(await readBody());
+        requestEngine.dismissPosition(v.positionId);
         cached = undefined;
         shellCache = undefined;
         return reply(res, 200, { ok: true });
@@ -578,7 +660,7 @@ export async function startServer(
       if (req.method === "POST" && url.pathname === "/api/scan") {
         if (!manager.status().active)
           throw new Blocked("ENGINE_SESSION_NOT_RUNNING");
-        if (!engine.scanning) void engine.tick();
+        if (!requestEngine.scanning) void requestEngine.tick();
         return reply(res, 202, { queued: true });
       }
       if (
@@ -618,20 +700,22 @@ export async function startServer(
     server.once("error", reject);
     server.listen(env.PORT, "127.0.0.1", resolve);
   }).catch((error) => {
-    store.close();
+    registry.close();
     release();
     throw error;
   });
   try {
-    await manager.startDefault();
+    if (options.demoOnly) await manager.switch("DEMO");
+    else await manager.startDefault();
   } catch (error) {
     await manager.stop();
     await new Promise<void>((done) => server.close(() => done()));
-    store.close();
+    registry.close();
     release();
     throw error;
   }
-  engine ??= new Engine(store, options.providers); // Stopped LIVE dashboard while awaiting explicit confirmation.
+  engine ??= new Engine(registry.forMode(env.TRADING_MODE), sharedProviders); // No automatic LIVE execution.
+  learning.startIndependent();
   await accountHistory
     .load()
     .catch(() => accountHistory.unavailable("ACCOUNT_HISTORY_UNAVAILABLE"));
@@ -689,11 +773,13 @@ export async function startServer(
     clearInterval(flowTimer);
     await accountHistory.stop();
     await manager.stop();
+    await learning.stop();
+    await sharedGmgn.coordinator.stop();
     while (updating) await sleep(50);
     for (const stream of streams) stream.end();
     await new Promise<void>((resolve) =>
       server.close(() => {
-        store.close();
+        registry.close();
         release();
         resolve();
       }),
@@ -703,6 +789,8 @@ export async function startServer(
   process.once("SIGTERM", stop);
   return {
     server,
+    registry,
+    learning,
     get engine() {
       return engine;
     },

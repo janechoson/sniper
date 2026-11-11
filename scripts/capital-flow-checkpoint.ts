@@ -1,3 +1,4 @@
+import { tradingDatabasePath } from "../src/database-session.js";
 import { writeFileSync } from "node:fs";
 import { env } from "../src/config.js";
 import { Store } from "../src/store.js";
@@ -7,7 +8,7 @@ import { hash, json } from "../src/util.js";
 // Independent read-only evidence: no Engine, signer, migration or submission.
 const label = process.argv[2] ?? "checkpoint";
 if (!/^[a-z0-9-]+$/.test(label)) throw Error("INVALID_LABEL");
-const store = new Store(env.DATABASE_PATH, { readOnly: true });
+const store = new Store(tradingDatabasePath("live"), { readOnly: true });
 try {
   const rpc = new Solana();
   const status = await fetch(`http://127.0.0.1:${env.PORT}/api/status`, {

@@ -21,6 +21,7 @@ import {
 } from "./domain.js";
 import { json } from "./util.js";
 import { learningMigration } from "./learning-schema.js";
+import { chartLearningMigration } from "./chart-learning-schema.js";
 import {
   demoMigration,
   demoCurrencyMigration,
@@ -35,29 +36,70 @@ import {
   type PositionSizing,
 } from "./position-sizing.js";
 export class Store {
+  private closed = false;
+  readonly boundMode?: Mode;
+  private readonly sharedDb?: DatabaseSync;
+  get mode(): Mode {
+    return this.boundMode ?? env.TRADING_MODE;
+  }
+  get learningDb() {
+    return this.sharedDb ?? this.db;
+  }
+  get sharedLearning() {
+    return !!this.sharedDb;
+  }
+  assertMode(mode: Mode) {
+    if (this.boundMode && mode !== this.boundMode)
+      throw new Blocked("TRADING_DATABASE_MODE_MISMATCH");
+  }
   private scopedRecords = false;
   private scopedTokens = false;
   private virtualSchema = false;
   readonly db: DatabaseSync;
-  constructor(path: string, options: { readOnly?: boolean } = {}) {
+  constructor(
+    readonly path: string,
+    options: {
+      readOnly?: boolean;
+      mode?: Mode;
+      learningDb?: DatabaseSync;
+      initializeDemo?: boolean;
+    } = {},
+  ) {
+    this.boundMode = options.mode;
+    this.sharedDb = options.learningDb;
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path, { readOnly: options.readOnly ?? false });
-    if (options.readOnly) {
-      this.db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
-      this.scopedRecords = this.db
-        .prepare("PRAGMA table_info(records)")
-        .all()
-        .some((r) => r.name === "scope_mode");
-      this.scopedTokens = !!this.db
-        .prepare("SELECT 1 FROM sqlite_master WHERE name='mode_tokens'")
-        .get();
-      this.virtualSchema = !!this.db
-        .prepare("SELECT 1 FROM sqlite_master WHERE name='demo_accounts'")
-        .get();
-      return;
-    }
-    this.db
-      .exec(`PRAGMA journal_mode=WAL;PRAGMA busy_timeout=5000;PRAGMA synchronous=FULL;PRAGMA foreign_keys=ON;
+    try {
+      if (this.boundMode && !options.readOnly) {
+        this.db.exec(
+          "CREATE TABLE IF NOT EXISTS database_identity(id INTEGER PRIMARY KEY CHECK(id=1),role TEXT NOT NULL)",
+        );
+        this.db
+          .prepare("INSERT OR IGNORE INTO database_identity VALUES(1,?)")
+          .run(this.boundMode);
+        if (
+          this.db
+            .prepare("SELECT role FROM database_identity WHERE id=1")
+            .get()!.role !== this.boundMode
+        )
+          throw new Blocked("DATABASE_ROLE_MISMATCH");
+      }
+      if (options.readOnly) {
+        this.db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
+        this.scopedRecords = this.db
+          .prepare("PRAGMA table_info(records)")
+          .all()
+          .some((r) => r.name === "scope_mode");
+        this.scopedTokens = !!this.db
+          .prepare("SELECT 1 FROM sqlite_master WHERE name='mode_tokens'")
+          .get();
+        this.virtualSchema = !!this.db
+          .prepare("SELECT 1 FROM sqlite_master WHERE name='demo_accounts'")
+          .get();
+        return;
+      }
+      this.db
+        .exec(`PRAGMA journal_mode=WAL;PRAGMA busy_timeout=5000;PRAGMA synchronous=FULL;PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS migrations(version INTEGER PRIMARY KEY,at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS tokens(mint TEXT PRIMARY KEY,payload TEXT NOT NULL,processed INTEGER NOT NULL DEFAULT 0,at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS discovery_events(id INTEGER PRIMARY KEY,mint TEXT NOT NULL,source TEXT NOT NULL,at INTEGER NOT NULL);
@@ -97,41 +139,95 @@ export class Store {
  INSERT OR IGNORE INTO migrations VALUES(6,unixepoch());
  CREATE INDEX IF NOT EXISTS execution_mint_mode ON executions(json_extract(payload,'$.intent.mint'),json_extract(payload,'$.intent.mode'));
  INSERT OR IGNORE INTO migrations VALUES(3,unixepoch());`);
-    this.db.exec(learningMigration);
-    this.db.exec(demoMigration);
-    this.db.exec(sessionMigration);
-    if (
-      !this.db
-        .prepare("PRAGMA table_info(records)")
-        .all()
-        .some((r) => r.name === "scope_mode")
-    )
-      this.db.exec("ALTER TABLE records ADD COLUMN scope_mode TEXT");
-    if (
-      !this.db
-        .prepare("PRAGMA table_info(records)")
-        .all()
-        .some((r) => r.name === "scope_account")
-    )
-      this.db.exec("ALTER TABLE records ADD COLUMN scope_account TEXT");
-    this.db
-      .exec(`CREATE INDEX IF NOT EXISTS record_mode_lookup ON records(scope_mode,scope_account,kind,mint,id);
+      if (!this.sharedDb) {
+        this.db.exec(learningMigration);
+        this.db.exec(chartLearningMigration);
+      }
+      this.db.exec(demoMigration);
+      this.db.exec(sessionMigration);
+      if (
+        !this.db
+          .prepare("PRAGMA table_info(records)")
+          .all()
+          .some((r) => r.name === "scope_mode")
+      )
+        this.db.exec("ALTER TABLE records ADD COLUMN scope_mode TEXT");
+      if (
+        !this.db
+          .prepare("PRAGMA table_info(records)")
+          .all()
+          .some((r) => r.name === "scope_account")
+      )
+        this.db.exec("ALTER TABLE records ADD COLUMN scope_account TEXT");
+      this.db
+        .exec(`CREATE INDEX IF NOT EXISTS record_mode_lookup ON records(scope_mode,scope_account,kind,mint,id);
       CREATE TABLE IF NOT EXISTS mode_tokens(mode TEXT NOT NULL,mint TEXT NOT NULL,payload TEXT NOT NULL,processed INTEGER NOT NULL DEFAULT 0,at INTEGER NOT NULL,PRIMARY KEY(mode,mint));
       INSERT OR IGNORE INTO mode_tokens SELECT 'live',mint,payload,processed,at FROM tokens;
       INSERT OR IGNORE INTO migrations VALUES(15,unixepoch());`);
-    this.db.exec(demoCurrencyMigration);
-    this.scopedRecords = this.scopedTokens = this.virtualSchema = true;
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS failures_sample ON trade_execution_failures(sample_id); CREATE INDEX IF NOT EXISTS evidence_sample ON trade_execution_evidence(sample_id); CREATE INDEX IF NOT EXISTS learning_mode_entry ON trade_learning_samples(mode,entry_at);",
-    );
-    // Explicit owner-requested policy revision: 1% entries during data collection.
-    // Learning itself never changes strategy parameters.
-    this.db
-      .exec(`UPDATE settings SET payload=json_set(payload,'$.positionSizePercent',1)
+      this.db.exec(demoCurrencyMigration);
+      this.scopedRecords = this.scopedTokens = this.virtualSchema = true;
+      if (!this.sharedDb)
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS failures_sample ON trade_execution_failures(sample_id); CREATE INDEX IF NOT EXISTS evidence_sample ON trade_execution_evidence(sample_id); CREATE INDEX IF NOT EXISTS learning_mode_entry ON trade_learning_samples(mode,entry_at);",
+        );
+      // Explicit owner-requested policy revision: 1% entries during data collection.
+      // Learning itself never changes strategy parameters.
+      this.db
+        .exec(`UPDATE settings SET payload=json_set(payload,'$.positionSizePercent',1)
       WHERE key='strategyV2' AND json_extract(payload,'$.positionSizePercent')=10
       AND NOT EXISTS(SELECT 1 FROM migrations WHERE version=5);
       INSERT OR IGNORE INTO migrations VALUES(5,unixepoch());`);
-    if (env.TRADING_MODE === "demo") new DemoLedger(this.db).initialize();
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS learning_outbox(id TEXT PRIMARY KEY,kind TEXT NOT NULL,at INTEGER NOT NULL,payload TEXT NOT NULL,delivered_at INTEGER);`,
+      );
+      if (this.boundMode)
+        this.db.exec("INSERT OR IGNORE INTO migrations VALUES(18,unixepoch())");
+      if (this.boundMode) {
+        if (this.boundMode === "live")
+          for (const table of [
+            "demo_accounts",
+            "demo_ledger",
+            "demo_holdings",
+            "demo_reservations",
+            "demo_balance_snapshots",
+            "demo_account_units",
+          ])
+            for (const op of ["INSERT", "UPDATE"])
+              this.db.exec(
+                `CREATE TRIGGER IF NOT EXISTS ${table}_live_forbidden_${op.toLowerCase()} BEFORE ${op} ON ${table} BEGIN SELECT RAISE(ABORT,'DEMO_ACCOUNT_IN_LIVE_DATABASE'); END;`,
+              );
+        for (const table of [
+          "positions",
+          "manual_exits",
+          "candidate_attempts",
+          "buy_ownership_claims",
+          "candidate_lifecycle",
+          "mode_tokens",
+          "trending_appearances",
+          "capital_flow_states",
+          "position_runner_memory",
+          "sniper_structure_watch",
+          "entry_structure_watch",
+        ])
+          for (const op of ["INSERT", "UPDATE"])
+            this.db.exec(
+              `CREATE TRIGGER IF NOT EXISTS ${table}_mode_${op.toLowerCase()} BEFORE ${op} ON ${table} WHEN NEW.mode<>'${this.boundMode}' BEGIN SELECT RAISE(ABORT,'TRADING_DATABASE_MODE_MISMATCH'); END;`,
+            );
+        for (const [table, expr] of [
+          ["intents", "json_extract(NEW.payload,'$.mode')"],
+          ["executions", "json_extract(NEW.payload,'$.intent.mode')"],
+        ])
+          for (const op of ["INSERT", "UPDATE"])
+            this.db.exec(
+              `CREATE TRIGGER IF NOT EXISTS ${table}_mode_${op.toLowerCase()} BEFORE ${op} ON ${table} WHEN ${expr} IS NULL OR ${expr}<>'${this.boundMode}' BEGIN SELECT RAISE(ABORT,'TRADING_DATABASE_MODE_MISMATCH'); END;`,
+            );
+      }
+      if (this.mode === "demo" && options.initializeDemo !== false)
+        new DemoLedger(this.db).initialize();
+    } catch (e) {
+      this.db.close();
+      throw e;
+    }
   }
   atomic<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -146,7 +242,7 @@ export class Store {
   }
   private scopeKey(key: string) {
     if (
-      env.TRADING_MODE !== "demo" ||
+      this.mode !== "demo" ||
       ["strategyV2", "selectedTradingMode"].includes(key)
     )
       return key;
@@ -162,9 +258,7 @@ export class Store {
       : "uninitialized";
   }
   candidateFlowKey(mint: string) {
-    return env.TRADING_MODE === "demo"
-      ? `demo:${this.demoAccountId()}:${mint}`
-      : mint;
+    return this.mode === "demo" ? `demo:${this.demoAccountId()}:${mint}` : mint;
   }
   get<T>(key: string): T | undefined {
     key = this.scopeKey(key);
@@ -207,7 +301,9 @@ export class Store {
   halt(reason: string, scope: "SYSTEM" | "TRANSACTION" = "SYSTEM") {
     this.reportFailure(reason, scope);
   }
-  record(kind: string, mint: string | undefined, payload: unknown) {
+  record(kind: string, mint: string | undefined, payload: unknown): void {
+    if (this.sharedLearning && !this.db.isTransaction)
+      return this.atomic(() => this.record(kind, mint, payload));
     this.db
       .prepare(
         "INSERT INTO records(kind,mint,payload,at,scope_mode,scope_account) VALUES(?,?,?,?,?,?)",
@@ -217,12 +313,37 @@ export class Store {
         mint ?? null,
         json(payload),
         Date.now(),
-        env.TRADING_MODE,
-        env.TRADING_MODE === "demo" ? this.demoAccountId() : null,
+        this.mode,
+        this.mode === "demo" ? this.demoAccountId() : null,
       );
+    if (
+      this.sharedLearning &&
+      [
+        "kronos_decisions",
+        "position_market",
+        "position_history",
+        "snapshots",
+        "common_eligibility",
+        "risk_decisions",
+      ].includes(kind)
+    )
+      this.db
+        .prepare("INSERT OR IGNORE INTO learning_outbox VALUES(?,?,?,?,NULL)")
+        .run(
+          randomUUID(),
+          "OBSERVATION",
+          Date.now(),
+          json({
+            kind,
+            mint,
+            payload,
+            mode: this.mode,
+            simulated: this.mode === "demo",
+          }),
+        );
   }
   event(type: string, mint?: string, reason?: string) {
-    this.record("events", mint, { type, reason, mode: env.TRADING_MODE });
+    this.record("events", mint, { type, reason, mode: this.mode });
   }
   pipelineEvent(
     type: string,
@@ -234,13 +355,13 @@ export class Store {
       type,
       mint,
       symbol: this.token(mint)?.symbol,
-      mode: env.TRADING_MODE,
+      mode: this.mode,
       at: Date.now(),
     });
   }
   latest<T>(kind: string, mint: string): T | undefined {
     if (!this.scopedRecords) {
-      if (env.TRADING_MODE === "demo") return undefined;
+      if (this.mode === "demo") return undefined;
       const row = this.db
         .prepare(
           "SELECT payload FROM records WHERE kind=? AND mint=? ORDER BY id DESC LIMIT 1",
@@ -252,18 +373,12 @@ export class Store {
       .prepare(
         "SELECT payload FROM records WHERE kind=? AND mint=? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT 1",
       )
-      .get(
-        kind,
-        mint,
-        env.TRADING_MODE,
-        env.TRADING_MODE,
-        this.demoAccountId(),
-      );
+      .get(kind, mint, this.mode, this.mode, this.demoAccountId());
     return r ? JSON.parse(String(r.payload)) : undefined;
   }
   recent(kind: string, limit = 100) {
     if (!this.scopedRecords) {
-      if (env.TRADING_MODE === "demo") return [];
+      if (this.mode === "demo") return [];
       return this.db
         .prepare(
           "SELECT mint,payload,at FROM records WHERE kind=? ORDER BY id DESC LIMIT ?",
@@ -275,18 +390,12 @@ export class Store {
       .prepare(
         "SELECT mint,payload,at FROM records WHERE kind=? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT ?",
       )
-      .all(
-        kind,
-        env.TRADING_MODE,
-        env.TRADING_MODE,
-        this.demoAccountId(),
-        limit,
-      )
+      .all(kind, this.mode, this.mode, this.demoAccountId(), limit)
       .map((r) => ({ ...r, payload: JSON.parse(String(r.payload)) }));
   }
   trace(mint: string) {
     if (!this.scopedRecords) {
-      if (env.TRADING_MODE === "demo") return [];
+      if (this.mode === "demo") return [];
       return this.db
         .prepare(
           "SELECT kind,payload,at FROM records WHERE mint=? ORDER BY id DESC LIMIT 100",
@@ -298,7 +407,7 @@ export class Store {
       .prepare(
         "SELECT kind,payload,at FROM records WHERE mint=? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT 100",
       )
-      .all(mint, env.TRADING_MODE, env.TRADING_MODE, this.demoAccountId())
+      .all(mint, this.mode, this.mode, this.demoAccountId())
       .map((r) => ({ ...r, payload: JSON.parse(String(r.payload)) }));
   }
   discover(c: Candidate) {
@@ -309,7 +418,7 @@ export class Store {
           "INSERT INTO mode_tokens(mode,mint,payload,at) VALUES(?,?,?,?) ON CONFLICT(mode,mint) DO UPDATE SET payload=excluded.payload",
         )
         .run(
-          env.TRADING_MODE,
+          this.mode,
           c.mint,
           json({
             ...mergeDiscovery(old, c),
@@ -329,7 +438,7 @@ export class Store {
   }
   enqueueTrending(
     candidates: Candidate[],
-    mode = env.TRADING_MODE,
+    mode = this.mode,
     fetchedAt?: number,
   ) {
     const key = "oneShotAppearanceWatermark:" + mode;
@@ -379,11 +488,11 @@ export class Store {
       }
     });
   }
-  trendingBatch(mode = env.TRADING_MODE) {
+  trendingBatch(mode = this.mode) {
     return this.get<TrendingBatch>("trendingBatchV1:" + mode);
   }
   /** Admission/startup only; dashboard reads never synthesize batch metadata. */
-  prepareTrendingBatch(mode = env.TRADING_MODE) {
+  prepareTrendingBatch(mode = this.mode) {
     const current = this.trendingBatch(mode);
     if (current?.entries.some((r) => r.status !== "COMPLETE")) return current;
     const first = this.db
@@ -413,7 +522,7 @@ export class Store {
     this.set("trendingBatchV1:" + mode, batch);
     return batch;
   }
-  trendingWorkPending(mode = env.TRADING_MODE) {
+  trendingWorkPending(mode = this.mode) {
     return (
       !!this.db
         .prepare(
@@ -436,7 +545,7 @@ export class Store {
   startTrendingAppearance(
     binding: TrendingBatchBinding,
     attemptId: string,
-    mode = env.TRADING_MODE,
+    mode = this.mode,
   ) {
     const batch = this.prepareTrendingBatch(mode);
     const row = batch?.entries.find(
@@ -484,7 +593,7 @@ export class Store {
     }
     this.set("trendingBatchV1:" + a.mode, batch);
   }
-  finishUnboundTrendingAppearance(id: number, mode = env.TRADING_MODE) {
+  finishUnboundTrendingAppearance(id: number, mode = this.mode) {
     const batch = this.trendingBatch(mode);
     const row = batch?.entries.find((r) => r.appearanceId === id);
     const consumed = this.db
@@ -498,7 +607,7 @@ export class Store {
     row.result = "LEGACY_LIFECYCLE_FINISHED";
     this.set("trendingBatchV1:" + mode, batch);
   }
-  recoverTrendingBatch(mode = env.TRADING_MODE) {
+  recoverTrendingBatch(mode = this.mode) {
     const batch = this.trendingBatch(mode);
     for (const entry of batch?.entries ?? []) {
       if (entry.status !== "PROCESSING" || !entry.attemptId) continue;
@@ -513,7 +622,7 @@ export class Store {
         });
     }
   }
-  trendingBatchProgress(mode = env.TRADING_MODE) {
+  trendingBatchProgress(mode = this.mode) {
     const batch = this.trendingBatch(mode);
     const waitingAll = Number(
       this.db
@@ -578,7 +687,7 @@ export class Store {
   }
   token(mint: string): Candidate | undefined {
     if (!this.scopedTokens) {
-      if (env.TRADING_MODE === "demo") return;
+      if (this.mode === "demo") return;
       const r = this.db
         .prepare("SELECT payload FROM tokens WHERE mint=?")
         .get(mint);
@@ -586,12 +695,12 @@ export class Store {
     }
     const r = this.db
       .prepare("SELECT payload FROM mode_tokens WHERE mode=? AND mint=?")
-      .get(env.TRADING_MODE, mint);
+      .get(this.mode, mint);
     return r ? withTokenLogo(JSON.parse(String(r.payload))) : undefined;
   }
   tokens(): Candidate[] {
     if (!this.scopedTokens) {
-      if (env.TRADING_MODE === "demo") return [];
+      if (this.mode === "demo") return [];
       return this.db
         .prepare("SELECT payload FROM tokens ORDER BY at DESC LIMIT 250")
         .all()
@@ -601,10 +710,13 @@ export class Store {
       .prepare(
         "SELECT payload FROM mode_tokens WHERE mode=? ORDER BY at DESC LIMIT 250",
       )
-      .all(env.TRADING_MODE)
+      .all(this.mode)
       .map((r) => withTokenLogo(JSON.parse(String(r.payload))));
   }
-  savePosition(p: Position) {
+  savePosition(p: Position): void {
+    this.assertMode(p.mode);
+    if (this.sharedLearning && p.state === "CLOSED" && !this.db.isTransaction)
+      return this.atomic(() => this.savePosition(p));
     const old = this.db
       .prepare("SELECT payload FROM positions WHERE id=?")
       .get(p.id);
@@ -663,10 +775,14 @@ export class Store {
         "INSERT INTO positions VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,payload=excluded.payload",
       )
       .run(p.id, p.mode, p.mint, p.state, json(p));
+    if (this.sharedLearning && p.state === "CLOSED")
+      this.db
+        .prepare("INSERT OR IGNORE INTO learning_outbox VALUES(?,?,?,?,NULL)")
+        .run("closed:" + p.id, "TRADE_CLOSED", Date.now(), json(p));
     if (p.ownershipClaimId && p.state === "CLOSED" && BigInt(p.quantity) === 0n)
       this.resolveBuyOwnership(p.ownershipClaimId, "CLOSED");
   }
-  positions(mode: Mode = env.TRADING_MODE): Position[] {
+  positions(mode: Mode = this.mode): Position[] {
     return this.db
       .prepare("SELECT payload FROM positions" + (mode ? " WHERE mode=?" : ""))
       .all(...(mode ? [mode] : []))
@@ -683,7 +799,7 @@ export class Store {
       .prepare(
         "SELECT payload FROM candidate_attempts WHERE id=? AND mode=? AND (?<>'demo' OR json_extract(payload,'$.demoAccountId')=?)",
       )
-      .get(id, env.TRADING_MODE, env.TRADING_MODE, this.demoAccountId());
+      .get(id, this.mode, this.mode, this.demoAccountId());
     return row ? JSON.parse(String(row.payload)) : undefined;
   }
   history(
@@ -823,7 +939,10 @@ export class Store {
         reason: "CANDIDATE_AUTHORITY_REVOKED",
       });
   }
-  execution(e: Execution) {
+  execution(e: Execution): void {
+    this.assertMode(e.intent.mode);
+    if (this.sharedLearning && !this.db.isTransaction)
+      return this.atomic(() => this.execution(e));
     const previous = this.db
       .prepare("SELECT state,payload FROM executions WHERE id=?")
       .get(e.id);
@@ -850,6 +969,10 @@ export class Store {
         "INSERT INTO executions VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,signature=excluded.signature,payload=excluded.payload",
       )
       .run(e.id, e.intent.id, e.state, e.signature ?? null, json(e));
+    if (this.sharedLearning)
+      this.db
+        .prepare("INSERT OR IGNORE INTO learning_outbox VALUES(?,?,?,?,NULL)")
+        .run(randomUUID(), "EXECUTION", Date.now(), json(e));
     this.syncManual(e);
     if (e.intent.side === "SELL") {
       const p = this.positions(e.intent.mode).find(
@@ -902,7 +1025,7 @@ export class Store {
         },
       );
   }
-  executions(mode: Mode = env.TRADING_MODE): Execution[] {
+  executions(mode: Mode = this.mode): Execution[] {
     return this.db
       .prepare(
         "SELECT payload FROM executions WHERE json_extract(payload,'$.intent.mode')=? AND (?<>'demo' OR json_extract(payload,'$.intent.demoAccountId')=?)",
@@ -1337,6 +1460,7 @@ export class Store {
     );
   }
   claim(i: Intent, capital?: { balance: bigint; reserve: bigint }): Execution {
+    this.assertMode(i.mode);
     i = structuredClone(i);
     return this.atomic(() => {
       if (i.mode === "demo") i.demoAccountId = this.demoAccountId();
@@ -1365,6 +1489,18 @@ export class Store {
       if (i.side === "SELL") {
         const owner = this.positions(i.mode).find((p) => p.id === i.positionId);
         if (!owner) throw new Blocked("SELL_POSITION_MISSING");
+        if (i.decisionSource === "CODEX" || i.exitAuthority === "CODEX") {
+          const proof = this.learningDb
+            .prepare(
+              "SELECT payload FROM chart_decisions WHERE id=? AND position_id=? AND mode=? AND action='SELL'",
+            )
+            .get(i.decisionId ?? "", owner.id, owner.mode);
+          if (
+            !proof ||
+            String(proof.payload) !== JSON.stringify(owner.codexDecision)
+          )
+            throw new Blocked("CODEX_PERSISTED_EXIT_PROOF_REQUIRED");
+        }
         assertStrategySell(i, owner);
       }
       if (i.side === "SELL" && !this.positionManaged(i.positionId, i.mode))
@@ -1476,12 +1612,12 @@ export class Store {
   }
   count(kind: string, since = 0, distinctMint = false) {
     const aggregate = distinctMint ? "count(DISTINCT mint)" : "count(*)";
-    if (!this.scopedRecords && env.TRADING_MODE === "demo") return 0;
+    if (!this.scopedRecords && this.mode === "demo") return 0;
     const scope = this.scopedRecords
       ? " AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?)"
       : "";
     const args = this.scopedRecords
-      ? [kind, since, env.TRADING_MODE, env.TRADING_MODE, this.demoAccountId()]
+      ? [kind, since, this.mode, this.mode, this.demoAccountId()]
       : [kind, since];
     return Number(
       this.db
@@ -1499,15 +1635,18 @@ export class Store {
       ? Number(
           this.db
             .prepare("SELECT count(*) n FROM mode_tokens WHERE mode=?")
-            .get(env.TRADING_MODE)?.n ?? 0,
+            .get(this.mode)?.n ?? 0,
         )
-      : env.TRADING_MODE === "demo"
+      : this.mode === "demo"
         ? 0
         : Number(
             this.db.prepare("SELECT count(*) n FROM tokens").get()?.n ?? 0,
           );
   }
   close() {
-    this.db.close();
+    if (!this.closed) {
+      this.db.close();
+      this.closed = true;
+    }
   }
 }

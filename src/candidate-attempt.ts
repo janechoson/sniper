@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Store } from "./store.js";
 import type { Candidate, Strategy, RiskResult } from "./domain.js";
-import { env } from "./config.js";
+
 import { safeError } from "./util.js";
 import type { TrendingBatchBinding } from "./trending-batch.js";
 
@@ -12,6 +12,7 @@ export const ATTEMPT_STAGES = [
   "HISTORY",
   "CAPITAL_FLOW",
   "COMMON_RISK",
+  "CODEX_GUARD",
   "KRONOS",
   "RISK",
   "FINAL_ANALYSIS",
@@ -75,7 +76,7 @@ export class CandidateAttempts {
       .prepare(
         "SELECT payload FROM candidate_attempts WHERE mode=? AND result='RUNNING'",
       )
-      .all(env.TRADING_MODE)) {
+      .all(this.store.mode)) {
       const a = JSON.parse(String(row.payload)) as CandidateAttempt;
       const execution = store
         .executions()
@@ -107,7 +108,7 @@ export class CandidateAttempts {
       .prepare(
         "SELECT payload FROM candidate_attempts WHERE mode=? AND (?<>'demo' OR json_extract(payload,'$.demoAccountId')=?) ORDER BY started_at DESC LIMIT 1",
       )
-      .get(env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId());
+      .get(this.store.mode, this.store.mode, store.demoAccountId());
     if (latest) this.current = JSON.parse(String(latest.payload));
   }
   subscribe(listener: () => void) {
@@ -152,9 +153,9 @@ export class CandidateAttempts {
       this.current = {
         ...binding,
         attemptId,
-        mode: env.TRADING_MODE,
+        mode: this.store.mode,
         demoAccountId:
-          env.TRADING_MODE === "demo" ? this.store.demoAccountId() : undefined,
+          this.store.mode === "demo" ? this.store.demoAccountId() : undefined,
         mint: candidate.mint,
         symbol: candidate.symbol,
         source: "GMGN_TRENDING",
@@ -318,10 +319,10 @@ export class CandidateAttempts {
         "DELETE FROM records WHERE kind='events' AND scope_mode=? AND scope_account IS ? AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' AND id NOT IN (SELECT id FROM records WHERE kind='events' AND scope_mode=? AND scope_account IS ? AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' ORDER BY id DESC LIMIT 4000)",
       )
       .run(
-        env.TRADING_MODE,
-        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
-        env.TRADING_MODE,
-        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
+        this.store.mode,
+        this.store.mode === "demo" ? this.store.demoAccountId() : null,
+        this.store.mode,
+        this.store.mode === "demo" ? this.store.demoAccountId() : null,
       );
   }
   private persist(a = this.current!) {

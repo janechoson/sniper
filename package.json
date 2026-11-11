@@ -9,6 +9,10 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "demo": "tsx src/demo.ts",
+    "learning:status": "tsx scripts/chart-learning-status.ts",
+    "learning:replay": "tsx scripts/chart-learning-replay.ts",
+    "migrate:databases": "tsx scripts/migrate-databases.ts",
     "start": "node dist/server.js",
     "live": "node dist/live.js",
     "build": "node scripts/build.mjs",

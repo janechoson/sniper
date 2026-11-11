@@ -1,4 +1,4 @@
-import { env, type Settings } from "./config.js";
+import { type Settings } from "./config.js";
 import type { Candidate, FailureInfo, RiskResult } from "./domain.js";
 import type { Store } from "./store.js";
 export interface CandidateState {
@@ -51,14 +51,14 @@ export class CandidateLifecycle {
             AND a.id=CAST(json_extract(candidate_lifecycle.payload,'$.appearanceId') AS INTEGER))
       )`,
       )
-      .run(env.TRADING_MODE, store.trendingBatch()?.id ?? "__NO_BATCH__");
+      .run(this.store.mode, store.trendingBatch()?.id ?? "__NO_BATCH__");
   }
   list(): CandidateState[] {
     return this.store.db
       .prepare(
         "SELECT payload FROM candidate_lifecycle WHERE mode=? ORDER BY CAST(json_extract(payload,'$.appearanceId') AS INTEGER) ASC,mint ASC",
       )
-      .all(env.TRADING_MODE)
+      .all(this.store.mode)
       .map((r) => JSON.parse(String(r.payload)));
   }
   get(mint: string) {
@@ -70,7 +70,7 @@ export class CandidateLifecycle {
       .prepare(
         "INSERT INTO candidate_lifecycle VALUES(?,?,?) ON CONFLICT(mode,mint) DO UPDATE SET payload=excluded.payload",
       )
-      .run(env.TRADING_MODE, row.mint, JSON.stringify(row));
+      .run(this.store.mode, row.mint, JSON.stringify(row));
     if (previous?.state !== row.state) {
       const names: Record<string, string> = {
         QUEUED: "CANDIDATE_QUEUED",
@@ -133,7 +133,7 @@ export class CandidateLifecycle {
       this.store.finishUnboundTrendingAppearance(row.appearanceId);
     this.store.db
       .prepare("DELETE FROM candidate_lifecycle WHERE mode=? AND mint=?")
-      .run(env.TRADING_MODE, mint);
+      .run(this.store.mode, mint);
     this.store.db
       .prepare("DELETE FROM candidate_flow_states WHERE mint=?")
       .run(this.store.candidateFlowKey(mint));
@@ -147,7 +147,7 @@ export class CandidateLifecycle {
         .prepare(
           "UPDATE trending_appearances SET consumed=1 WHERE mode=? AND mint=? AND consumed=0",
         )
-        .run(env.TRADING_MODE, mint);
+        .run(this.store.mode, mint);
       const row = this.get(mint);
       if (row?.state === "QUEUED") this.finish(mint);
       for (const entry of priorBatch?.entries ?? [])
@@ -158,14 +158,14 @@ export class CandidateLifecycle {
         }
     }
     if (priorBatch && blacklist.size)
-      this.store.set("trendingBatchV1:" + env.TRADING_MODE, priorBatch);
+      this.store.set("trendingBatchV1:" + this.store.mode, priorBatch);
     const batch = this.store.prepareTrendingBatch();
     if (!batch) return [];
     const rows = this.store.db
       .prepare(
         "SELECT * FROM trending_appearances WHERE mode=? AND consumed=0 AND seen_at=? ORDER BY id",
       )
-      .all(env.TRADING_MODE, batch.fetchedAt);
+      .all(this.store.mode, batch.fetchedAt);
     for (const r of rows) {
       const c = JSON.parse(String(r.payload)) as Candidate;
       if (this.get(c.mint)) continue;
@@ -188,7 +188,7 @@ export class CandidateLifecycle {
       .prepare(
         "DELETE FROM trending_appearances WHERE mode=? AND consumed=1 AND id IN (SELECT id FROM trending_appearances WHERE mode=? AND consumed=1 ORDER BY id DESC LIMIT -1 OFFSET 2000)",
       )
-      .run(env.TRADING_MODE, env.TRADING_MODE);
+      .run(this.store.mode, this.store.mode);
     return this.list()
       .filter((r) => r.state === "QUEUED" && r.batchId === batch.id)
       .map((r) => r.mint);

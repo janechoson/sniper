@@ -33,6 +33,7 @@ export const env = z
     SOLANA_RPC_WS: z.url().optional(),
     SOLANA_RPC_URL: z.url().default("https://api.mainnet-beta.solana.com"),
     DATABASE_PATH: z.string().default("data/bot.sqlite"),
+    DATABASE_DIRECTORY:z.string().optional(),
     PORT: z.coerce.number().int().min(1024).max(65535).default(3000),
     SCANNER_ENABLED: bool.default(true),
     SCAN_INTERVAL_MS: z.coerce.number().int().min(10000).default(15000),

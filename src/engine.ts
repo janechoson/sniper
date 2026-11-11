@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { ChartLearning } from "./chart-learning.js";
+import { ExitCoordinator } from "./exit-coordinator.js";
+import type { ReasoningRuntime } from "./codex-runtime.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CandidateAttempts } from "./candidate-attempt.js";
@@ -72,6 +75,17 @@ import { assertStrategySell } from "./strategy-authority.js";
 import { tradeAccounting } from "./trade-accounting.js";
 import { safeError, sleep } from "./util.js";
 export class Engine {
+  private readonly ownsLearning: boolean;
+  get mode() {
+    return this.store.mode;
+  }
+  readonly tradingContext: Readonly<{
+    mode: import("./domain.js").Mode;
+    database: Store;
+    generation: number;
+  }>;
+  readonly chartLearning: ChartLearning;
+  readonly exitCoordinator: ExitCoordinator;
   readonly kronos: KronosDecisionStrategy;
   private kronosJobs = new Map<string, Promise<void>>();
   private kronosAttempts = new Map<string, number>();
@@ -134,7 +148,7 @@ export class Engine {
   private timer?: NodeJS.Timeout;
   private exitTimer?: NodeJS.Timeout;
   private get manual() {
-    return this.store.activeManual(env.TRADING_MODE);
+    return this.store.activeManual(this.mode);
   }
   private get manualReady() {
     return this.manual.some(
@@ -155,6 +169,9 @@ export class Engine {
       demoQuotes?: QuoteSource;
       controlled?: ControlledSession;
       kronos?: KronosDecisionStrategy;
+      codex?: ReasoningRuntime;
+      learning?: ChartLearning;
+      generation?: number;
     },
   ) {
     this.kronos =
@@ -171,6 +188,16 @@ export class Engine {
         ),
       );
     this.gmgn = providers?.gmgn ?? new Gmgn();
+    this.ownsLearning = !providers?.learning;
+    this.tradingContext = Object.freeze({
+      mode: store.mode,
+      database: store,
+      generation: providers?.generation ?? 0,
+    });
+    this.chartLearning =
+      providers?.learning ??
+      new ChartLearning(store, this.gmgn, providers?.codex);
+    this.exitCoordinator = new ExitCoordinator(store);
     this.rpc = providers?.rpc ?? new Solana();
     this.executor = new Executor(
       store,
@@ -233,7 +260,7 @@ export class Engine {
     this.store.migrateExitOpportunities();
     this.store.migrateSellSafetyV2(this.settings.maxSnapshotAgeMs);
     // Unsigned decisions are observations, never executable restart orders.
-    for (const p of this.store.managedPositions(env.TRADING_MODE)) {
+    for (const p of this.store.managedPositions(this.mode)) {
       if (
         this.store
           .pending()
@@ -259,6 +286,7 @@ export class Engine {
         if (current?.strategy === "KRONOS") {
           if (h) {
             this.store.record("position_history", p.mint, h);
+            this.observeCodexPosition(current, h);
             this.scheduleKronosPosition(current, h);
           }
           return;
@@ -284,12 +312,12 @@ export class Engine {
     );
   }
   async balance() {
-    if (env.TRADING_MODE === "live") {
+    if (this.mode === "live") {
       if (!env.WALLET_PUBLIC_KEY)
         throw new Blocked("MISSING_WALLET_PUBLIC_KEY");
       return this.rpc.balance(env.WALLET_PUBLIC_KEY);
     }
-    if (env.TRADING_MODE !== "demo")
+    if (this.mode !== "demo")
       throw new Blocked("LEGACY_PAPER_SESSION_DISABLED");
     const ledger = new DemoLedger(this.store.db);
     ledger.initialize();
@@ -313,7 +341,7 @@ export class Engine {
       this.store.reportFailure(
         "Legacy open positions require review before Jupiter migration",
       );
-    if (env.TRADING_MODE === "live" && env.WALLET_PUBLIC_KEY) {
+    if (this.mode === "live" && env.WALLET_PUBLIC_KEY) {
       try {
         await this.monitor();
       } catch {
@@ -323,7 +351,7 @@ export class Engine {
       }
     }
     this.running = true;
-    if (env.TRADING_MODE === "demo") {
+    if (this.mode === "demo") {
       captureDemoBalance(this);
       this.demoBalanceTimer = setInterval(() => {
         try {
@@ -336,8 +364,13 @@ export class Engine {
 
     this.exitTimer = setInterval(() => {
       void this.processExits();
-      if (env.TRADING_MODE === "live") void this.exitLiquidity.pump();
+      if (this.mode === "live") void this.exitLiquidity.pump();
       this.positionHistory.pump();
+      if (!this.store.sharedLearning)
+        this.chartLearning.pump(
+          this.mode,
+          this.executor.isBusy || this.executionLoop || this.analyzing.size > 0,
+        );
       void this.monitor().catch(() => {
         this.lastError = "Position monitoring failed";
       });
@@ -364,8 +397,9 @@ export class Engine {
     await this.discovery.stop();
     await this.exitLiquidity.stop();
     await this.positionHistory.stop();
+    if (this.ownsLearning) await this.chartLearning.stop();
     await Promise.all(this.kronosJobs.values());
-    await this.gmgn.coordinator.stop();
+    if (this.ownsLearning) await this.gmgn.coordinator.stop();
     await this.settleEntryEvaluations();
     await Promise.all(this.smartMoneyJobs.values());
     while (
@@ -379,9 +413,9 @@ export class Engine {
       await sleep(50);
   }
   dismissPosition(id: string) {
-    const p = this.store.dismissPosition(id, env.TRADING_MODE);
+    const p = this.store.dismissPosition(id, this.mode);
     this.exitLiquidity.prune(
-      this.store.managedPositions(env.TRADING_MODE).map((p) => p.id),
+      this.store.managedPositions(this.mode).map((p) => p.id),
     );
     this.exitScheduled.delete(id);
     return p;
@@ -396,7 +430,7 @@ export class Engine {
     if (!Number.isInteger(sellBps) || sellBps < 1 || sellBps > 10000)
       throw new Blocked("Sell fraction must be between 0.01% and 100%");
     const p = this.store
-      .positions(env.TRADING_MODE)
+      .positions(this.mode)
       .find((p) => p.id === id && p.state === "OPEN" && !p.dismissal);
     if (!p) throw new Blocked("Position is not open");
     this.store.atomic(() => {
@@ -459,10 +493,10 @@ export class Engine {
     return {
       balance: await this.balance(),
       pending:
-        this.store.reserved(env.TRADING_MODE) -
+        this.store.reserved(this.mode) -
         (own?.intent.side === "BUY" ? BigInt(own.intent.amount) : 0n),
       positions: this.store
-        .positions(env.TRADING_MODE)
+        .positions(this.mode)
         .filter(
           (p) =>
             ["OPEN", "PENDING_ENTRY", "PENDING_EXIT"].includes(p.state) &&
@@ -470,7 +504,7 @@ export class Engine {
         ).length,
       duplicate: this.store.entryBlocked(
         mint,
-        env.TRADING_MODE,
+        this.mode,
         excludeId,
         excludeClaimId,
       ),
@@ -486,9 +520,9 @@ export class Engine {
     if (updateLifecycle) this.candidates.decision(mint, r);
     this.store.db
       .prepare("UPDATE mode_tokens SET processed=1 WHERE mode=? AND mint=?")
-      .run(env.TRADING_MODE, mint);
-    this.store.record("risk_decisions", mint, { ...r, mode: env.TRADING_MODE });
-    this.store.record("decisions", mint, { ...r, mode: env.TRADING_MODE });
+      .run(this.mode, mint);
+    this.store.record("risk_decisions", mint, { ...r, mode: this.mode });
+    this.store.record("decisions", mint, { ...r, mode: this.mode });
     this.store.event(
       r.allowed
         ? "RISK_ALLOW"
@@ -509,7 +543,7 @@ export class Engine {
     position ??=
       mint && !candidateOnly
         ? this.store
-            .positions(env.TRADING_MODE)
+            .positions(this.mode)
             .find(
               (p) =>
                 p.mint === mint &&
@@ -546,8 +580,7 @@ export class Engine {
         (error instanceof ProviderFailure && error.retryable)) &&
       !submitted &&
       mint &&
-      this.store.candidateAuthority(mint, env.TRADING_MODE)
-        .entryWatchDismissedAt &&
+      this.store.candidateAuthority(mint, this.mode).entryWatchDismissedAt &&
       (!position || position.dismissal)
     )
       return true;
@@ -782,7 +815,7 @@ export class Engine {
         .some(
           (e) =>
             e.intent.id === this.attempts.current?.summaries.intentId &&
-            e.intent.mode === env.TRADING_MODE &&
+            e.intent.mode === this.mode &&
             e.signature,
         );
       this.attempts.end(signed ? "RECONCILING" : "REJECTED", error);
@@ -804,23 +837,23 @@ export class Engine {
     try {
       const eligible = new Set(
         this.store
-          .managedPositions(env.TRADING_MODE)
+          .managedPositions(this.mode)
           .filter((p) => ["OPEN", "PENDING_EXIT"].includes(p.state))
           .map((p) => p.id),
       );
       for (const id of this.exitScheduled.keys())
         if (!eligible.has(id)) this.exitScheduled.delete(id);
-      this.capitalFlow.prune(env.TRADING_MODE, [
+      this.capitalFlow.prune(this.mode, [
         ...eligible,
         ...this.store
-          .positions(env.TRADING_MODE)
+          .positions(this.mode)
           .filter((p) => p.dismissal)
           .map((p) => p.id),
       ]);
       this.exitLiquidity.prune([...eligible]);
       this.positionHistory.prune([...eligible]);
       const collection = this.store
-        .managedPositions(env.TRADING_MODE)
+        .managedPositions(this.mode)
         .filter(
           (p) =>
             p.provider === "JUPITER" &&
@@ -955,8 +988,7 @@ export class Engine {
                 saved,
                 this.store.positions(saved.mode).find((x) => x.id === saved.id),
               );
-              if (env.TRADING_MODE === "live")
-                this.exitLiquidity.schedule(saved);
+              if (this.mode === "live") this.exitLiquidity.schedule(saved);
               const protective = protectiveExitDecision(
                 saved,
                 value,
@@ -1005,9 +1037,7 @@ export class Engine {
       replaceHistory?: boolean;
     },
   ) {
-    const p = this.store
-      .managedPositions(env.TRADING_MODE)
-      .find((x) => x.id === id);
+    const p = this.store.managedPositions(this.mode).find((x) => x.id === id);
     if (!p || !["OPEN", "PENDING_EXIT"].includes(p.state)) return;
     const m =
         input.market ?? this.store.latest<Market>("position_market", p.mint),
@@ -1103,7 +1133,7 @@ export class Engine {
     );
   }
   private async revalidateProtection(id: string, opportunityId: string) {
-    let p = this.store.positions(env.TRADING_MODE).find((x) => x.id === id),
+    let p = this.store.positions(this.mode).find((x) => x.id === id),
       o = p?.pendingExits?.find((x) => x.id === opportunityId);
     if (!p || !o?.protection)
       throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {
@@ -1152,9 +1182,7 @@ export class Engine {
         }
       }
     } catch (error) {
-      const current = this.store
-          .positions(env.TRADING_MODE)
-          .find((x) => x.id === id),
+      const current = this.store.positions(this.mode).find((x) => x.id === id),
         proof = current?.pendingExits?.find(
           (x) => x.id === opportunityId,
         )?.protection;
@@ -1169,7 +1197,7 @@ export class Engine {
         result: "INTELLIGENCE_UNAVAILABLE_RECENT_PROOF_RETAINED",
       });
     }
-    p = this.store.positions(env.TRADING_MODE).find((x) => x.id === id);
+    p = this.store.positions(this.mode).find((x) => x.id === id);
     o = p?.pendingExits?.find((x) => x.id === opportunityId);
     if (!p || !o || !validProtection(o.protection, p)) {
       if (p && o) {
@@ -1188,7 +1216,18 @@ export class Engine {
       kind: o.protection!.kind,
     });
   }
+  private observeCodexPosition(p: Position, history: MarketHistory) {
+    const market = this.store.latest<Market>("position_market", p.mint);
+    if (!market || this.stopping) return;
+    this.chartLearning.observePosition(p, history, market, (d) => {
+      if (this.stopping) return;
+      if (d.action !== "SELL") return;
+      this.exitCoordinator.submitCodex(d);
+      if (this.running) void this.processExits();
+    });
+  }
   private scheduleKronosPosition(p: Position, history: MarketHistory) {
+    this.observeCodexPosition(p, history);
     if (
       this.stopping ||
       p.strategy !== "KRONOS" ||
@@ -1247,11 +1286,9 @@ export class Engine {
           inputPriceUsd:
             market?.price.state === "KNOWN" ? market.price.value : undefined,
         };
-        current.pendingExits = (current.pendingExits ?? []).filter(
-          (o) => o.kind !== "STRATEGIC",
-        );
+        ExitCoordinator.clearSource(current, "KRONOS");
         if (d.action === "SELL")
-          current.pendingExits.push({
+          current.pendingExits!.push({
             id: randomUUID(),
             kind: "STRATEGIC",
             strategy: "KRONOS",
@@ -1279,9 +1316,7 @@ export class Engine {
           .managedPositions(p.mode)
           .find((x) => x.id === p.id);
         if (current?.strategy === "KRONOS" && current.state === "OPEN") {
-          current.pendingExits = current.pendingExits?.filter(
-            (o) => o.kind !== "STRATEGIC",
-          );
+          ExitCoordinator.clearSource(current, "KRONOS");
           this.store.savePosition(current);
         }
         this.store.pipelineEvent("KRONOS_INFERENCE_FAILED", p.mint, {
@@ -1298,7 +1333,7 @@ export class Engine {
     try {
       for (const e of this.store
         .pending()
-        .filter((e) => e.intent.mode === env.TRADING_MODE && e.signature))
+        .filter((e) => e.intent.mode === this.mode && e.signature))
         await this.executor.reconcile(e, this.settings);
       for (let n = 0; n < this.settings.exitExecutionsPerCycle; n++) {
         if (
@@ -1306,11 +1341,11 @@ export class Engine {
           this.executor.isBusy ||
           this.store
             .pending()
-            .some((e) => e.intent.mode === env.TRADING_MODE && e.signature)
+            .some((e) => e.intent.mode === this.mode && e.signature)
         )
           break;
         const queue = this.store
-          .managedPositions(env.TRADING_MODE)
+          .managedPositions(this.mode)
           .filter((p) => p.provider === "JUPITER" && p.state === "OPEN")
           .flatMap((p) => {
             let manual = this.manual.find(
@@ -1348,13 +1383,7 @@ export class Engine {
                   (a, b) =>
                     exitPriority(undefined, a) - exitPriority(undefined, b) ||
                     a.triggeredAt - b.triggeredAt,
-                )[0] ??
-              p.pendingExits?.find(
-                (x) =>
-                  x.kind === "STRATEGIC" &&
-                  p.strategy === "KRONOS" &&
-                  x.decisionSource === "KRONOS",
-              );
+                )[0] ?? ExitCoordinator.strategic(p);
             if (!manual && !opportunity) return [];
             const rank = exitPriority(manual?.sellBps, opportunity);
             return [
@@ -1439,7 +1468,9 @@ export class Engine {
                 ? opportunity.protection?.kind === "SECURITY_CRITICAL"
                   ? "SECURITY"
                   : "PROTECTIVE"
-                : "KRONOS",
+                : opportunity?.decisionSource === "CODEX"
+                  ? "CODEX"
+                  : "KRONOS",
             reason: manual ? "Manual emergency exit" : opportunity!.reason,
             sellBps: manual?.sellBps ?? opportunity!.sellBps,
             at: Date.now(),
@@ -1568,7 +1599,9 @@ export class Engine {
           ? opportunity.protection?.kind === "SECURITY_CRITICAL"
             ? ("SECURITY" as const)
             : ("PROTECTIVE" as const)
-          : ("KRONOS" as const),
+          : opportunity?.decisionSource === "CODEX"
+            ? ("CODEX" as const)
+            : ("KRONOS" as const),
       decisionId: manual?.id ?? opportunity?.decisionId,
       decisionAt: opportunity?.triggeredAt ?? manual?.createdAt,
       exitAuthority:
@@ -1579,7 +1612,9 @@ export class Engine {
             ? opportunity.protection?.kind === "SECURITY_CRITICAL"
               ? "SECURITY"
               : "PROTECTIVE"
-            : "KRONOS"),
+            : opportunity?.decisionSource === "CODEX"
+              ? "CODEX"
+              : "KRONOS"),
     };
     const checkExitAuthority = () => {
       const current = this.store.positions(p.mode).find((x) => x.id === p.id);
@@ -1612,9 +1647,15 @@ export class Engine {
           market.price.state !== "KNOWN" ||
           market.at > Date.now() ||
           Date.now() - market.at > this.settings.maxSnapshotAgeMs ||
-          (current.kronosDecision?.inputPriceUsd &&
+          ((opportunity?.decisionSource === "CODEX"
+            ? current.codexDecision?.inputPriceUsd
+            : current.kronosDecision?.inputPriceUsd) &&
             Math.abs(
-              market.price.value / current.kronosDecision.inputPriceUsd - 1,
+              market.price.value /
+                (opportunity?.decisionSource === "CODEX"
+                  ? current.codexDecision!.inputPriceUsd!
+                  : current.kronosDecision!.inputPriceUsd!) -
+                1,
             ) *
               100 >
               this.settings.maxDecisionPriceMovePercent)
@@ -1656,7 +1697,7 @@ export class Engine {
   }
   analytics(strategy?: "KRONOS") {
     const positions = this.store
-        .positions(env.TRADING_MODE)
+        .positions(this.mode)
         .filter((p) => !strategy || (p.strategy ?? "STANDARD") === strategy),
       closed = positions.filter((p) => p.state === "CLOSED");
     const executions = this.store.executions();
@@ -1673,7 +1714,7 @@ export class Engine {
     const decisions = this.store
       .recent("decisions", 100000)
       .map((r) => r.payload as RiskResult & { mode: string })
-      .filter((r) => r.mode === env.TRADING_MODE);
+      .filter((r) => r.mode === this.mode);
     const kronosDecisions = this.store.recent("kronos_decisions", 100000);
     return {
       discovered: this.store.tokenCount(),
@@ -1744,7 +1785,7 @@ export class Engine {
   flowStatus(lifecycle = this.candidates.list()) {
     const executions = this.store.executions();
     const positions = positionViews(
-      this.store.positions(env.TRADING_MODE),
+      this.store.positions(this.mode),
       executions,
     );
     return {
@@ -1773,7 +1814,7 @@ export class Engine {
     this.attempts.reconcile();
     const a = this.attempts.current;
     const held = this.store
-      .positions(env.TRADING_MODE)
+      .positions(this.mode)
       .filter((p) => !p.dismissal && !["CLOSED", "FAILED"].includes(p.state));
     const positions = positionViews(held, this.store.executions(), (mint) =>
       this.store.token(mint),
@@ -1810,9 +1851,8 @@ export class Engine {
       /* Missing balance remains unknown. */
     }
     return {
-      mode: env.TRADING_MODE,
-      demoAccountId:
-        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
+      mode: this.mode,
+      demoAccountId: this.mode === "demo" ? this.store.demoAccountId() : null,
       liveAck: env.LIVE_TRADING_ACK,
       runtime: runtimeInfo,
       capabilities: {
@@ -1847,7 +1887,7 @@ export class Engine {
     } catch {
       /* Wallet configuration is exposed as a clear status, never a made-up balance. */
     }
-    const pending = this.store.reserved(env.TRADING_MODE),
+    const pending = this.store.reserved(this.mode),
       sized =
         balance === undefined
           ? undefined
@@ -1861,9 +1901,8 @@ export class Engine {
     const flow = this.flowStatus(lifecycle);
     return {
       overview: this.overviewStatus(),
-      mode: env.TRADING_MODE,
-      demoAccountId:
-        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
+      mode: this.mode,
+      demoAccountId: this.mode === "demo" ? this.store.demoAccountId() : null,
       liveAck: env.LIVE_TRADING_ACK,
       runtime: runtimeInfo,
       capabilities: {
@@ -1884,8 +1923,7 @@ export class Engine {
       balanceLamports: balance?.toString() ?? null,
       solPriceUsd: this.solPrice ?? null,
       solPriceUpdatedAt: this.solPriceAt ?? null,
-      balanceKind:
-        env.TRADING_MODE === "demo" ? "SIMULATED_USD_LEDGER" : "ON_CHAIN",
+      balanceKind: this.mode === "demo" ? "SIMULATED_USD_LEDGER" : "ON_CHAIN",
       availableLamports: sized?.available.toString() ?? null,
       nextBuyLamports: sized?.amount.toString() ?? null,
       reservedLamports: pending.toString(),
@@ -1899,14 +1937,14 @@ export class Engine {
           [
             ...new Set(
               this.store
-                .positions(env.TRADING_MODE)
+                .positions(this.mode)
                 .filter((p) => p.state === "OPEN")
                 .map((p) => p.flow?.regime ?? "INSUFFICIENT_DATA"),
             ),
           ].map((regime) => [
             regime,
             this.store
-              .positions(env.TRADING_MODE)
+              .positions(this.mode)
               .filter(
                 (p) =>
                   p.state === "OPEN" &&
@@ -1925,8 +1963,8 @@ export class Engine {
             )
             .get(
               Date.now() - 60000,
-              env.TRADING_MODE,
-              env.TRADING_MODE,
+              this.mode,
+              this.mode,
               this.store.demoAccountId(),
             )!.n,
         ),
@@ -1967,11 +2005,11 @@ export class Engine {
       exitStatus: {
         executionBusy: this.executionLoop || this.executor.isBusy,
         pendingExits: this.store
-          .positions(env.TRADING_MODE)
+          .positions(this.mode)
           .reduce((n, p) => n + (p.pendingExits?.length ?? 0), 0),
         walletFrozen: this.store
           .pending()
-          .some((e) => e.intent.mode === env.TRADING_MODE && e.signature),
+          .some((e) => e.intent.mode === this.mode && e.signature),
       },
       candidatePipeline: {
         queue: lifecycle.filter((r) =>
@@ -2028,6 +2066,7 @@ export class Engine {
         KRONOS: this.analytics("KRONOS").strategyAccounting,
       },
       kronos: this.kronos.status(),
+      chartLearning: this.chartLearning.status(),
       controlled: this.executor.controlled?.read() ?? null,
       settings: this.settings,
       events: this.store.recent("events", 30),

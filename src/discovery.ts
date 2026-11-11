@@ -1,4 +1,4 @@
-import { env, type Settings } from "./config.js";
+import { type Settings } from "./config.js";
 import type { Candidate } from "./domain.js";
 import type { Gmgn } from "./gmgn.js";
 import type { Store } from "./store.js";
@@ -225,7 +225,7 @@ export class DiscoveryCoordinator {
       if (source === "TRENDING")
         this.store.enqueueTrending(
           candidates,
-          env.TRADING_MODE,
+          this.store.mode,
           this.gmgn.feedFetchedAt[source] ?? Date.now(),
         );
       if (source === "TRENDING")
@@ -260,7 +260,7 @@ export class DiscoveryCoordinator {
         ]),
       ),
       ...this.counters,
-      mode: env.TRADING_MODE,
+      mode: this.store.mode,
       batch: this.store.trendingBatchProgress(),
     };
   }

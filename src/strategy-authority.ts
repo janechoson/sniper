@@ -10,11 +10,47 @@ export function assertStrategySell(i: Intent, p: Position, now = Date.now()) {
   if ((i.strategy ?? "STANDARD") !== owner)
     throw new Blocked("SELL_STRATEGY_OWNER_MISMATCH");
   if (owner !== "KRONOS") {
-    if (i.exitAuthority === "KRONOS" || i.decisionSource === "KRONOS")
+    if (
+      i.exitAuthority === "KRONOS" ||
+      i.decisionSource === "KRONOS" ||
+      i.exitAuthority === "CODEX" ||
+      i.decisionSource === "CODEX"
+    )
       throw new Blocked("KRONOS_CANNOT_SELL_STANDARD");
     return;
   }
   if (i.exitAuthority === "MANUAL" && i.manualRequestId) return;
+  if (i.exitAuthority === "CODEX" || i.decisionSource === "CODEX") {
+    const d = p.codexDecision;
+    const opportunity = p.pendingExits?.find(
+      (o) =>
+        o.id === i.exitOpportunityId &&
+        o.kind === "STRATEGIC" &&
+        o.decisionSource === "CODEX" &&
+        o.decisionId === i.decisionId,
+    );
+    if (
+      !d ||
+      !opportunity ||
+      i.exitAuthority !== "CODEX" ||
+      i.decisionSource !== "CODEX" ||
+      d.action !== "SELL" ||
+      d.id !== i.decisionId ||
+      d.positionId !== p.id ||
+      d.mint !== p.mint ||
+      d.mode !== p.mode ||
+      d.quantity !== p.quantity ||
+      i.amount !== p.quantity ||
+      !d.rules.length ||
+      !Number.isFinite(d.at) ||
+      d.at > now ||
+      now - d.at > 15000 ||
+      !Number.isFinite(d.expiresAt) ||
+      d.expiresAt < now
+    )
+      throw new Blocked("FRESH_FULL_CODEX_SELL_REQUIRED");
+    return;
+  }
   if (i.exitAuthority === "SECURITY" || i.exitAuthority === "PROTECTIVE") {
     const proof = p.pendingExits?.find(
       (o) => o.id === i.exitOpportunityId,

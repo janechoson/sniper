@@ -1,6 +1,6 @@
 import { discoveryContext } from "./discovery.js";
 import type { Engine } from "./engine.js";
-import { env } from "./config.js";
+
 import { positionViews } from "./position-view.js";
 import type { Store } from "./store.js";
 import type { Mode } from "./domain.js";
@@ -43,6 +43,7 @@ export const DASHBOARD_ROUTES = [
   "/settings",
   "/logs",
   "/thongke",
+  "/chart-learning",
 ] as const;
 export const DASHBOARD_ASSETS = [
   "/dashboard-router.js",
@@ -56,6 +57,7 @@ export const DASHBOARD_ASSETS = [
   "/dashboard-settings.js",
   "/dashboard-logs.js",
   "/dashboard-statistics.js",
+  "/dashboard-learning.js",
 ];
 
 /** Page-specific, read-only projections; never calls the full status/Memory/statistics facade. */
@@ -63,7 +65,7 @@ export function dashboardPositions(engine: Engine) {
   const { store, settings } = engine;
   const positions = positionViews(
     store
-      .positions(env.TRADING_MODE)
+      .positions(store.mode)
       .filter((p) => !p.dismissal && !["CLOSED", "FAILED"].includes(p.state)),
     store.executions(),
     (mint) => store.token(mint),
@@ -89,13 +91,7 @@ export function dashboardLogs(engine: Engine, limit: number) {
       .prepare(
         "SELECT id,mint,at,payload FROM records WHERE kind=? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT ?",
       )
-      .all(
-        kind,
-        env.TRADING_MODE,
-        env.TRADING_MODE,
-        store.demoAccountId(),
-        limit,
-      );
+      .all(kind, store.mode, store.mode, store.demoAccountId(), limit);
   const events = rows("events")
     .map((r) => ({
       id: r.id,
@@ -122,7 +118,7 @@ export function dashboardLogs(engine: Engine, limit: number) {
   });
   return {
     tokens,
-    mode: env.TRADING_MODE,
+    mode: store.mode,
     events,
     flow: { events: transitions },
     overview: { attempt: engine.attempts.current ?? null },

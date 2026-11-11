@@ -7,7 +7,13 @@ export interface StrategyTrace {
   attemptId?: string;
   ownershipClaimId?: string;
   strategy?: Strategy;
-  decisionSource?: "JEV" | "KRONOS" | "MANUAL" | "SECURITY" | "PROTECTIVE";
+  decisionSource?:
+    | "JEV"
+    | "KRONOS"
+    | "CODEX"
+    | "MANUAL"
+    | "SECURITY"
+    | "PROTECTIVE";
   decisionId?: string;
   decisionAt?: number;
 }
@@ -175,7 +181,13 @@ export interface Intent extends StrategyTrace {
   manualRequestId?: string;
   exitOpportunityId?: string;
   jevExitDecisionId?: string;
-  exitAuthority?: "MANUAL" | "SECURITY" | "PROTECTIVE" | "JEV" | "KRONOS";
+  exitAuthority?:
+    | "MANUAL"
+    | "SECURITY"
+    | "PROTECTIVE"
+    | "JEV"
+    | "KRONOS"
+    | "CODEX";
 }
 export interface ManualExitRequest {
   id: string;
@@ -200,7 +212,7 @@ export interface ManualExitRequest {
 }
 export interface ExitOpportunity {
   strategy?: Strategy;
-  decisionSource?: "JEV" | "KRONOS";
+  decisionSource?: "JEV" | "KRONOS" | "CODEX";
   protection?: import("./exit-safety.js").ProtectiveAuthority;
   lifecycle?:
     | "DETECTED"
@@ -284,6 +296,7 @@ export interface JevExitDecision {
   };
 }
 export interface Position extends StrategyTrace {
+  codexDecision?: import("./chart-store.js").ChartDecision;
   kronosDecision?: import("./kronos-strategy.js").KronosDecision & {
     quantity: string;
     inputTo: number;
@@ -370,7 +383,13 @@ export interface Position extends StrategyTrace {
   jevExit?: JevExitDecision;
   legacyExitReferences?: ExitOpportunity[];
   finalExitAction?: {
-    authority: "MANUAL" | "SECURITY" | "PROTECTIVE" | "JEV" | "KRONOS";
+    authority:
+      | "MANUAL"
+      | "SECURITY"
+      | "PROTECTIVE"
+      | "JEV"
+      | "KRONOS"
+      | "CODEX";
     reason: string;
     sellBps: number;
     at: number;

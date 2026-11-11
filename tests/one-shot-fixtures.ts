@@ -52,9 +52,10 @@ export function setup(
     missingHistory?: boolean;
     noFlow?: boolean;
     structureFail?: boolean;
+    store?: Store;
   } = {},
 ) {
-  const store = new Store(":memory:"),
+  const store = options.store ?? new Store(":memory:"),
     rpc = new Solana();
   rpc.inspectMint = async () =>
     ({
@@ -113,6 +114,7 @@ export function mockExecutionCase(
     kronos?: KronosDecisionStrategy;
     historyMinutes?: number;
     externalTokens?: bigint;
+    store?: Store;
   } = {},
 ) {
   const saved = {
@@ -127,7 +129,7 @@ export function mockExecutionCase(
   globalThis.fetch = async () => {
     throw Error("NETWORK_FORBIDDEN_IN_MOCK_EXECUTION_TEST");
   };
-  const store = new Store(":memory:"),
+  const store = options.store ?? new Store(":memory:"),
     rpc = new Solana();
   let sol = fail === "CAPITAL" ? 0n : 1000000000n,
     tokens = options.externalTokens ?? 0n,

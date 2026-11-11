@@ -18,7 +18,7 @@ test("Trending reaches all required gates once; there is no Watch admission or r
         .map((l) => l.stage)
         .filter((s) => s !== "KRONOS")
         .filter((s, i, all) => i === 0 || s !== all[i - 1])
-        .slice(0, 11),
+        .slice(0, 12),
       [
         "CHEAP_FILTER",
         "SECURITY",
@@ -26,6 +26,7 @@ test("Trending reaches all required gates once; there is no Watch admission or r
         "HISTORY",
         "CAPITAL_FLOW",
         "COMMON_RISK",
+        "CODEX_GUARD",
         "RISK",
         "FINAL_ANALYSIS",
         "OWNERSHIP_CAPITAL",

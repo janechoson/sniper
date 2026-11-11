@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const routes = {
-  "/": { view: "overview", module: "overview", title: "Luồng xử lý token" },
+  "/": { view: "overview", module: "overview", title: "Tổng quan" },
   "/positions": { view: "positions", module: "positions", title: "Vị thế" },
   "/history": {
     view: "history",
@@ -10,6 +10,11 @@ const routes = {
   "/settings": { view: "settings", module: "settings", title: "Cấu hình" },
   "/logs": { view: "logs", module: "logs", title: "Log" },
   "/thongke": { view: "statistics", module: "statistics", title: "Thống kê" },
+  "/chart-learning": {
+    view: "learning",
+    module: "learning",
+    title: "Chart Learning",
+  },
 };
 let shell,
   shellPromise,
@@ -52,7 +57,11 @@ async function refreshBadge() {
   return badgePromise;
 }
 function notice(error) {
-  if (error?.name !== "AbortError") $("notice").textContent = error.message;
+  if (error?.name !== "AbortError") {
+    $("notice").textContent = error.message;
+    $("overviewMode").textContent = "Lỗi kết nối";
+    $("overviewMode").dataset.connected = "false";
+  }
 }
 function renderShell(s) {
   const scopeChanged =
@@ -60,7 +69,8 @@ function renderShell(s) {
     (shell.mode !== s.mode || shell.demoAccountId !== s.demoAccountId);
   shell = s;
   $("mode").textContent = window.BOTText.vi(s.mode.toUpperCase());
-  $("overviewMode").textContent = s.mode.toUpperCase();
+  $("overviewMode").textContent = "Connected";
+  $("overviewMode").dataset.connected = "true";
   $("terminalBalance").textContent =
     s.balanceLamports === null
       ? "SOL: N/A"
@@ -322,6 +332,7 @@ async function navigate(value, { replace = false, pop = false } = {}) {
     return;
   }
   $("title").textContent = route.title;
+  document.body.dataset.view = route.view;
   try {
     const [module] = await Promise.all([
       import("/dashboard-" + route.module + ".js"),

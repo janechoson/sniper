@@ -23,8 +23,6 @@ export async function mount(ctx) {
         : Number(x).toLocaleString("en-US", { maximumFractionDigits: 8 });
     const usd = (x) =>
       x === null || x === undefined ? "N/A" : "$" + number(x);
-    const sol = (x) =>
-      x === null || x === undefined ? "N/A" : number(Number(x) / 1e9);
     const short = (s) => (s ? s.slice(0, 5) + "…" + s.slice(-4) : "N/A");
     const duration = (ms) =>
       ms === null || ms === undefined
@@ -37,7 +35,8 @@ export async function mount(ctx) {
       HISTORY: "Market History · 60m",
       CAPITAL_FLOW: "Capital Flow",
       COMMON_RISK: "Common Risk",
-      KRONOS: "Kronos Analysis",
+      CODEX_GUARD: "Codex BUY Guard",
+      KRONOS: "KRONOS Analysis",
       STRUCTURE: "Structure Evidence V3",
       RISK: "Risk Engine",
       FINAL_ANALYSIS: "Fresh Final Analysis",
@@ -47,10 +46,10 @@ export async function mount(ctx) {
       VALIDATE: "Validation",
       SIMULATE: "Simulation",
       PRE_SIGN: "Pre-sign Validation",
-      BUY: "BUY",
+      BUY: "BUY Decision",
       POSITION: "Position",
     };
-    let lastAttempt, latest, status, sellAction, carouselKey;
+    let latest, status, sellAction, candidateKey;
     const selling = new Map();
     function avatar(token, central = false) {
       if (window.BOTTokenAvatar)
@@ -158,6 +157,10 @@ export async function mount(ctx) {
         node(
           "i",
           {
+            BUY: "✓",
+            WAIT: "–",
+            BLOCK: "✕",
+            ERROR: "!",
             PASS: "✓",
             SUCCESS: "✓",
             OWNER: "✓",
@@ -199,12 +202,23 @@ export async function mount(ctx) {
         const legacy = !summaries.strategies && summaries.strategy === strategy;
         const branchStages = legacy ? a?.stages || {} : evaluation.stages || {};
         card.dataset.attemptId = a?.attemptId || "";
+        $("currentDecisionEvidence").disabled = !a?.mint;
         const rows = commonStages.map((stage) =>
           stageIndicator(stage, a?.stages?.[stage] || "PENDING"),
         );
-        rows.push(
-          node("div", strategy + " – Phân tích chi tiết", "strategy-fork"),
-        );
+        if (a?.stages && "CODEX_GUARD" in a.stages) {
+          const guard = summaries.codexGuard;
+          rows.push(
+            stageIndicator(
+              "CODEX_GUARD",
+              guard?.action === "BLOCK"
+                ? "BLOCK"
+                : guard?.action === "ERROR"
+                  ? "ERROR"
+                  : a.stages.CODEX_GUARD || "PENDING",
+            ),
+          );
+        }
         {
           // WAIT is a valid completed inference; the entry pipeline may reject BUY afterwards.
           const inferred = summaries.kronos;
@@ -216,7 +230,13 @@ export async function mount(ctx) {
           rows.push(
             stageIndicator(
               "KRONOS",
-              complete ? "PASS" : branchStages.KRONOS || "PENDING",
+              complete
+                ? inferred.action === "WAIT"
+                  ? "WAIT"
+                  : "PASS"
+                : evaluation.decision === "ERROR"
+                  ? "ERROR"
+                  : branchStages.KRONOS || "PENDING",
             ),
           );
         }
@@ -225,8 +245,7 @@ export async function mount(ctx) {
         let buy = "PENDING";
         if (execution === "BLOCKED_OWNER_ALREADY_CLAIMED") buy = "BLOCKED";
         else if (owner === strategy || legacy) {
-          if (execution === "CONFIRMED" || a?.result === "BOUGHT")
-            buy = "SUCCESS";
+          if (execution === "CONFIRMED" || a?.result === "BOUGHT") buy = "BUY";
           else if (
             execution === "EXECUTION_FAILED" ||
             (a?.result === "REJECTED" &&
@@ -264,57 +283,94 @@ export async function mount(ctx) {
           ["BUY", "REJECT", "ERROR"].includes(evaluation.decision)
         )
           buy = "BLOCKED";
+        if (
+          buy === "PENDING" &&
+          (evaluation.decision === "WAIT" ||
+            (legacy && summaries.kronos?.action === "WAIT"))
+        )
+          buy = "WAIT";
+        if (buy === "PENDING" && a?.result === "REJECTED") buy = "BLOCK";
         const buyRow = stageIndicator("BUY", buy);
         buyRow.classList.add("compact-buy");
         rows.push(buyRow);
-        root.replaceChildren(...rows);
+        for (const row of rows) {
+          const stage = row.dataset.stage;
+          const log = a?.logs?.findLast((entry) => entry.stage === stage);
+          const reason =
+            stage === "BUY"
+              ? evaluation.executionReason ||
+                evaluation.reason ||
+                a?.reasonDetail
+              : log?.message;
+          if (reason) row.title = reason;
+          if (stage === "CODEX_GUARD" && summaries.codexGuard)
+            row.title = summaries.codexGuard.reason || row.title;
+        }
+        const key = rows.map((row) => row.outerHTML).join("");
+        if (root.dataset.renderKey !== key) {
+          root.replaceChildren(...rows);
+          root.dataset.renderKey = key;
+        }
       }
     }
     function renderBatch(batch) {
-      const root = $("trendingBatchProgress");
-      if (!root) return;
+      const root = $("trendingBatchProgress"),
+        progress = $("scannerProgress"),
+        kpi = $("kpiScanner"),
+        time = $("batchDuration");
       root.dataset.state = batch?.state || "UNKNOWN";
+      time.hidden = true;
+      const valid =
+        batch &&
+        !batch.legacy &&
+        [batch.total, batch.completed, batch.processing, batch.waiting].every(
+          (n) => Number.isSafeInteger(n) && n >= 0,
+        ) &&
+        batch.total === batch.completed + batch.processing + batch.waiting;
+      if (!valid) {
+        root.textContent = batch?.legacy
+          ? "Đang phục hồi backlog · Chờ: " + batch.waiting
+          : "Chưa có dữ liệu batch";
+        kpi.textContent = "N/A";
+        progress.removeAttribute("value");
+        progress.hidden = true;
+        return;
+      }
+      root.textContent =
+        "Batch: " +
+        batch.total +
+        " · Đã xử lý: " +
+        batch.completed +
+        " · Đang kiểm tra: " +
+        batch.processing +
+        " · Còn lại: " +
+        batch.waiting;
       root.title =
-        "Carousel chỉ xem nhanh một phần queue. Bộ đếm bao gồm cả token chưa vào queue làm việc.";
-      if (!batch) {
-        root.textContent = "Chưa có dữ liệu batch";
-        return;
-      }
-      const counts = [batch.processing, batch.waiting];
-      if (!counts.every((n) => Number.isSafeInteger(n) && n >= 0)) {
-        root.textContent = "Chưa có tiến độ batch hợp lệ";
-        return;
-      }
-      if (batch.legacy) {
-        root.textContent = `Backlog cũ · Đang xử lý: ${batch.processing} · Chờ trong batch: ${batch.waiting} · Tổng chờ backlog: ${batch.backlogRemaining ?? batch.waiting}`;
-        return;
-      }
+        batch.sourceState === "DEGRADED"
+          ? "Nguồn dữ liệu đang lỗi"
+          : batch.state === "RECOVERY"
+            ? "Chờ đối soát/phục hồi"
+            : batch.analysisPending && batch.completed === batch.total
+              ? "Đang hoàn tất phân tích"
+              : batch.state;
+      kpi.textContent = batch.completed + " / " + batch.total;
+      progress.hidden = false;
+      progress.max = Math.max(1, batch.total);
+      progress.value = batch.completed;
       if (
-        !Number.isSafeInteger(batch.total) ||
-        !Number.isSafeInteger(batch.completed) ||
-        batch.total < 0 ||
-        batch.completed < 0 ||
-        batch.total !== batch.completed + batch.processing + batch.waiting
+        Number.isFinite(batch.fetchedAt) &&
+        batch.fetchedAt <= Date.now() &&
+        batch.state !== "COMPLETE"
       ) {
-        root.textContent =
-          batch.state === "EMPTY"
-            ? "Đang chờ batch Trending đầu tiên"
-            : "Chưa có tiến độ batch hợp lệ";
-        return;
+        const seconds = Math.floor((Date.now() - batch.fetchedAt) / 1000);
+        time.textContent =
+          "Thời gian batch: " +
+          Math.floor(seconds / 60) +
+          "m " +
+          (seconds % 60) +
+          "s";
+        time.hidden = false;
       }
-      const state =
-        batch.sourceState === "FETCHING"
-          ? " · Đang lấy batch mới"
-          : batch.sourceState === "DEGRADED"
-            ? " · Nguồn dữ liệu đang lỗi"
-            : batch.state === "RECOVERY"
-              ? " · Chờ đối soát/phục hồi"
-              : batch.analysisPending && batch.completed === batch.total
-                ? " · Đang hoàn tất phân tích"
-                : batch.state === "COMPLETE"
-                  ? " · Hoàn tất"
-                  : "";
-      root.textContent = `Batch: ${batch.total} · Đã xử lý: ${batch.completed} · Đang kiểm tra: ${batch.processing} · Còn chờ: ${batch.waiting}${state}`;
     }
     function renderCandidate(o) {
       renderBatch(o.batch);
@@ -322,54 +378,24 @@ export async function mount(ctx) {
         t = a?.summaries?.token || o.token || {},
         m = a?.summaries?.market || {},
         h = a?.summaries?.history;
-      const carousel = $("tokenCarousel");
-      const queue = o.queue || [];
-      const neighbors = queue.filter((x) => x.mint !== a?.mint);
-      const item = (token, central = false) => {
-        const n = node(
-          "div",
-          undefined,
-          central ? "carousel-token central-token" : "carousel-token",
-        );
-        n.append(
-          avatar(token, central),
-          node("span", token?.symbol || short(token?.mint)),
-        );
-        if (central) n.dataset.attemptId = a?.attemptId || "";
-        return n;
-      };
-      if (a?.attemptId !== lastAttempt) {
-        carousel.classList.remove("attempt-transition");
-        lastAttempt = a?.attemptId;
-      }
-      const key =
-        (a?.attemptId || "") +
-        "|" +
-        JSON.stringify([
-          window.BOTTokenAvatar?.logo(t),
-          neighbors.map((x) => [
-            x.mint,
-            x.symbol,
-            window.BOTTokenAvatar?.logo(x),
-          ]),
-        ]);
-      if (key !== carouselKey) {
-        carousel.replaceChildren(
-          ...neighbors.slice(0, 3).map((x) => item(x)),
-          node("b", "❯ ❯ ❯", "carousel-arrows"),
-          item(a ? { ...t, mint: a.mint, symbol: a.symbol } : null, true),
-          node("b", "❯ ❯ ❯", "carousel-arrows"),
-          ...neighbors.slice(3, 6).map((x) => item(x)),
-        );
-        carouselKey = key;
-      }
-      carousel.classList.toggle("attempt-transition", a?.result !== "RUNNING");
-      carousel.dataset.result = a?.result || "IDLE";
+      $("terminalScanCaption").dataset.state =
+        a?.result === "RUNNING" ? "running" : a ? "idle" : "waiting";
       $("terminalScanCaption").textContent = a
         ? a.result === "RUNNING"
           ? "Đang kiểm tra " + (a.symbol || short(a.mint)) + "…"
           : a.result + " · Chờ token tiếp theo từ backend"
         : "Đang chờ GMGN Trending…";
+      renderStrategyCards(a);
+      const nextKey = JSON.stringify([
+        a?.mint,
+        a?.symbol,
+        t,
+        m,
+        a?.summaries?.metrics,
+        h?.tokenAge == null ? null : Math.floor(h.tokenAge / 60000),
+      ]);
+      if (nextKey === candidateKey) return;
+      candidateKey = nextKey;
       const content = $("terminalToken");
       content.replaceChildren();
       const identity = node("div", undefined, "terminal-identity"),
@@ -391,7 +417,7 @@ export async function mount(ctx) {
       }
       const badges = node("div", undefined, "terminal-badges");
       badges.append(
-        node("span", t.source || "GMGN Trending"),
+        node("span", t.source || a?.source || "N/A"),
         node("span", "SOL"),
         node(
           "span",
@@ -441,64 +467,6 @@ export async function mount(ctx) {
         ),
       );
       content.append(metrics);
-      if (h?.candles?.length) {
-        const chart = node("div", undefined, "terminal-sparkline"),
-          values = h.candles.map((c) => c.close),
-          min = Math.min(...values),
-          max = Math.max(...values);
-        chart.dataset.trend =
-          values.at(-1) > values[0]
-            ? "positive"
-            : values.at(-1) < values[0]
-              ? "negative"
-              : "neutral";
-        const svg = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "svg",
-        );
-        svg.setAttribute("viewBox", "0 0 300 65");
-        svg.setAttribute("role", "img");
-        svg.setAttribute("aria-label", "Lịch sử giá GMGN 1m");
-        const path = document.createElementNS(svg.namespaceURI, "polyline");
-        path.setAttribute(
-          "points",
-          values
-            .map(
-              (v, i) =>
-                (i * 300) / Math.max(1, values.length - 1) +
-                "," +
-                (60 - ((v - min) / Math.max(Number.EPSILON, max - min)) * 50),
-            )
-            .join(" "),
-        );
-        svg.append(path);
-        chart.append(svg);
-        metrics.append(chart);
-      }
-      renderStrategyCards(a);
-      $("terminalLogTitle").textContent =
-        "Action Log" + (a?.symbol ? " (" + a.symbol + ")" : "");
-      const filter = $("terminalLogFilter").value;
-      $("terminalLogs").replaceChildren(
-        ...(a?.logs || [])
-          .filter((l) => filter === "ALL" || l.status === filter)
-          .map((l) => {
-            const n = node("div", undefined, "terminal-log-line");
-            n.dataset.status = l.status;
-            n.append(
-              node(
-                "time",
-                "[" + new Date(l.at).toLocaleTimeString("vi-VN") + "]",
-              ),
-              node(
-                "i",
-                l.status === "FAIL" ? "✕" : l.status === "PASS" ? "✓" : "●",
-              ),
-              node("span", l.message),
-            );
-            return n;
-          }),
-      );
     }
     function renderPositions(o) {
       const positions = o.positions || [];
@@ -641,32 +609,13 @@ export async function mount(ctx) {
       if (!o) return;
       latest = o;
       status = s || status;
-      $("overviewMode").textContent =
-        status?.mode === "live"
-          ? "LIVE"
-          : status?.mode === "paper"
-            ? "PAPER"
-            : "ĐANG KẾT NỐI";
-      $("terminalBalance").textContent = "SOL: " + sol(status?.balanceLamports);
-      $("terminalUsd").textContent =
-        status?.solPriceUsd &&
-        status?.balanceLamports !== null &&
-        Date.now() - status.solPriceUpdatedAt < 60000
-          ? "(~" +
-            usd(
-              (Number(status.balanceLamports) / 1e9) *
-                Number(status.solPriceUsd),
-            ) +
-            ")"
-          : "USD: N/A";
-      $("terminalRunning").textContent = o.scanner?.running
-        ? "Bot Running"
-        : "Bot Stopped";
-      $("terminalDot").classList.toggle("running", !!o.scanner?.running);
+      window.BOTAccountView?.paint();
+      $("kpiPositions").textContent = Number.isInteger(o.positionTotal)
+        ? String(o.positionTotal)
+        : "N/A";
       renderCandidate(o);
       renderPositions(o);
     }
-    $("terminalLogFilter").onchange = () => latest && renderCandidate(latest);
     return {
       update,
       formatters: { formatCompactUsd, formatSmallUsd },
@@ -677,6 +626,10 @@ export async function mount(ctx) {
   })();
 
   let latest;
+  document.getElementById("currentDecisionEvidence").onclick = () => {
+    if (latest?.attempt?.mint)
+      void ctx.detail(latest.attempt.mint).catch(ctx.error);
+  };
   const refresh = async () => {
     latest = await ctx.get("/api/overview");
     ctx.legacyPositionCount?.(latest.positionTotal ?? latest.positions.length);

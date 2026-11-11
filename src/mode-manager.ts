@@ -4,6 +4,7 @@ import { Blocked, type TradingMode } from "./domain.js";
 import { env } from "./config.js";
 import { DemoLedger } from "./demo-ledger.js";
 import { kronosMigrationPreflight } from "./kronos-migration-preflight.js";
+import type { DatabaseRegistry } from "./database-registry.js";
 export const migrationSafetyCodes = new Set([
   "LIVE_STANDARD_POSITION_REQUIRES_RESOLUTION",
   "LIVE_LEGACY_EXECUTION_REQUIRES_RESOLUTION",
@@ -29,8 +30,12 @@ export class ModeManager<T extends ModeEngine> {
   private current?: T;
   private transitioning = false;
   private recoveryOnly = false;
+  private sessionStore?: Store;
+  private get store() {
+    return this.databases?.forMode(this.selected) ?? this.controlStore;
+  }
   constructor(
-    private store: Store,
+    private controlStore: Store,
     private factory: (mode: TradingMode) => T,
     private verifyLive: (engine: T) => Promise<void>,
     private beforeStop: () => Promise<void> = async () => {},
@@ -43,7 +48,9 @@ export class ModeManager<T extends ModeEngine> {
         throw new Blocked("ENGINE_PROCESS_STATUS_UNKNOWN");
       }
     },
+    private databases?: DatabaseRegistry,
   ) {
+    const store = controlStore;
     this.selected = store.get<TradingMode>("selectedTradingMode") ?? "DEMO";
     if (!["DEMO", "LIVE"].includes(this.selected))
       throw new Blocked("INVALID_PERSISTED_MODE");
@@ -69,16 +76,17 @@ export class ModeManager<T extends ModeEngine> {
     };
   }
   blockers() {
+    const custody = this.databases?.live ?? this.store;
     const reasons: string[] = [];
-    for (const p of this.store.positions("live"))
+    for (const p of custody.positions("live"))
       if (!["CLOSED", "FAILED"].includes(p.state) || BigInt(p.quantity) > 0n)
         reasons.push(`LIVE_POSITION_REQUIRES_MONITORING:${p.id}:${p.state}`);
-    for (const e of this.store.executions("live"))
+    for (const e of custody.executions("live"))
       if (!["CONFIRMED", "FAILED"].includes(e.state))
         reasons.push(
           `LIVE_EXECUTION_REQUIRES_RECONCILIATION:${e.id}:${e.state}`,
         );
-    for (const m of this.store.activeManual("live"))
+    for (const m of custody.activeManual("live"))
       reasons.push(`LIVE_PENDING_SELL:${m.id}:${m.state}`);
     return reasons;
   }
@@ -88,24 +96,26 @@ export class ModeManager<T extends ModeEngine> {
     return result;
   }
   private claim(mode: TradingMode) {
-    this.store.atomic(() => {
-      const row = this.store.db
+    const store = this.databases?.forMode(mode) ?? this.store;
+    store.atomic(() => {
+      const row = store.db
         .prepare("SELECT * FROM engine_sessions WHERE id=1")
         .get();
       if (row?.state === "RUNNING" && this.isAlive(Number(row.pid)))
         throw new Blocked("ENGINE_SESSION_ALREADY_ACTIVE");
       const token = randomUUID();
-      this.store.db
+      store.db
         .prepare(
           "INSERT INTO engine_sessions VALUES(1,?,?,?,'RUNNING',?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,pid=excluded.pid,mode=excluded.mode,state=excluded.state,started_at=excluded.started_at",
         )
         .run(token, process.pid, mode, Date.now());
       this.token = token;
+      this.sessionStore = store;
     });
   }
   private release() {
     if (this.token)
-      this.store.db
+      (this.sessionStore ?? this.store).db
         .prepare(
           "UPDATE engine_sessions SET state='STOPPED' WHERE id=1 AND token=?",
         )
@@ -120,7 +130,7 @@ export class ModeManager<T extends ModeEngine> {
         this.selected = "LIVE";
         this.recoveryOnly = true;
         env.TRADING_MODE = "live";
-        this.store.set("selectedTradingMode", "LIVE");
+        this.controlStore.set("selectedTradingMode", "LIVE");
         this.store.set("newEntriesEnabled", false);
         try {
           this.current = this.factory("LIVE");
@@ -175,7 +185,7 @@ export class ModeManager<T extends ModeEngine> {
         this.selected = mode;
         this.recoveryOnly = false;
         env.TRADING_MODE = mode === "LIVE" ? "live" : "demo";
-        this.store.set("selectedTradingMode", mode);
+        this.controlStore.set("selectedTradingMode", mode);
         let engine: T | undefined;
         try {
           if (mode === "DEMO") new DemoLedger(this.store.db).initialize();
@@ -237,7 +247,7 @@ export class ModeManager<T extends ModeEngine> {
     });
   }
   private assertMigrationSafe() {
-    const blocks = kronosMigrationPreflight(this.store.db).blockers.filter(
+    const blocks = (this.databases?[this.databases.demo,this.databases.live]:[this.store]).flatMap(s=>kronosMigrationPreflight(s.db).blockers).filter(
       (b) => migrationSafetyCodes.has(b.code),
     );
     if (blocks.length)

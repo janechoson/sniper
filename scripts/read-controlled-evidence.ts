@@ -1,3 +1,4 @@
+import { tradingDatabasePath } from "../src/database-session.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { env } from "../src/config.js";
@@ -24,7 +25,7 @@ for(let i=0;i<executions.length;i++){
   receipts.push({side:e.intent.side,signature:e.signature,status:status.confirmationStatus,slot:receipt.slot,...delta,networkFeeLamports:receipt.meta.fee,actualPrincipalLamports:e.intent.side==="BUY"?principal.toString():null,
     newWalletTokenAccountRentLamports:(receipt.meta.postTokenBalances??[]).filter(b=>b.owner===env.WALLET_PUBLIC_KEY&&b.mint===run.selectedMint&&receipt.meta!.preBalances[b.accountIndex]===0).reduce((sum,b)=>sum+BigInt(receipt.meta!.postBalances[b.accountIndex]!),0n)});
 }
-const store=new Store(env.DATABASE_PATH,{readOnly:true});
+const store=new Store(tradingDatabasePath("live"),{readOnly:true});
 try{
   const records=store.db.prepare("SELECT kind,mint,payload FROM records WHERE id>? ORDER BY id").all(run.run.startRecordId);
   const analyses=records.filter(r=>r.kind==="events"&&JSON.parse(String(r.payload)).type==="ANALYZE");

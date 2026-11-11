@@ -1,5 +1,5 @@
 import type { CandidateState } from "./candidate-lifecycle.js";
-import { env, type Settings } from "./config.js";
+import { type Settings } from "./config.js";
 import type { Execution, FailureStage, Market } from "./domain.js";
 import { normalizeMarket } from "./gmgn.js";
 import type { Store } from "./store.js";
@@ -18,7 +18,7 @@ export function flowView(
     .prepare(
       "SELECT id,payload FROM records WHERE kind='pipeline_transitions' AND json_extract(payload,'$.mode')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT 120",
     )
-    .all(env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId())
+    .all(store.mode, store.mode, store.demoAccountId())
     .map((r) => ({ id: Number(r.id), ...JSON.parse(String(r.payload)) }))
     .reverse();
   const totals = Object.fromEntries(
@@ -26,13 +26,13 @@ export function flowView(
       .prepare(
         "SELECT json_extract(payload,'$.type') type,count(*) n FROM records WHERE kind='pipeline_transitions' AND id>? AND json_extract(payload,'$.mode')=? AND (?<>'demo' OR scope_account=?) GROUP BY type",
       )
-      .all(startId, env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId())
+      .all(startId, store.mode, store.mode, store.demoAccountId())
       .map((r) => [String(r.type), Number(r.n)]),
   );
   const cache = new Map<string, Record<string, unknown>>();
-  const positions = store.managedPositions(env.TRADING_MODE);
+  const positions = store.managedPositions(store.mode);
   const buys = executions.filter(
-    (e) => e.intent.mode === env.TRADING_MODE && e.intent.side === "BUY",
+    (e) => e.intent.mode === store.mode && e.intent.side === "BUY",
   );
   const detail = (mint: string) => {
     if (cache.has(mint)) return cache.get(mint)!;
@@ -67,7 +67,7 @@ export function flowView(
           .prepare(
             "SELECT payload FROM (SELECT payload,0 AS priority FROM entry_structure_watch WHERE mode=? AND mint=? UNION ALL SELECT payload,1 AS priority FROM sniper_structure_watch WHERE mode=? AND mint=?) ORDER BY priority LIMIT 1",
           )
-          .get(env.TRADING_MODE, mint, env.TRADING_MODE, mint);
+          .get(store.mode, mint, store.mode, mint);
         return r ? JSON.parse(String(r.payload)) : undefined;
       })(),
       capitalFlow: c
@@ -151,8 +151,8 @@ export function flowView(
           )
           .get(
             Date.now() - 60000,
-            env.TRADING_MODE,
-            env.TRADING_MODE,
+            store.mode,
+            store.mode,
             store.demoAccountId(),
           )!.n,
       ),

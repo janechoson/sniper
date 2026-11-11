@@ -46,7 +46,7 @@ export class Executor {
   >;
   private readonly liveProvider?: SolanaExecutionProvider;
   readonly demo?: DemoExecutor;
-  private readonly sessionMode = env.TRADING_MODE;
+  private readonly sessionMode: import("./domain.js").Mode;
   private live() {
     if (
       this.sessionMode !== "live" ||
@@ -65,6 +65,7 @@ export class Executor {
     readonly controlled?: ControlledSession,
     demoQuotes?: QuoteSource,
   ) {
+    this.sessionMode = store.mode;
     if (this.sessionMode === "live") {
       this.liveProvider = provider ?? new JupiterExecutionProvider(rpc);
       this.provider = this.liveProvider;
@@ -81,7 +82,7 @@ export class Executor {
     if (
       i.mode === "paper" ||
       i.mode !== this.sessionMode ||
-      env.TRADING_MODE !== this.sessionMode
+      this.store.mode !== this.sessionMode
     )
       throw new Blocked("IMMUTABLE_EXECUTION_MODE_MISMATCH");
     // Read persisted settings every time, including immediately before signing.
@@ -113,7 +114,7 @@ export class Executor {
       throw new Blocked("SELL_POSITION_MISSING");
     }
     this.controlled?.validate(i);
-    if (i.provider !== "JUPITER" || i.mode !== env.TRADING_MODE)
+    if (i.provider !== "JUPITER" || i.mode !== this.sessionMode)
       throw new Blocked("Trade execution mode/provider mismatch");
     if (Date.now() > i.expiresAt)
       throw new CandidateRejected("QUOTE_STALE", { reason: "INTENT_EXPIRED" });
@@ -890,7 +891,7 @@ export class Executor {
     try {
       for (const e of this.store
         .pending()
-        .filter((e) => e.intent.mode === env.TRADING_MODE)) {
+        .filter((e) => e.intent.mode === this.sessionMode)) {
         if (e.intent.provider !== "JUPITER") {
           this.store.reportFailure(
             "Legacy GMGN pending trade requires manual review; never replayed",

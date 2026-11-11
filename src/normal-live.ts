@@ -7,7 +7,7 @@ import { SMOKE_MAINNET_GENESIS } from "./smoke-policy.js";
 // Explicit normal-live startup. Historical controlled sessions remain audit data.
 export async function activateNormalLive(engine: Engine) {
   if (
-    env.TRADING_MODE !== "live" ||
+    engine.mode !== "live" ||
     !env.LIVE_TRADING_ACK ||
     !env.NEW_ENTRIES_ENABLED ||
     !env.SCANNER_ENABLED

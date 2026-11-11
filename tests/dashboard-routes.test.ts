@@ -61,6 +61,7 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           "/settings",
           "/logs",
           "/thongke",
+          "/chart-learning",
         ]) {
           const r = await fetch(base + path);
           assert.equal(r.status, 200);
@@ -77,6 +78,20 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           assert.match(r.headers.get("content-type") ?? "", /json/);
           assert.doesNotMatch(await r.text(), /routeOutlet/);
         }
+      },
+    );
+    await t.test(
+      "Chart Learning uses persisted SQLite with honest empty states",
+      async () => {
+        const result = await (await fetch(base + "/api/chart-learning")).json();
+        assert.equal(result.overview.scope.mode, "SHARED");
+        assert.equal(result.overview.candleCount, 0);
+        assert.deepEqual(result.rules, []);
+        assert.deepEqual(result.decisions, []);
+        const decision = await (
+          await fetch(base + "/api/chart-learning/decision?id=FAKE")
+        ).json();
+        assert.equal(decision.error, "DECISION_NOT_FOUND");
       },
     );
     await t.test(

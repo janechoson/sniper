@@ -1,5 +1,5 @@
 import type { Store } from "./store.js";
-import { env, type Settings } from "./config.js";
+import { type Settings } from "./config.js";
 import type { Candidate } from "./domain.js";
 import type { FlowObservation } from "./capital-flow.js";
 import { discoveryBoost } from "./discovery.js";
@@ -151,7 +151,7 @@ export class SniperStructure {
     const old = this.get(c.mint);
     if (hasEntryWatchEligibility(old)) return old;
     if (
-      this.store.candidateAuthority(c.mint, env.TRADING_MODE)
+      this.store.candidateAuthority(c.mint, this.store.mode)
         .entryWatchDismissedAt
     )
       return undefined;
@@ -194,7 +194,7 @@ export class SniperStructure {
     };
     this.store.db
       .prepare("INSERT INTO entry_structure_watch VALUES(?,?,?,?)")
-      .run(env.TRADING_MODE, c.mint, now, JSON.stringify(row));
+      .run(this.store.mode, c.mint, now, JSON.stringify(row));
     this.store.record("pre_watch_approvals", c.mint, row.eligibility);
     return row;
   }
@@ -222,7 +222,7 @@ export class SniperStructure {
         .prepare(
           "UPDATE entry_structure_watch SET payload=? WHERE mode=? AND mint=?",
         )
-        .run(JSON.stringify(row), env.TRADING_MODE, row.mint);
+        .run(JSON.stringify(row), this.store.mode, row.mint);
       this.store.db
         .prepare(
           "UPDATE candidate_lifecycle SET payload=json_set(payload,'$.structureWatchExpiresAt',?,'$.expiresAt',?) WHERE mode=? AND mint=? AND json_extract(payload,'$.structureWatchExpiresAt') IS NOT NULL AND json_extract(payload,'$.state')!='BOUGHT'",
@@ -230,7 +230,7 @@ export class SniperStructure {
         .run(
           row.structureWatchExpiresAt,
           row.structureWatchExpiresAt,
-          env.TRADING_MODE,
+          this.store.mode,
           row.mint,
         );
     }
@@ -238,7 +238,7 @@ export class SniperStructure {
   dismiss(mint: string) {
     return this.store.atomic(() => {
       const row = this.get(mint);
-      const persisted = this.store.candidateAuthority(mint, env.TRADING_MODE);
+      const persisted = this.store.candidateAuthority(mint, this.store.mode);
       // A pruned new-policy row may reveal a legacy row for the same mint.
       // The tombstone must win without modifying that historical record.
       if (persisted.entryWatchDismissedAt && !hasEntryWatchEligibility(row))
@@ -250,7 +250,7 @@ export class SniperStructure {
           dismissalReason: "USER_MANUAL" as const,
         };
       if (!row) {
-        const prior = this.store.candidateAuthority(mint, env.TRADING_MODE);
+        const prior = this.store.candidateAuthority(mint, this.store.mode);
         if (prior.entryWatchDismissedAt || prior.sniperDismissedAt)
           return {
             mint,
@@ -267,11 +267,11 @@ export class SniperStructure {
         previousReason: row.reason,
         dismissedBy: "USER",
         reason: "USER_MANUAL",
-        mode: env.TRADING_MODE,
+        mode: this.store.mode,
       });
       const authority = this.store.dismissCandidate(
         mint,
-        env.TRADING_MODE,
+        this.store.mode,
         hasEntryWatchEligibility(row),
       );
       row.status = "USER_REMOVED";
@@ -284,7 +284,7 @@ export class SniperStructure {
         .prepare(
           `UPDATE ${this.table(row)} SET payload=? WHERE mode=? AND mint=?`,
         )
-        .run(JSON.stringify(row), env.TRADING_MODE, mint);
+        .run(JSON.stringify(row), this.store.mode, mint);
       return row;
     });
   }
@@ -293,13 +293,13 @@ export class SniperStructure {
       .prepare(
         "SELECT payload FROM entry_structure_watch WHERE mode=? AND mint=?",
       )
-      .get(env.TRADING_MODE, mint);
+      .get(this.store.mode, mint);
     if (current) return JSON.parse(String(current.payload));
     const r = this.store.db
       .prepare(
         "SELECT payload FROM sniper_structure_watch WHERE mode=? AND mint=?",
       )
-      .get(env.TRADING_MODE, mint);
+      .get(this.store.mode, mint);
     return r ? JSON.parse(String(r.payload)) : undefined;
   }
   list(): StructureWatch[] {
@@ -307,16 +307,16 @@ export class SniperStructure {
       .prepare(
         "SELECT payload FROM (SELECT mint,updated_at,payload FROM entry_structure_watch WHERE mode=? UNION ALL SELECT mint,updated_at,payload FROM sniper_structure_watch WHERE mode=? AND mint NOT IN (SELECT mint FROM entry_structure_watch WHERE mode=?)) ORDER BY updated_at DESC LIMIT 500",
       )
-      .all(env.TRADING_MODE, env.TRADING_MODE, env.TRADING_MODE)
+      .all(this.store.mode, this.store.mode, this.store.mode)
       .map((r) => JSON.parse(String(r.payload)));
   }
   observe(c: Candidate, o?: FlowObservation, now = Date.now()) {
     const old = this.get(c.mint);
     if (
       hasEntryWatchEligibility(old)
-        ? this.store.candidateAuthority(c.mint, env.TRADING_MODE)
+        ? this.store.candidateAuthority(c.mint, this.store.mode)
             .entryWatchDismissedAt
-        : this.store.candidateAuthority(c.mint, env.TRADING_MODE)
+        : this.store.candidateAuthority(c.mint, this.store.mode)
             .sniperDismissedAt
     )
       return old;
@@ -350,7 +350,7 @@ export class SniperStructure {
       .prepare(
         `INSERT INTO ${this.table(next)} VALUES(?,?,?,?) ON CONFLICT(mode,mint) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload`,
       )
-      .run(env.TRADING_MODE, c.mint, now, JSON.stringify(next));
+      .run(this.store.mode, c.mint, now, JSON.stringify(next));
     if (old?.phase !== next.phase || old?.status !== next.status)
       this.store.record("structure_transitions", c.mint, {
         from: old?.phase,
@@ -358,13 +358,13 @@ export class SniperStructure {
         status: next.status,
         reason: next.reason,
         at: now,
-        mode: env.TRADING_MODE,
+        mode: this.store.mode,
       });
     this.store.db
       .prepare(
         `DELETE FROM ${this.table(next)} WHERE mode=? AND mint IN (SELECT mint FROM ${this.table(next)} WHERE mode=? AND json_extract(payload,'$.status') NOT IN ('ACTIVE','PASSED') ORDER BY updated_at DESC LIMIT -1 OFFSET 250)`,
       )
-      .run(env.TRADING_MODE, env.TRADING_MODE);
+      .run(this.store.mode, this.store.mode);
     return next;
   }
   invalidate(mint: string, reason: string) {
@@ -376,7 +376,7 @@ export class SniperStructure {
         .prepare(
           `UPDATE ${this.table(r)} SET payload=? WHERE mode=? AND mint=?`,
         )
-        .run(JSON.stringify(r), env.TRADING_MODE, mint);
+        .run(JSON.stringify(r), this.store.mode, mint);
     }
   }
   expire(now = Date.now()) {
