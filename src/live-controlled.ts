@@ -1,19 +1,17 @@
-import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { env, defaultSettings, settingsSchema } from "./config.js";
-import { Store } from "./store.js";
-import { Solana } from "./solana.js";
-import { Gmgn, normalizeMarket } from "./gmgn.js";
-import { Jev } from "./jev.js";
-import { JupiterExecutionProvider, localWallet } from "./execution-provider.js";
-import { ControlledSession, CONTROLLED_BUY_CAP } from "./controlled-session.js";
-import { acquireLock, startServer } from "./server.js";
+import { defaultSettings, env, settingsSchema } from "./config.js";
+import { CONTROLLED_BUY_CAP, ControlledSession } from "./controlled-session.js";
 import { Blocked } from "./domain.js";
+import { JupiterExecutionProvider, localWallet } from "./execution-provider.js";
 import { Executor } from "./executor.js";
-import { TradingMemory } from "./trading-memory.js";
-import { SMOKE_USDC, SMOKE_MAINNET_GENESIS } from "./smoke-policy.js";
-import { json, log, safeError, sleep } from "./util.js";
+import { Gmgn } from "./gmgn.js";
 import { size } from "./risk.js";
+import { acquireLock, startServer } from "./server.js";
+import { SMOKE_MAINNET_GENESIS, SMOKE_USDC } from "./smoke-policy.js";
+import { Solana } from "./solana.js";
+import { Store } from "./store.js";
+import { json, log, safeError, sleep } from "./util.js";
 
 async function preflight() {
   if (env.TRADING_MODE !== "live" || !env.LIVE_TRADING_ACK)
@@ -112,7 +110,6 @@ async function preflight() {
       throw new Blocked("OPEN_OR_PENDING_TRADE_REQUIRES_RECONCILIATION");
     const rpc = new Solana(),
       gmgn = new Gmgn(),
-      jev = new Jev(),
       provider = new JupiterExecutionProvider(rpc);
     if ((await rpc.connection.getGenesisHash()) !== SMOKE_MAINNET_GENESIS)
       throw new Blocked("RPC_NOT_SOLANA_MAINNET");
@@ -128,18 +125,8 @@ async function preflight() {
       throw new Blocked("NORMAL_ENTRY_EXCEEDS_CONTROLLED_CAP_NO_RESIZE");
     const candidates = await gmgn.discover();
     if (!candidates[0]) throw new Blocked("GMGN_NO_CANDIDATES");
-    const info = await gmgn.info(candidates[0].mint),
-      security = await gmgn.security(candidates[0], settings);
-    const memory = new TradingMemory(store);
-    // Health probe is read-only, not a scanner trade or an entry override.
-    const decision = await jev.decide({
-      currentToken: { market: normalizeMarket(info), security },
-      historicalExperience: {
-        similarTrades: 0,
-        confidence: "INSUFFICIENT",
-        usableForDecision: false,
-      },
-    });
+    await gmgn.info(candidates[0].mint);
+    await gmgn.security(candidates[0], settings);
     const quote = await provider.quoteBuy(
       SMOKE_USDC,
       amount,
@@ -167,9 +154,7 @@ async function preflight() {
       nextEntryLamports: amount,
       rpc: rpc.http.health,
       gmgn: gmgn.health,
-      jev: { health: jev.http.health, model: decision.model },
       jupiter: provider.health,
-      historicalSamples: memory.report("live").completedTrades,
       probeBroadcasts: 0,
     });
     return session.id;
@@ -220,8 +205,7 @@ async function main() {
             "events",
             "token_execution_checks",
             "candidate_rejections",
-            "jev_decisions",
-            "historical_experience",
+            "kronos_decisions",
             "risk_decisions",
           ].includes(String(row.kind))
         )
@@ -288,9 +272,6 @@ async function main() {
   await app.engine.stop();
   const run = session.read();
   const position = store.positions("live").find((p) => p.id === run.positionId);
-  const memory = run.positionId
-    ? app.engine.memory.detail(run.positionId)
-    : null;
   const executions = store
     .executions()
     .filter((e) => e.intent.positionId === run.positionId);
@@ -317,7 +298,6 @@ async function main() {
   const success =
     run.status === "COMPLETE" &&
     position?.state === "CLOSED" &&
-    memory?.outcome &&
     confirmed("BUY").length === 1 &&
     confirmed("SELL").length > 0;
   let currentTokenBalance: string | null = null;
@@ -345,7 +325,6 @@ async function main() {
     selectedMint: run.mint ?? null,
     position: position ?? null,
     executions,
-    learning: memory,
     currentTokenBalance,
     scannerStopped: !app.engine.running,
     remainingOpenPosition:
@@ -364,7 +343,6 @@ async function main() {
       currentTokenBalance,
       buySignature: run.buySignature,
       sellError: finalReason,
-      lastQuote: memory?.preflights,
     });
   emit(
     success
@@ -375,7 +353,6 @@ async function main() {
       status: report.status,
       run: session.read(),
       position: position?.state,
-      learningOutcome: memory?.outcome,
     },
   );
   await app.stop();

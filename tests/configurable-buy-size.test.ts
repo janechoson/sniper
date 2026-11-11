@@ -1,21 +1,21 @@
-import { test } from "node:test";
+import { VersionedTransaction } from "@solana/web3.js";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
-import { VersionedTransaction } from "@solana/web3.js";
+import { dirname, join, resolve } from "node:path";
+import { test } from "node:test";
 import { settingsSchema } from "../src/config.js";
-import { size } from "../src/risk.js";
+import { KRONOS } from "../src/kronos-domain.js";
+import type { KronosDecisionStrategy } from "../src/kronos-strategy.js";
 import {
   fixedSolLamports,
   positionSizeMatches,
 } from "../src/position-sizing.js";
+import { size } from "../src/risk.js";
 import { Store } from "../src/store.js";
-import { KRONOS } from "../src/kronos-domain.js";
-import type { KronosDecisionStrategy } from "../src/kronos-strategy.js";
+import { MINT, settings } from "./fixtures.js";
 import { mockExecutionCase } from "./one-shot-fixtures.js";
-import { MINT, settings, jev } from "./fixtures.js";
 
 test("buy percentage accepts two decimal places within 0.01–100 and defaults to 1", () => {
   assert.equal(settingsSchema.parse({}).positionSizePercent, 1);
@@ -164,7 +164,7 @@ function kronos(): KronosDecisionStrategy {
   };
 }
 
-for (const strategy of ["STANDARD", "KRONOS"] as const)
+for (const strategy of ["KRONOS"] as const)
   test(`${strategy} winner uses 2.5% consistently in status, approved intent and fake execution`, async (t) => {
     const f = mockExecutionCase(
       undefined,
@@ -178,8 +178,6 @@ for (const strategy of ["STANDARD", "KRONOS"] as const)
       },
     );
     try {
-      if (strategy === "KRONOS")
-        f.e.jev.decide = async () => ({ ...jev(), action: "SKIP" });
       f.e.updateSettings({ ...f.e.settings, positionSizePercent: 2.5 });
       assert.equal((await f.e.status()).nextBuyLamports, "24500000");
       await f.e.analyze(MINT);
@@ -205,7 +203,7 @@ for (const strategy of ["STANDARD", "KRONOS"] as const)
     }
   });
 
-for (const strategy of ["STANDARD", "KRONOS"] as const)
+for (const strategy of ["KRONOS"] as const)
   test(`${strategy} fixed 0.2 SOL reaches approved intent, atomic claim, preview and fake execution`, async (t) => {
     const f = mockExecutionCase(
       undefined,
@@ -219,8 +217,6 @@ for (const strategy of ["STANDARD", "KRONOS"] as const)
       },
     );
     try {
-      if (strategy === "KRONOS")
-        f.e.jev.decide = async () => ({ ...jev(), action: "SKIP" });
       f.e.updateSettings({
         ...f.e.settings,
         positionSizeMode: "SOL",
@@ -260,18 +256,14 @@ for (const boundary of ["QUOTE", "IMMEDIATE_PRE_SIGN"] as const)
               : { positionSizeSol: 0.25 }),
           });
         if (boundary === "QUOTE") {
-          const original = f.e.executor.provider.quoteBuy.bind(
-            f.e.executor.provider,
-          );
-          f.e.executor.provider.quoteBuy = async (...args) => {
+          const original = f.execution.quoteBuy.bind(f.execution);
+          f.execution.quoteBuy = async (...args) => {
             update();
             return original(...args);
           };
         } else {
-          const original = f.e.executor.provider.execute.bind(
-            f.e.executor.provider,
-          );
-          f.e.executor.provider.execute = async (...args) => {
+          const original = f.execution.execute.bind(f.execution);
+          f.execution.execute = async (...args) => {
             update();
             return original(...args);
           };
@@ -295,8 +287,8 @@ for (const boundary of ["QUOTE", "IMMEDIATE_PRE_SIGN"] as const)
 test("switching percent to SOL while quote is pending revokes the percentage intent", async () => {
   const f = mockExecutionCase();
   try {
-    const original = f.e.executor.provider.quoteBuy.bind(f.e.executor.provider);
-    f.e.executor.provider.quoteBuy = async (...args) => {
+    const original = f.execution.quoteBuy.bind(f.execution);
+    f.execution.quoteBuy = async (...args) => {
       f.e.updateSettings({ ...f.e.settings, positionSizeMode: "SOL" });
       return original(...args);
     };
@@ -342,7 +334,7 @@ test("Executor wallet reread rejects an unaffordable fixed amount before quote",
       positionSizeSol: 0.2,
     });
     let reads = 0;
-    f.e.executor.provider.getWalletBalance = async () =>
+    f.execution.getWalletBalance = async () =>
       ++reads === 1 ? 1000000000n : 210000000n;
     await assert.rejects(f.e.analyze(MINT));
     await f.e.settleEntryEvaluations();
@@ -375,7 +367,7 @@ for (const failure of [
       assert.equal(f.stats().signed, 0);
       assert.equal(
         f.store.positions("live").filter((p) => p.state === "OPEN").length,
-        0,
+        failure === "OWNERSHIP" ? 1 : 0,
       );
     } finally {
       await f.close();
@@ -387,18 +379,14 @@ for (const boundary of ["QUOTE", "IMMEDIATE_PRE_SIGN"] as const)
     const f = mockExecutionCase();
     try {
       if (boundary === "QUOTE") {
-        const original = f.e.executor.provider.quoteBuy.bind(
-          f.e.executor.provider,
-        );
-        f.e.executor.provider.quoteBuy = async (...args) => {
+        const original = f.execution.quoteBuy.bind(f.execution);
+        f.execution.quoteBuy = async (...args) => {
           f.e.updateSettings({ ...f.e.settings, positionSizePercent: 2.5 });
           return original(...args);
         };
       } else {
-        const original = f.e.executor.provider.execute.bind(
-          f.e.executor.provider,
-        );
-        f.e.executor.provider.execute = async (...args) => {
+        const original = f.execution.execute.bind(f.execution);
+        f.execution.execute = async (...args) => {
           f.e.updateSettings({ ...f.e.settings, positionSizePercent: 2.5 });
           return original(...args);
         };

@@ -1,38 +1,37 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Store } from "../src/store.js";
+import { join } from "node:path";
+import { test } from "node:test";
+import { env, settingsSchema } from "../src/config.js";
+import { known, unknown } from "../src/domain.js";
 import {
-  RiskEngine,
-  size,
-  paperQuantity,
-  paperValue,
-  cheapGuard,
-  exitDecision,
-} from "../src/risk.js";
-import {
+  normalizeIntelligence,
   normalizeMarket,
   normalizeSecurity,
-  normalizeIntelligence,
   numberEvidence,
-  percent,
   parseDiscovery,
+  percent,
 } from "../src/gmgn.js";
-import { settingsSchema, env } from "../src/config.js";
-import { unknown, known } from "../src/domain.js";
-import { jevSchema } from "../src/jev.js";
-import { Jev } from "../src/jev.js";
 import {
-  snapshot,
-  settings,
+  RiskEngine,
+  cheapGuard,
+  exitDecision,
+  paperQuantity,
+  paperValue,
+  size,
+} from "../src/risk.js";
+import { Store } from "../src/store.js";
+import {
   MINT,
   candidate,
   info,
-  securityRaw,
   position,
+  securityRaw,
+  settings,
+  snapshot,
 } from "./fixtures.js";
+import { bindFixtureClaim } from "./kronos-fixtures.js";
 const context = {
     balance: 1000000000n,
     pending: 0n,
@@ -146,7 +145,7 @@ test("holder and creator structural defaults remain optional unknowns", () => {
   assert.equal(i.bundlePercent.state, "UNKNOWN");
   assert.equal(i.dueDiligence.score.state, "UNKNOWN");
 });
-test("optional holder/dev data never independently blocks Jev-approved entry", () => {
+test("optional holder/dev data never independently blocks KRONOS-approved entry", () => {
   const snap = snapshot();
   snap.intelligence.holders.top10 = unknown();
   snap.intelligence.creator.history = unknown();
@@ -156,7 +155,7 @@ test("optional holder/dev data never independently blocks Jev-approved entry", (
   });
   assert.equal(risk.evaluate(snap, settings, context).outcome, "BUY");
 });
-test("critical evidence cannot be overridden by Jev BUY", () => {
+test("critical evidence cannot be overridden by KRONOS BUY", () => {
   const snap = snapshot();
   snap.security.findings.push({
     level: "CRITICAL",
@@ -173,20 +172,20 @@ test("small critical-data list blocks unknown controls without fabricating a rug
     "SKIP_MISSING_CRITICAL_DATA",
   );
 });
-test("cheap filters allow low-but-positive liquidity and unknown optional age to reach Jev", () => {
+test("cheap filters allow low-but-positive liquidity and unknown optional age to reach KRONOS", () => {
   const s = snapshot();
   delete s.candidate.createdAt;
   s.market.liquidity = known(1);
   assert.equal(cheapGuard(s.candidate, s.market, settings).allowed, true);
   assert.equal(risk.evaluate(s, settings, context).outcome, "SKIP_MARKET");
 });
-test("risk limits and Jev outcomes produce specific human-readable decisions", () => {
+test("risk limits and KRONOS decisions produce specific human-readable decisions", () => {
   let s = snapshot();
   s.intelligence.holders.top10 = known(90);
   assert.equal(risk.evaluate(s, settings, context).outcome, "SKIP_RISK");
   s = snapshot();
-  s.jev!.action = "SKIP";
-  assert.equal(risk.evaluate(s, settings, context).outcome, "SKIP_JEV");
+  s.kronos!.action = "WAIT";
+  assert.equal(risk.evaluate(s, settings, context).outcome, "SKIP_RISK");
   s = snapshot();
   s.market.at = 1;
   assert.match(risk.evaluate(s, settings, context).reason, /stale/);
@@ -204,15 +203,6 @@ test("risk limits and Jev outcomes produce specific human-readable decisions", (
     risk.evaluate(snapshot(), settings, { ...context, entriesEnabled: false })
       .allowed,
     false,
-  );
-});
-test("Jev rejects unpinned or malformed provider replies", () => {
-  assert.throws(() => jevSchema.parse({ model: "jev-latest", answers: {} }));
-  assert.throws(() =>
-    jevSchema.parse({
-      model: "jev-1.14.0",
-      answers: { action: { type: "choice", choice: "HOLD" } },
-    }),
   );
 });
 test("negative PnL and position age never sell; genuine protective exits remain active", () => {
@@ -249,7 +239,7 @@ test("negative PnL and position age never sell; genuine protective exits remain 
   );
   assert.equal(
     exitDecision(p, 2000000n, settings, { smartMoney: true })?.reason,
-    "Take profit",
+    undefined,
   );
   assert.equal(
     exitDecision(
@@ -259,40 +249,6 @@ test("negative PnL and position age never sell; genuine protective exits remain 
       { smartMoney: true },
     ),
     undefined,
-  );
-});
-test("trailing profit requires its configured positive activation and cannot sell at negative PnL", () => {
-  const p = position();
-  assert.equal(
-    exitDecision({ ...p, highWaterLamports: "1250000" }, 990000n, settings, {}),
-    undefined,
-  );
-  assert.equal(
-    exitDecision({ ...p, highWaterLamports: "1500000" }, 500000n, settings, {}),
-    undefined,
-  );
-  assert.equal(
-    exitDecision({ ...p, highWaterLamports: "1500000" }, 1150000n, settings, {})
-      ?.reason,
-    "Trailing profit",
-  );
-  assert.equal(
-    exitDecision(
-      { ...p, highWaterLamports: "1500000" },
-      1150000n,
-      { ...settings, trailingActivationBps: 6000 },
-      {},
-    ),
-    undefined,
-  );
-  assert.equal(
-    exitDecision(
-      { ...p, highWaterLamports: "1500000" },
-      1150000n,
-      { ...settings, trailingActivationBps: 5000 },
-      {},
-    )?.reason,
-    "Trailing profit",
   );
 });
 test("old strategy stop-loss keys are ignored without retaining a hidden default", () => {
@@ -317,16 +273,19 @@ test("SQLite restart preserves dedupe, BUY intent, open position and entry contr
       db.discover({ ...candidate(), source: "gmgn:migrated" }),
       false,
     );
-    const i = risk.approve(snapshot(), settings, context, "paper");
+    const i = bindFixtureClaim(
+      db,
+      risk.approve(snapshot(), settings, context, "demo"),
+    );
     db.claim(i);
-    db.savePosition({ ...position(), mode: "paper" });
+    db.savePosition({ ...position(), mode: "demo" });
     db.set("newEntriesEnabled", false);
-    assert.equal(db.reserved("paper"), 9800000n);
+    assert.equal(db.reserved("demo"), 9800000n);
     db.close();
     db = new Store(path);
     assert.equal(db.entriesEnabled(), false);
-    assert.equal(db.bought(MINT, "paper"), true);
-    assert.equal(db.positions("paper").length, 2);
+    assert.equal(db.bought(MINT, "demo"), true);
+    assert.equal(db.positions("demo").length, 2);
     assert.throws(() => db!.claim(i));
     assert.equal(
       db.db.prepare("PRAGMA journal_mode").get()?.journal_mode,
@@ -352,77 +311,5 @@ test("new entry environment override cannot be bypassed by stored settings", () 
   } finally {
     env.NEW_ENTRIES_ENABLED = before;
     db.close();
-  }
-});
-test("one typed Jev request validates the pinned response and caches semantic duplicates", async () => {
-  const original = globalThis.fetch,
-    key = env.TYPESAFE_API_KEY;
-  env.TYPESAFE_API_KEY = "test-key-not-secret";
-  let calls = 0;
-  globalThis.fetch = async (_url, init) => {
-    calls++;
-    const body = JSON.parse(String(init?.body));
-    assert.equal(body.model, "jev-1.14.0");
-    assert.equal(body.state.at, undefined);
-    assert.equal(Object.keys(body.questions).length, 8);
-    return new Response(
-      JSON.stringify({
-        model: "jev-1.14.0",
-        answers: {
-          historical_assessment: {
-            type: "choice",
-            choice: "UNAVAILABLE",
-            confidence: 1,
-            probabilities: { UNAVAILABLE: 1 },
-          },
-          historical_strength: {
-            type: "choice",
-            choice: "NONE",
-            confidence: 1,
-            probabilities: { NONE: 1 },
-          },
-          primary_reason: {
-            type: "choice",
-            choice: "CURRENT_MOMENTUM",
-            confidence: 1,
-            probabilities: { CURRENT_MOMENTUM: 1 },
-          },
-          action: {
-            type: "choice",
-            choice: "BUY",
-            confidence: 1,
-            probabilities: { BUY: 1, SKIP: 0 },
-          },
-          risk: {
-            type: "choice",
-            choice: "MEDIUM",
-            confidence: 1,
-            probabilities: { LOW: 0, MEDIUM: 1, HIGH: 0 },
-          },
-          suspicious: { type: "noul", noul: 0 },
-          data_sufficiency: { type: "noul", noul: 1 },
-          momentum_quality: {
-            type: "choice",
-            choice: "STRONG",
-            confidence: 1,
-            probabilities: { WEAK: 0, MIXED: 0, STRONG: 1 },
-          },
-        },
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
-  };
-  try {
-    const j = new Jev();
-    const first = await j.decide({ liquidity: 10000, at: 1 });
-    const second = await j.decide({ liquidity: 10000, at: 2 });
-    assert.equal(first.action, "BUY");
-    assert.equal(first.inputHash, second.inputHash);
-    assert.equal(calls, 1);
-    await j.decide({ liquidity: 10000, at: 3 }, true);
-    assert.equal(calls, 2);
-  } finally {
-    globalThis.fetch = original;
-    env.TYPESAFE_API_KEY = key;
   }
 });

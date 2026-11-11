@@ -1,14 +1,10 @@
 import { JupiterExecutionProvider, localWallet } from "./execution-provider.js";
 import { SMOKE_USDC, smokeAmount } from "./smoke-policy.js";
 import { env } from "./config.js";
-import { Store } from "./store.js";
-import { Engine } from "./engine.js";
 import { Gmgn, normalizeMarket, SOL } from "./gmgn.js";
-import { Jev } from "./jev.js";
 import { Solana } from "./solana.js";
 import { Blocked } from "./domain.js";
-import { acquireLock } from "./server.js";
-import { json, safeError, sleep } from "./util.js";
+import { json, safeError } from "./util.js";
 export async function verify(target: string) {
   if (target === "execution") {
     const rpc = new Solana(),
@@ -77,13 +73,6 @@ export async function verify(target: string) {
       broadcasts: 0,
     };
   }
-  if (target === "jev")
-    return new Jev().decide({
-      purpose: "Read-only configuration probe; not a trade",
-      market: "UNKNOWN",
-      mintControl: "UNKNOWN",
-      freezeControl: "UNKNOWN",
-    });
   if (target === "gmgn") {
     const g = new Gmgn(),
       candidates = await g.discover();
@@ -107,52 +96,6 @@ export async function verify(target: string) {
       solPrice: normalizeMarket(await g.info(SOL)).price,
       broadcasts: 0,
     };
-  }
-  if (target === "paper") {
-    if (env.TRADING_MODE !== "paper")
-      throw new Blocked("verify:paper requires TRADING_MODE=paper");
-    const release = acquireLock(env.DATABASE_PATH);
-    const store = new Store(env.DATABASE_PATH);
-    try {
-      const engine = new Engine(store);
-      const before = engine.analytics();
-      let cycles = 0;
-      for (let cycle = 0; cycle < env.OBSERVATION_CYCLES; cycle++) {
-        cycles++;
-        await engine.tick();
-        if (engine.gmgn.health.state !== "READY" || !store.entriesEnabled())
-          break;
-        if (cycle < env.OBSERVATION_CYCLES - 1) await sleep(1000);
-      }
-      await engine.monitor();
-      const after = engine.analytics();
-      return {
-        provider: engine.gmgn.health,
-        jev: engine.jev.http.health,
-        cycles,
-        delta: {
-          discovered: after.discovered - before.discovered,
-          analyzed: after.analyzed - before.analyzed,
-          jevCalls: after.jevCalls - before.jevCalls,
-          jevBuy: after.jevBuy - before.jevBuy,
-          bought: after.bought - before.bought,
-          closed: after.closed - before.closed,
-        },
-        analytics: after,
-        blocked:
-          engine.gmgn.health.state !== "READY"
-            ? (engine.gmgn.health.reason ??
-              store.get<string>("haltReason") ??
-              "No real GMGN discovery was observed")
-            : engine.jev.http.health.state !== "READY"
-              ? "No valid Jev decision observed"
-              : undefined,
-        broadcasts: 0,
-      };
-    } finally {
-      store.close();
-      release();
-    }
   }
   throw new Blocked("Unknown verification command");
 }

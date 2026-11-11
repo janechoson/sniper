@@ -1,4 +1,42 @@
 /* Rug Killer canonical design tokens — shared by every route. */
+.mode-selector {
+  display: flex;
+  gap: 6px;
+}
+.mode-selector button[aria-pressed="true"] {
+  background: var(--rk-kronos-soft);
+  border-color: var(--rk-kronos);
+  color: var(--rk-kronos-strong);
+}
+body[data-trading-mode="live"] .mode-selector #selectLive[aria-pressed="true"] {
+  background: var(--rk-brand-soft);
+  color: var(--rk-brand);
+  border-color: var(--rk-brand);
+}
+.mode-account {
+  margin-bottom: 20px;
+}
+.mode-account .stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#accountChart {
+  width: 100%;
+  height: 120px;
+  fill: var(--rk-kronos);
+}
+.account-history-line {
+  fill: none;
+  stroke: var(--rk-kronos);
+  stroke-width: 2;
+}
+body[data-trading-mode="live"] #accountChart {
+  fill: var(--rk-brand);
+}
+body[data-trading-mode="live"] .account-history-line {
+  stroke: var(--rk-brand);
+}
 :root {
   --rk-bg: #f7f0de;
   --rk-bg-soft: #fbf6e9;
@@ -41,10 +79,6 @@
   --rk-kronos-soft: #eee4fa;
   --rk-kronos-surface: #f5edff;
   --rk-kronos-border: #d6c1ee;
-  --rk-standard: var(--rk-success);
-  --rk-standard-soft: #e2f2dc;
-  --rk-standard-surface: #f0f8ec;
-  --rk-standard-border: #bbdcb4;
   --rk-info: #2e6f9e;
   --rk-info-soft: #dcecf6;
   --rk-shadow-sm: 0 1px 2px rgb(69 48 25 / 6%);
@@ -2127,24 +2161,6 @@ pre {
   }
 }
 
-.position-jev {
-  padding: 12px;
-  background: var(--rk-surface-muted);
-  color: var(--rk-text);
-  border-left: 3px solid var(--rk-warning-strong);
-  border-radius: 6px;
-}
-.position-jev .negative {
-  color: var(--rk-danger);
-}
-.position-jev > span {
-  float: right;
-  font-size: 12px;
-}
-.position-jev p {
-  margin: 6px 0;
-}
-
 .position-capital-flow {
   padding: 12px;
   background: var(--rk-surface-muted);
@@ -3625,11 +3641,6 @@ body > main > footer {
   border-color: var(--rk-border);
   color: var(--rk-kronos);
 }
-.insights-type-badge[data-type="JEV"] {
-  background: var(--rk-surface-muted);
-  border-color: var(--rk-brand);
-  color: var(--rk-text);
-}
 .insights-type-badge[data-type="STRUCTURE"],
 .insights-type-badge[data-type="SECURITY"] {
   background: var(--rk-surface-muted);
@@ -4403,11 +4414,6 @@ tbody tr:hover {
   font-weight: 650;
   border: 1px solid var(--rk-border);
 }
-.strategy-badge[data-strategy="STANDARD"] {
-  background: var(--rk-standard-soft);
-  color: var(--rk-success-strong);
-  border-color: var(--rk-standard-border);
-}
 .strategy-badge[data-strategy="KRONOS"] {
   background: var(--rk-kronos-soft);
   color: var(--rk-kronos-strong);
@@ -4553,16 +4559,6 @@ tbody tr:hover {
   margin: 0;
   min-width: 0;
   font-size: 16px;
-}
-.strategy-card[data-strategy="STANDARD"] > h2 {
-  background: var(--rk-standard-soft);
-}
-.strategy-card[data-strategy="STANDARD"] > h2::before {
-  background: var(--rk-standard);
-}
-.strategy-card[data-strategy="STANDARD"] > h2 span {
-  color: var(--rk-success-strong);
-  font-size: 13px;
 }
 .strategy-card[data-strategy="KRONOS"] > h2 {
   background: var(--rk-kronos-soft);
@@ -5800,10 +5796,6 @@ tbody tr:hover {
 }
 .stats-comparison-wrap th:first-child {
   text-align: left;
-}
-.stats-comparison-wrap th[data-strategy="STANDARD"] {
-  color: var(--rk-success-strong);
-  background: var(--rk-standard-soft);
 }
 .stats-comparison-wrap th[data-strategy="KRONOS"] {
   color: var(--rk-kronos-strong);

@@ -6,7 +6,6 @@ const needles = [
   ["SOLANA_PRIVATE_KEY", env.SOLANA_PRIVATE_KEY],
   ["GMGN_API_KEY", env.GMGN_API_KEY],
   ["GMGN_AUTH_KEY", gmgnSigningKey()],
-  ["TYPESAFE_API_KEY", env.TYPESAFE_API_KEY],
   ["JUPITER_API_KEY", env.JUPITER_API_KEY],
 ];
 if (env.SOLANA_PRIVATE_KEY || env.SOLANA_KEYPAIR_PATH) {

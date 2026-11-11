@@ -1,23 +1,23 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  evolveStructure,
-  SniperStructure,
-  hasTimelyStructurePass,
-  type StructureWatch,
-} from "../src/sniper-structure.js";
-import {
-  recentStructureContext,
-  STRUCTURE_EVIDENCE_VERSION,
-} from "../src/structure-evidence.js";
+import { test } from "node:test";
 import {
   normalizeFlowObservation,
   type FlowObservation,
 } from "../src/capital-flow.js";
 import { normalizeMarket } from "../src/gmgn.js";
-import { Store } from "../src/store.js";
-import { settings, candidate, MINT, info } from "./fixtures.js";
 import { recoveryGuardConfig } from "../src/recovery-guard.js";
+import {
+  evolveStructure,
+  hasTimelyStructurePass,
+  SniperStructure,
+  type StructureWatch,
+} from "../src/sniper-structure.js";
+import { Store } from "../src/store.js";
+import {
+  recentStructureContext,
+  STRUCTURE_EVIDENCE_VERSION,
+} from "../src/structure-evidence.js";
+import { candidate, info, MINT, settings } from "./fixtures.js";
 
 const start = 10_000_000;
 const prices = [100, 96, 93, 93, 94, 95, 96, 97, 98, 99];
@@ -236,7 +236,7 @@ test("bounded trustworthy pre-T0 history seeds context, never PASS, requires liv
     db.db
       .prepare("INSERT INTO candidate_flow_states VALUES(?,?,?)")
       .run(
-        MINT,
+        db.candidateFlowKey(MINT),
         t0 - 1000,
         JSON.stringify({ mint: MINT, observations: history }),
       );

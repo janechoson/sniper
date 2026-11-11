@@ -1,7 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
+import test from "node:test";
+import { pathToFileURL } from "node:url";
 const moduleUrl = pathToFileURL(resolve("public/dashboard-logs.js")).href;
 const { normalizeLogEvent: n, groupLogEntries: group } = await import(
   moduleUrl
@@ -44,7 +44,7 @@ test("Logs never collapse separate fresh attempts or trading modes for same mint
       at: t + 22,
       mint: "mint",
       payload: {
-        mode: "paper",
+        mode: "demo",
         attemptId: b,
         stage: "SECURITY",
         status: "PASS",
@@ -124,7 +124,7 @@ test("Logs use explicit owner and BOUGHT outcome even after loser update", () =>
   ]);
   assert.equal(g[0].owner, "KRONOS");
   assert.equal(g[0].result, "BOUGHT");
-  assert.deepEqual(g[0].strategies, ["KRONOS", "STANDARD"]);
+  assert.deepEqual(g[0].strategies, ["KRONOS"]);
 });
 test("Logs keep position and execution lifecycle groups separate from candidate attempts", () => {
   const g = group([

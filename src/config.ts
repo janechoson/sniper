@@ -3,6 +3,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
+import { PublicKey } from "@solana/web3.js";
 import { fixedSolLamports } from "./position-sizing.js";
 config({ quiet: true });
 // Match the official CLI's global GMGN credential precedence without logging values.
@@ -15,7 +16,7 @@ for (const key of ["GMGN_API_KEY", "GMGN_PRIVATE_KEY"])
 const bool = z.enum(["true", "false"]).transform((v) => v === "true");
 export const env = z
   .object({
-    TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
+    TRADING_MODE: z.enum(["paper", "demo", "live"]).default("demo"),
     LIVE_TRADING_ACK: bool.default(false),
     NEW_ENTRIES_ENABLED: bool.default(true),
     GMGN_API_KEY: z.string().default(""),
@@ -24,12 +25,10 @@ export const env = z
       .string()
       .default(join(homedir(), ".config", "gmgn", "keypair.pem"))
       .transform((v) => v || join(homedir(), ".config", "gmgn", "keypair.pem")),
-    TYPESAFE_API_KEY: z.string().default(""),
     WALLET_PUBLIC_KEY: z.string().default(""),
     SOLANA_PRIVATE_KEY: z.string().default(""),
     SOLANA_KEYPAIR_PATH: z.string().default(""),
     JUPITER_API_KEY: z.string().default(""),
-    JEV_MODEL: z.literal("jev-1.14.0").default("jev-1.14.0"),
     SOLANA_RPC_HTTP: z.url().optional(),
     SOLANA_RPC_WS: z.url().optional(),
     SOLANA_RPC_URL: z.url().default("https://api.mainnet-beta.solana.com"),
@@ -37,7 +36,6 @@ export const env = z
     PORT: z.coerce.number().int().min(1024).max(65535).default(3000),
     SCANNER_ENABLED: bool.default(true),
     SCAN_INTERVAL_MS: z.coerce.number().int().min(10000).default(15000),
-    PAPER_INITIAL_SOL: z.coerce.number().positive().default(1),
     OBSERVATION_CYCLES: z.coerce.number().int().min(1).max(20).default(3),
   })
   .parse(process.env);
@@ -62,7 +60,10 @@ export const settingsSchema = z.preprocess(
       ? Object.fromEntries(
           Object.entries(value).filter(
             ([key]) =>
+              !key.startsWith("jevExit") &&
               ![
+                "standardBuysEnabled",
+                "entryStrategy",
                 "nativeStrategyOrders",
                 "maxPositions",
                 "maxHoldSeconds",
@@ -79,13 +80,21 @@ export const settingsSchema = z.preprocess(
       : value,
   z
     .object({
-      entryStrategy: z.preprocess(
-        (value) =>
-          value === undefined || value === "STANDARD" || value === "KRONOS"
-            ? "FIRST_BUY_WINS"
-            : value,
-        z.literal("FIRST_BUY_WINS"),
-      ),
+      tokenBlacklist: z
+        .array(
+          z
+            .string()
+            .trim()
+            .refine((value) => {
+              try {
+                return new PublicKey(value).toBase58() === value;
+              } catch {
+                return false;
+              }
+            }, "Địa chỉ token Solana không hợp lệ"),
+        )
+        .default([])
+        .transform((values) => [...new Set(values)]),
       positionSizeMode: z.enum(["PERCENT", "SOL"]).default("PERCENT"),
       positionSizePercent: z
         .number()
@@ -211,13 +220,6 @@ export const settingsSchema = z.preprocess(
       positionRecheckMs: z.number().int().min(10000).default(60000),
       positionCollectorConcurrency: z.number().int().min(1).max(8).default(4),
       gmgnReadConcurrency: z.number().int().min(1).max(4).default(3),
-      jevExitConcurrency: z.number().int().min(1).max(4).default(2),
-      jevExitQueueSize: z.number().int().min(20).max(500).default(100),
-      jevExitRecheckMs: z.number().int().min(30000).default(60000),
-      jevExitMinIntervalMs: z.number().int().min(10000).default(15000),
-      jevExitDecisionMaxAgeMs: z.number().int().min(30000).default(120000),
-      jevExitMaterialPnlPoints: z.number().positive().default(10),
-      jevExitMinConfidence: z.number().min(0).max(1).default(0.6),
       exitExecutionsPerCycle: z.number().int().min(1).max(5).default(2),
       flowMaxObservations: z.number().int().min(3).max(240).default(120),
       flowHistoryMs: z.number().int().min(60000).max(3600000).default(1800000),
@@ -233,12 +235,6 @@ export const settingsSchema = z.preprocess(
       flowRegimeConfirmations: z.number().int().min(1).max(5).default(2),
       flowMeaningfulChangePercent: z.number().min(5).max(50).default(10),
       flowStaleMs: z.number().int().min(30000).max(300000).default(90000),
-      jevExitTradeCooldownMs: z
-        .number()
-        .int()
-        .min(15000)
-        .max(600000)
-        .default(60000),
     })
     .strict(),
 );

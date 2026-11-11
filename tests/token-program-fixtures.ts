@@ -1,18 +1,18 @@
-import { PublicKey, type AccountInfo } from "@solana/web3.js";
 import {
-  MintLayout,
-  MINT_SIZE,
   ACCOUNT_SIZE,
   ACCOUNT_TYPE_SIZE,
-  TYPE_SIZE,
-  LENGTH_SIZE,
   AccountType,
   ExtensionType,
   getTypeLen,
+  LENGTH_SIZE,
   MetadataPointerLayout,
+  MINT_SIZE,
+  MintLayout,
   TOKEN_2022_PROGRAM_ID,
+  TYPE_SIZE,
 } from "@solana/spl-token";
 import { pack } from "@solana/spl-token-metadata";
+import { PublicKey, type AccountInfo } from "@solana/web3.js";
 import { MINT } from "./fixtures.js";
 export function mintFixture(
   program = TOKEN_2022_PROGRAM_ID,

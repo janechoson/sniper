@@ -1,7 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mockExecutionCase } from "./one-shot-fixtures.js";
+import { test } from "node:test";
 import { MINT } from "./fixtures.js";
+import { mockExecutionCase } from "./one-shot-fixtures.js";
 
 // The removed Watch bypass contract is replaced with production one-shot checks.
 // Legacy source is retained in data/backups/one-shot-tests for audit.
@@ -10,8 +10,6 @@ for (const failure of [
   "COMPATIBILITY",
   "OWNERSHIP",
   "CAPITAL",
-  "JEV",
-  "STRUCTURE",
   "EXIT",
   "SIMULATE",
   "PRE_SIGN",

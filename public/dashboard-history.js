@@ -52,7 +52,7 @@ export async function mount(ctx) {
           "history-token token-name",
         );
         title.title = p.mint;
-        title.append(el("small", p.strategy || "STANDARD", "strategy-badge"));
+        title.append(el("small", p.strategy || "LEGACY", "strategy-badge"));
         if (window.BOTTokenAvatar)
           title.prepend(
             window.BOTTokenAvatar.create(
@@ -143,20 +143,6 @@ export async function mount(ctx) {
           values.append(m);
         };
         add("Địa chỉ mint", p.mint);
-        if (p.entryComparison) {
-          add(
-            "Entry owner",
-            p.entryComparison.ownershipClaim?.strategy ||
-              p.strategy ||
-              "STANDARD",
-          );
-          add("Ownership rule", "FIRST_BUY_CLAIM");
-          for (const strategy of ["STANDARD", "KRONOS"]) {
-            const e = p.entryComparison.strategies?.[strategy];
-            add(strategy + " decision", e?.decision);
-            add(strategy + " execution", e?.execution);
-          }
-        }
         add(
           "Đã bán",
           tokenQuantity(p.originalQuantity, p.decimals) + " " + symbol,

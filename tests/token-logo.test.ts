@@ -1,17 +1,17 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mergeDiscovery } from "../src/discovery.js";
+import { parseDiscovery, parseTrending } from "../src/gmgn.js";
+import { KronosLab } from "../src/kronos-lab.js";
+import { KronosStore } from "../src/kronos-store.js";
+import { positionViews } from "../src/position-view.js";
+import { Store } from "../src/store.js";
 import {
   normalizeTokenLogo,
-  tokenLogo,
   TOKEN_IMAGE_CSP,
+  tokenLogo,
 } from "../src/token-metadata.js";
-import { parseTrending, parseDiscovery } from "../src/gmgn.js";
-import { mergeDiscovery } from "../src/discovery.js";
-import { Store } from "../src/store.js";
-import { KronosStore } from "../src/kronos-store.js";
-import { KronosLab } from "../src/kronos-lab.js";
-import { positionViews } from "../src/position-view.js";
-import { candidate, position, MINT } from "./fixtures.js";
+import { candidate, MINT, position } from "./fixtures.js";
 const LOGO = "https://gmgn.ai/external-res/test.webp",
   NEW = "https://gmgn.ai/external-res/new.webp";
 test("GMGN logo survives Trending and legacy listing parsers, with a nullable canonical field", () => {
@@ -59,7 +59,9 @@ test("existing candidate payload hydrates listing.logo without DB migration; new
   try {
     const c = { ...candidate(), listing: { logo: LOGO } };
     db.db
-      .prepare("INSERT INTO tokens(mint,payload,at) VALUES(?,?,?)")
+      .prepare(
+        "INSERT INTO mode_tokens(mode,mint,payload,at) VALUES('demo',?,?,?)",
+      )
       .run(c.mint, JSON.stringify(c), Date.now());
     assert.equal(db.token(MINT)?.logo, LOGO);
     assert.equal(db.tokens()[0]?.logo, LOGO);

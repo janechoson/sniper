@@ -1,29 +1,17 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { Gmgn, normalizeMarket } from "../src/gmgn.js";
 import {
-  parseMarketHistory,
   attemptFlow,
   oneShotStructure,
+  parseMarketHistory,
 } from "../src/market-history.js";
+import { protectiveExitDecision } from "../src/risk.js";
 import {
   normalizeSmartMoney,
   unavailableSmartMoney,
 } from "../src/smart-money.js";
-import { Gmgn, normalizeMarket } from "../src/gmgn.js";
-import { RiskEngine, protectiveExitDecision } from "../src/risk.js";
-import {
-  candidate,
-  info,
-  settings,
-  MINT,
-  position,
-  jev,
-  snapshot,
-} from "./fixtures.js";
-import { setup } from "./one-shot-fixtures.js";
-import { Jev } from "../src/jev.js";
-import { env } from "../src/config.js";
-import { typedJevFixture } from "./learning-fixtures.js";
+import { MINT, candidate, info, position, settings } from "./fixtures.js";
 
 const T = 1793530800000;
 const bars = [
@@ -167,7 +155,7 @@ test("aligned recent smart sells produce conflict, not automatic SELL or BUY aut
   assert.equal(
     v.passed,
     true,
-    "price/current-flow eligibility remains separate; JEV must consider conflict",
+    "price/current-flow eligibility remains separate; flow conflict remains advisory",
   );
   assert.equal(
     protectiveExitDecision(
@@ -202,30 +190,6 @@ test("optional provider failure is UNAVAILABLE without throwing or fallback data
     assert.equal((await gmgn.smartMoneyFeed()).available, false);
   } finally {
     await gmgn.coordinator.stop();
-  }
-});
-test("optional feed failure reaches JEV as unavailable without global pause or new watcher", async () => {
-  const x = setup();
-  const run = x.engine.gmgn.run.bind(x.engine.gmgn);
-  x.engine.gmgn.run = async (args, ...rest) => {
-    if (args[0] === "track") throw Error("fixture-only provider down");
-    return run(args, ...rest);
-  };
-  let observed: any;
-  x.j.decide = async (state) => {
-    observed = state;
-    return { ...jev(), action: "SKIP" };
-  };
-  try {
-    await assert.rejects(x.engine.analyze(MINT));
-    assert.equal(observed.structureEvidence.smartMoney.status, "UNAVAILABLE");
-    assert.equal(x.engine.attempts.current!.failedStage, "JEV");
-    assert.equal(x.store.entriesEnabled(), true);
-    assert.equal(x.store.get("haltReason"), undefined);
-    assert.equal(x.engine.candidates.list().length, 0);
-  } finally {
-    await x.engine.stop();
-    x.store.close();
   }
 });
 test("provider cache reuses raw feed, TTL0 fetches again; no unsupported token/side queries", async () => {
@@ -280,178 +244,4 @@ test("stale snapshot and missing event identity remain unknown, never counted as
   assert.equal(v.smartMoney.events[0]!.maker, null);
   assert.equal(v.smartMoney.events[0]!.amountUsd, null);
   assert.equal(v.smartMoney.status, "INSUFFICIENT_COVERAGE");
-});
-test("Risk rechecks phase time and underlying history before execution", () => {
-  const f = fixture(),
-    v = evaluate();
-  const s = {
-    ...snapshot(),
-    entryAuthority: {
-      revision: 0,
-      path: "TRENDING" as const,
-      policy: "TRENDING_ONE_SHOT_V1" as const,
-    },
-    marketHistory: f.h,
-    oneShotStructure: v,
-  };
-  const result = new RiskEngine().evaluate(
-    s,
-    settings,
-    {
-      balance: 1000000000n,
-      pending: 0n,
-      positions: 0,
-      duplicate: false,
-      entriesEnabled: true,
-    },
-    T + settings.structureMaxGapMs + 1,
-  );
-  assert.equal(result.allowed, false);
-  assert.equal(result.reason, "STALE_PRICE_RECOVERY");
-});
-test("SELL validation expires timestamped smart evidence at apply and pre-sign guard", async () => {
-  const x = setup();
-  try {
-    const changed = (d: unknown) =>
-      Boolean((x.engine as any).exitEvidenceChanged(d));
-    assert.equal(
-      changed({
-        mint: MINT,
-        action: "FULL_SELL",
-        observed: {
-          smartMoneyStatus: "SELL_PRESSURE",
-          smartMoneyObservedAt: Date.now() - settings.maxSnapshotAgeMs - 1,
-        },
-      }),
-      true,
-    );
-    assert.equal(
-      changed({
-        mint: MINT,
-        action: "FULL_SELL",
-        observed: {
-          smartMoneyStatus: "SELL_PRESSURE",
-          smartMoneyObservedAt: Date.now(),
-        },
-      }),
-      false,
-    );
-    assert.equal(
-      changed({
-        mint: MINT,
-        action: "FULL_SELL",
-        observed: {
-          smartMoneyStatus: "UNAVAILABLE",
-          smartMoneyObservedAt: null,
-        },
-      }),
-      false,
-      "optional missing evidence does not veto unrelated strategic analysis",
-    );
-  } finally {
-    await x.engine.stop();
-    x.store.close();
-  }
-});
-test("each fresh attempt refetches feed and JEV receives full evidence, coverage and timestamps", async () => {
-  const x = setup();
-  let n = 0;
-  const inputs: any[] = [];
-  x.engine.gmgn.smartMoneyFeed = async () => {
-    const now = Date.now();
-    return feed(n++ ? [trade("buy", "A", now - 1000)] : [], now);
-  };
-  x.j.decide = async (state) => {
-    inputs.push(structuredClone(state));
-    return { ...jev(), action: "SKIP" };
-  };
-  try {
-    await assert.rejects(x.engine.analyze(MINT));
-    const first = x.engine.attempts.current!.attemptId;
-    await assert.rejects(x.engine.analyze(MINT));
-    assert.notEqual(x.engine.attempts.current!.attemptId, first);
-    assert.equal(n, 2);
-    assert.equal(
-      inputs[0].structureEvidence.smartMoney.status,
-      "NO_MATCH_IN_RETURNED_FEED",
-    );
-    assert.equal(inputs[1].structureEvidence.smartMoney.status, "BUY_SUPPORT");
-    assert.equal(
-      inputs[1].structureEvidence.priceStructure.semantics,
-      "PRICE_INFERENCE",
-    );
-    assert.equal(
-      inputs[1].structureEvidence.marketFlow.historicalDirectionalFlow,
-      "UNKNOWN",
-    );
-    assert(inputs[1].structureEvidence.smartMoney.coverage);
-    assert(inputs[1].structureEvidence.conclusion.limitations.length);
-    assert.equal(x.store.executions().length, 0);
-  } finally {
-    await x.engine.stop();
-    x.store.close();
-  }
-});
-test("JEV wire retains V3 components and explicitly explains capped subset/missing evidence", async () => {
-  const previous = env.TYPESAFE_API_KEY;
-  env.TYPESAFE_API_KEY = "fixture-only";
-  const j = new Jev();
-  let sent: any;
-  j.http.request = async (_url, init) => {
-    sent = JSON.parse(String(init?.body));
-    return typedJevFixture("BUY", "UNAVAILABLE", "NONE");
-  };
-  try {
-    const v = evaluate([trade("buy", "A")]);
-    await j.decide({ attemptId: "fixture", structureEvidence: v }, true);
-    assert.deepEqual(sent.state.structureEvidence, v);
-    assert.match(
-      sent.questions.action.instructions,
-      /absence of records is not proof/,
-    );
-    assert.equal(sent.state.buyerDefense, undefined);
-  } finally {
-    env.TYPESAFE_API_KEY = previous;
-  }
-});
-test("slow optional Smart Money and JEV never block A/B/C price collectors", async () => {
-  const x = setup();
-  let releaseSmart!: () => void, releaseJev!: () => void;
-  const smartGate = new Promise<void>((r) => {
-    releaseSmart = r;
-  });
-  const jevGate = new Promise<void>((r) => {
-    releaseJev = r;
-  });
-  x.engine.gmgn.smartMoneyFeed = async () => {
-    await smartGate;
-    return feed([], Date.now());
-  };
-  x.j.decideExit = async () => {
-    await jevGate;
-    return { action: "HOLD", sellBps: 0, confidence: 1, reason: "fixture" };
-  };
-  for (const id of ["A", "B", "C"])
-    x.store.savePosition({ ...position(), id, mode: "paper" });
-  try {
-    await x.engine.monitor();
-    for (const p of x.store.positions("paper"))
-      assert(
-        p.lastQuoteAt,
-        p.id + " price saved before optional feed completes",
-      );
-    for (const p of x.store.positions("paper")) {
-      p.lastQuoteAt = 0;
-      x.store.savePosition(p);
-    }
-    await x.engine.monitor();
-    for (const p of x.store.positions("paper"))
-      assert((p.marketRevision ?? 0) >= 2);
-    assert.equal(x.store.executions().length, 0);
-  } finally {
-    releaseSmart();
-    releaseJev();
-    await x.engine.stop();
-    x.store.close();
-  }
 });

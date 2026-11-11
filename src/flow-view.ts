@@ -1,8 +1,8 @@
-import type { Store } from "./store.js";
 import type { CandidateState } from "./candidate-lifecycle.js";
 import { env, type Settings } from "./config.js";
-import type { FailureStage, Market, JevDecision, Execution } from "./domain.js";
+import type { Execution, FailureStage, Market } from "./domain.js";
 import { normalizeMarket } from "./gmgn.js";
+import type { Store } from "./store.js";
 
 /** Read-only projection of existing lifecycle, execution and transition records. */
 export function flowView(
@@ -16,17 +16,17 @@ export function flowView(
 ) {
   const events = store.db
     .prepare(
-      "SELECT id,payload FROM records WHERE kind='pipeline_transitions' AND json_extract(payload,'$.mode')=? ORDER BY id DESC LIMIT 120",
+      "SELECT id,payload FROM records WHERE kind='pipeline_transitions' AND json_extract(payload,'$.mode')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT 120",
     )
-    .all(env.TRADING_MODE)
+    .all(env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId())
     .map((r) => ({ id: Number(r.id), ...JSON.parse(String(r.payload)) }))
     .reverse();
   const totals = Object.fromEntries(
     store.db
       .prepare(
-        "SELECT json_extract(payload,'$.type') type,count(*) n FROM records WHERE kind='pipeline_transitions' AND id>? AND json_extract(payload,'$.mode')=? GROUP BY type",
+        "SELECT json_extract(payload,'$.type') type,count(*) n FROM records WHERE kind='pipeline_transitions' AND id>? AND json_extract(payload,'$.mode')=? AND (?<>'demo' OR scope_account=?) GROUP BY type",
       )
-      .all(startId, env.TRADING_MODE)
+      .all(startId, env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId())
       .map((r) => [String(r.type), Number(r.n)]),
   );
   const cache = new Map<string, Record<string, unknown>>();
@@ -42,7 +42,6 @@ export function flowView(
       store.latest<Market>("market_snapshots", mint) ??
       normalizeMarket(c?.listing ?? {});
     const recent = events.filter((e) => e.mint === mint).at(-1);
-    const jev = store.latest<JevDecision>("jev_decisions", mint);
     const execution = buys
       .filter(
         (e) =>
@@ -85,7 +84,6 @@ export function flowView(
       ...state,
       mint,
       market,
-      jev,
       security: store.latest("security_results", mint),
       holders: store.latest("holder_snapshots", mint),
       tokenExecution: store.latest("token_execution_checks", mint),
@@ -145,15 +143,18 @@ export function flowView(
       deferred: settings.deferredMaxSize,
     },
     counts: {
-      scanned: Number(
-        store.db.prepare("SELECT count(*) n FROM tokens").get()!.n,
-      ),
+      scanned: Number(store.tokenCount()),
       perMinute: Number(
         store.db
           .prepare(
-            "SELECT count(*) n FROM records WHERE kind='events' AND json_extract(payload,'$.type')='DISCOVER' AND at>?",
+            "SELECT count(*) n FROM records WHERE kind='events' AND json_extract(payload,'$.type')='DISCOVER' AND at>? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?)",
           )
-          .get(Date.now() - 60000)!.n,
+          .get(
+            Date.now() - 60000,
+            env.TRADING_MODE,
+            env.TRADING_MODE,
+            store.demoAccountId(),
+          )!.n,
       ),
       queue: queue.length,
       checking: queue.filter((r) => r.state === "ANALYZING").length,

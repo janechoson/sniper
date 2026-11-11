@@ -1,5 +1,8 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import {
+  AccountLayout,
+  AccountState,
+  TOKEN_2022_PROGRAM_ID,
+} from "@solana/spl-token";
 import {
   Keypair,
   PublicKey,
@@ -7,18 +10,17 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import {
-  AccountLayout,
-  AccountState,
-  TOKEN_2022_PROGRAM_ID,
-} from "@solana/spl-token";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 import { env } from "../src/config.js";
+import { Blocked, CandidateRejected } from "../src/domain.js";
 import { JupiterExecutionProvider } from "../src/execution-provider.js";
-import { Solana } from "../src/solana.js";
-import { quote, MINT, WALLET } from "./fixtures.js";
 import { SOL } from "../src/gmgn.js";
-import { json, safeError } from "../src/util.js";
+import { Solana } from "../src/solana.js";
 import { Store } from "../src/store.js";
+import { json, safeError } from "../src/util.js";
+import { MINT, quote, WALLET } from "./fixtures.js";
+import { metadataFixture } from "./token-program-fixtures.js";
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   ATA = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 test("Jupiter optional impact sentinel -1/null/missing stays UNKNOWN without invalidating the critical quote contract", async () => {
@@ -198,8 +200,6 @@ test("logs, SQLite JSON and safe errors never expose secret fields or configured
     else process.env.SOLANA_PRIVATE_KEY = before;
   }
 });
-import { metadataFixture } from "./token-program-fixtures.js";
-import { CandidateRejected, Blocked } from "../src/domain.js";
 test("malformed Token-2022 mint is rejected before signing or simulation", async () => {
   const old = env.WALLET_PUBLIC_KEY;
   env.WALLET_PUBLIC_KEY = WALLET;

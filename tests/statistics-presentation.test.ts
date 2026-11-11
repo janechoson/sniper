@@ -1,7 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
+import test from "node:test";
+import { pathToFileURL } from "node:url";
 const url = pathToFileURL(resolve("public/dashboard-statistics.js")).href;
 const {
   statisticCount: count,
@@ -33,7 +33,7 @@ test("Statistics preserves authoritative ALL win rate including null; no wins/cl
     null,
   );
 });
-test("Filtered accounting cannot fabricate discovery, BUY, OPEN, JEV, Risk or realized scopes", () => {
+test("Filtered accounting cannot fabricate discovery, BUY, OPEN, KRONOS, Risk or realized scopes", () => {
   const m = model(
     {
       closed: 33,
@@ -71,9 +71,9 @@ test("Missing and zero remain distinct with zero denominators and exact zero rat
     {
       riskAllow: 0,
       riskReject: 10,
-      jevCalls: 0,
-      jevBuy: 0,
-      jevSkip: 0,
+      kronosCalls: 0,
+      kronosBuy: 0,
+      kronosWait: 0,
       winRate: 0,
       strategyAccounting: {},
     },
@@ -159,12 +159,12 @@ test("Malformed amounts and unsafe numeric amounts do not turn into known zero",
   ])
     assert.equal(lamports(v), null);
 });
-test("JEV/Risk ratios retain valid residual decisions and unknown invalid distributions", () => {
+test("KRONOS/Risk ratios retain valid residual decisions and unknown invalid distributions", () => {
   const m = model(
     {
-      jevCalls: 10,
-      jevBuy: 5,
-      jevSkip: 3,
+      kronosCalls: 10,
+      kronosBuy: 5,
+      kronosWait: 3,
       riskAllow: 2,
       riskReject: 8,
       strategyAccounting: {},
@@ -176,8 +176,10 @@ test("JEV/Risk ratios retain valid residual decisions and unknown invalid distri
   assert.equal(m.otherDecisions, 2);
   assert.equal(m.allowRate, 0.2);
   assert.equal(
-    model({ jevCalls: 3, jevBuy: 4, jevSkip: 2, strategyAccounting: {} }, "ALL")
-      .otherDecisions,
+    model(
+      { kronosCalls: 3, kronosBuy: 4, kronosWait: 2, strategyAccounting: {} },
+      "ALL",
+    ).otherDecisions,
     null,
   );
 });

@@ -136,10 +136,29 @@ export class CandidateLifecycle {
       .run(env.TRADING_MODE, mint);
     this.store.db
       .prepare("DELETE FROM candidate_flow_states WHERE mint=?")
-      .run(mint);
+      .run(this.store.candidateFlowKey(mint));
   }
   refill(candidates: Candidate[], now = Date.now()) {
     this.store.enqueueTrending(candidates);
+    const blacklist = new Set(this.settings().tokenBlacklist);
+    const priorBatch = this.store.trendingBatch();
+    for (const mint of blacklist) {
+      this.store.db
+        .prepare(
+          "UPDATE trending_appearances SET consumed=1 WHERE mode=? AND mint=? AND consumed=0",
+        )
+        .run(env.TRADING_MODE, mint);
+      const row = this.get(mint);
+      if (row?.state === "QUEUED") this.finish(mint);
+      for (const entry of priorBatch?.entries ?? [])
+        if (entry.mint === mint && entry.status === "WAITING") {
+          entry.status = "COMPLETE";
+          entry.result = "TOKEN_BLACKLISTED";
+          entry.endedAt = now;
+        }
+    }
+    if (priorBatch && blacklist.size)
+      this.store.set("trendingBatchV1:" + env.TRADING_MODE, priorBatch);
     const batch = this.store.prepareTrendingBatch();
     if (!batch) return [];
     const rows = this.store.db
@@ -167,9 +186,9 @@ export class CandidateLifecycle {
     }
     this.store.db
       .prepare(
-        "DELETE FROM trending_appearances WHERE consumed=1 AND id IN (SELECT id FROM trending_appearances WHERE consumed=1 ORDER BY id DESC LIMIT -1 OFFSET 2000)",
+        "DELETE FROM trending_appearances WHERE mode=? AND consumed=1 AND id IN (SELECT id FROM trending_appearances WHERE mode=? AND consumed=1 ORDER BY id DESC LIMIT -1 OFFSET 2000)",
       )
-      .run();
+      .run(env.TRADING_MODE, env.TRADING_MODE);
     return this.list()
       .filter((r) => r.state === "QUEUED" && r.batchId === batch.id)
       .map((r) => r.mint);

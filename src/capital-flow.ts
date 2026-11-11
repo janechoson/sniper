@@ -1,5 +1,5 @@
 import type { Store } from "./store.js";
-import type { Settings } from "./config.js";
+import { env, type Settings } from "./config.js";
 import type { Market, Position, Mode } from "./domain.js";
 import { numberEvidence, record } from "./gmgn.js";
 import { hash } from "./util.js";
@@ -454,7 +454,7 @@ export class CapitalFlowEngine {
     if (typeof fetched === "number") now = fetched;
     const row = this.store.db
       .prepare("SELECT payload FROM candidate_flow_states WHERE mint=?")
-      .get(c.mint);
+      .get(this.store.candidateFlowKey(c.mint));
     const previous = row
       ? (JSON.parse(String(row.payload)) as CapitalFlowState)
       : undefined;
@@ -474,12 +474,16 @@ export class CapitalFlowEngine {
       .prepare(
         "INSERT INTO candidate_flow_states VALUES(?,?,?) ON CONFLICT(mint) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload",
       )
-      .run(c.mint, now, JSON.stringify(next));
+      .run(this.store.candidateFlowKey(c.mint), now, JSON.stringify(next));
     this.store.db
       .prepare(
-        "DELETE FROM candidate_flow_states WHERE updated_at<? OR mint IN (SELECT mint FROM candidate_flow_states ORDER BY updated_at DESC LIMIT -1 OFFSET 250)",
+        "DELETE FROM candidate_flow_states WHERE (mint LIKE 'demo:%')=? AND (updated_at<? OR mint IN (SELECT mint FROM candidate_flow_states WHERE (mint LIKE 'demo:%')=? ORDER BY updated_at DESC LIMIT -1 OFFSET 250))",
       )
-      .run(now - this.settings().flowHistoryMs);
+      .run(
+        Number(env.TRADING_MODE === "demo"),
+        now - this.settings().flowHistoryMs,
+        Number(env.TRADING_MODE === "demo"),
+      );
     return flowSummary(next);
   }
   private observations = 0;

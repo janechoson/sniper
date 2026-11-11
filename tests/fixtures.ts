@@ -1,24 +1,24 @@
 import { Keypair } from "@solana/web3.js";
-import { settingsSchema, env } from "../src/config.js";
+import { randomUUID } from "node:crypto";
+import { env, settingsSchema } from "../src/config.js";
+import type {
+  Candidate,
+  Execution,
+  Position,
+  Snapshot,
+} from "../src/domain.js";
 import {
   Gmgn,
   SOL,
+  normalizeIntelligence,
   normalizeMarket,
   normalizeSecurity,
-  normalizeIntelligence,
   type CliRunner,
 } from "../src/gmgn.js";
-import { hash } from "../src/util.js";
-import type {
-  Candidate,
-  Snapshot,
-  Position,
-  JevDecision,
-} from "../src/domain.js";
-import { randomUUID } from "node:crypto";
-import { makeFillAccounting } from "../src/trade-accounting.js";
-import type { Execution } from "../src/domain.js";
+import { attemptFlow, parseMarketHistory } from "../src/market-history.js";
 import type { Store } from "../src/store.js";
+import { makeFillAccounting } from "../src/trade-accounting.js";
+import { fixtureDecision } from "./kronos-fixtures.js";
 
 /** Explicit fee-free reconciled entry for monitoring fixtures. */
 export function seedEntryAccounting(store: Store, p: Position) {
@@ -86,7 +86,7 @@ export function candidate(): Candidate {
         movement: "STABLE",
       },
     },
-    createdAt: Date.now() - 15 * 60000,
+    createdAt: Date.now() - 45 * 60000,
     discoveredAt: Date.now(),
     listing: {
       rug_ratio: 0,
@@ -165,19 +165,6 @@ export const securityRaw = {
   buy_tax: "0",
   sell_tax: "0",
 };
-export function jev(state: unknown = {}): JevDecision {
-  return {
-    action: "BUY",
-    risk: "MEDIUM",
-    suspicious: false,
-    insufficientData: false,
-    model: "jev-1.14.0",
-    at: Date.now(),
-    latencyMs: 10,
-    inputHash: hash(state),
-    momentumScore: 1,
-  };
-}
 export function snapshot(): Snapshot {
   const c = candidate(),
     raw = info(),
@@ -194,7 +181,25 @@ export function snapshot(): Snapshot {
         authority: "BUY_AUTHORIZING",
       },
     },
-    jev: jev(),
+    strategy: "KRONOS",
+    kronos: fixtureDecision(),
+    attemptId: "fixture-attempt",
+    entryAuthority: {
+      revision: 0,
+      path: "TRENDING",
+      policy: "TRENDING_ONE_SHOT_V1",
+    },
+    marketHistory: parseMarketHistory({ list: [] }, c),
+    capitalFlow: {
+      ...attemptFlow(
+        c,
+        normalizeMarket(raw),
+        raw,
+        parseMarketHistory({ list: [] }, c),
+        settings.flowMeaningfulChangePercent,
+      ),
+      regime: "NEUTRAL" as const,
+    },
   };
 }
 export function position(): Position {
@@ -228,7 +233,7 @@ export function provider(extra?: CliRunner) {
     if (args[0] === "market" && args[1] === "kline") {
       const end = Math.floor(Date.now() / 60000) * 60000;
       return {
-        list: Array.from({ length: 15 }, (_, i) => {
+        list: Array.from({ length: 60 }, (_, i) => {
           const [open, close, low, high] =
             i < 11
               ? [0.94, 0.94, 0.93, 1]
@@ -239,7 +244,7 @@ export function provider(extra?: CliRunner) {
                   [0.96, 0.99, 0.93, 1],
                 ][i - 11]!;
           return {
-            time: end - (15 - i) * 60000,
+            time: end - (60 - i) * 60000,
             open: String(open),
             close: String(close),
             low: String(low),

@@ -1,36 +1,37 @@
-import type { AttemptStage, StageStatus } from "./candidate-attempt.js";
-import { UnsignedExecutionDeadline } from "./execution-deadline.js";
-import { randomUUID } from "node:crypto";
-import { assertStrategySell } from "./strategy-authority.js";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { randomUUID } from "node:crypto";
+import type { AttemptStage, StageStatus } from "./candidate-attempt.js";
 import { env, type Settings } from "./config.js";
+import type { ControlledSession } from "./controlled-session.js";
+import { DemoExecutor } from "./demo-executor.js";
 import {
   Blocked,
   CandidateRejected,
-  type Intent,
   type Execution,
-  type Snapshot,
+  type Intent,
   type Position,
+  type Snapshot,
 } from "./domain.js";
-import type { Gmgn } from "./gmgn.js";
-import type { Store } from "./store.js";
-import type { Solana } from "./solana.js";
+import { UnsignedExecutionDeadline } from "./execution-deadline.js";
 import {
   JupiterExecutionProvider,
   validateQuote,
   type SolanaExecutionProvider,
 } from "./execution-provider.js";
-import type { ControlledSession } from "./controlled-session.js";
-import { TradingMemory } from "./trading-memory.js";
-import { size, paperQuantity, paperValue } from "./risk.js";
-import { hash, safeError, deepFreeze } from "./util.js";
-import { probeExits, assertEntryExit } from "./exit-feasibility.js";
+import { assertEntryExit, probeExits } from "./exit-feasibility.js";
+import type { Gmgn } from "./gmgn.js";
+import { JupiterQuotes, type QuoteSource } from "./jupiter-quotes.js";
+import { size } from "./risk.js";
+import type { Solana } from "./solana.js";
+import type { Store } from "./store.js";
+import { assertStrategySell } from "./strategy-authority.js";
 import {
   makeFillAccounting,
   receiptRentDelta,
   tradeAccounting,
   type FxEvidence,
 } from "./trade-accounting.js";
+import { deepFreeze, hash, safeError } from "./util.js";
 export const liveAllowed = () =>
   env.TRADING_MODE === "live" && env.LIVE_TRADING_ACK;
 export class Executor {
@@ -39,20 +40,59 @@ export class Executor {
   get isBusy() {
     return this.busy;
   }
-  readonly provider: SolanaExecutionProvider;
-  readonly memory: TradingMemory;
+  readonly provider: Pick<
+    SolanaExecutionProvider,
+    "health" | "quoteBuy" | "quoteSell"
+  >;
+  private readonly liveProvider?: SolanaExecutionProvider;
+  readonly demo?: DemoExecutor;
+  private readonly sessionMode = env.TRADING_MODE;
+  private live() {
+    if (
+      this.sessionMode !== "live" ||
+      env.TRADING_MODE !== "live" ||
+      !this.liveProvider
+    )
+      throw new Blocked("LIVE_CAPABILITY_UNAVAILABLE");
+    return this.liveProvider;
+  }
   constructor(
     readonly store: Store,
     readonly gmgn: Gmgn,
     readonly rpc: Solana,
     provider?: SolanaExecutionProvider,
-    memory?: TradingMemory,
+    _legacyMemory?: unknown,
     readonly controlled?: ControlledSession,
+    demoQuotes?: QuoteSource,
   ) {
-    this.provider = provider ?? new JupiterExecutionProvider(rpc);
-    this.memory = memory ?? new TradingMemory(store);
+    if (this.sessionMode === "live") {
+      this.liveProvider = provider ?? new JupiterExecutionProvider(rpc);
+      this.provider = this.liveProvider;
+    } else {
+      const quotes = demoQuotes ?? new JupiterQuotes();
+      this.demo = new DemoExecutor(store, quotes, (mint) =>
+        rpc.inspectMint(mint),
+      );
+      this.provider = quotes;
+    }
   }
   private validate(i: Intent) {
+    if (i.strategy !== "KRONOS") throw new Blocked("KRONOS_ONLY");
+    if (
+      i.mode === "paper" ||
+      i.mode !== this.sessionMode ||
+      env.TRADING_MODE !== this.sessionMode
+    )
+      throw new Blocked("IMMUTABLE_EXECUTION_MODE_MISMATCH");
+    // Read persisted settings every time, including immediately before signing.
+    if (
+      i.side === "BUY" &&
+      this.store.get<Settings>("strategyV2")?.tokenBlacklist?.includes(i.mint)
+    )
+      throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {
+        mint: i.mint,
+        reason: "TOKEN_BLACKLISTED",
+      });
     if (i.side === "SELL") {
       const owner = this.store
         .positions(i.mode)
@@ -133,8 +173,8 @@ export class Executor {
           ? {
               balance:
                 i.mode === "live"
-                  ? await deadline.wait(() => this.provider.getWalletBalance())
-                  : BigInt(this.store.get<string>("paperCash") ?? "0"),
+                  ? await deadline.wait(() => this.live().getWalletBalance())
+                  : this.demo!.ledger.balance(),
               reserve: BigInt(s.feeReserveLamports),
             }
           : undefined;
@@ -152,93 +192,68 @@ export class Executor {
         Date.now() - fx.at <= s.maxSnapshotAgeMs
       )
         e.fx = fx;
-      else if (i.mode === "paper" && Number(solUsd) > 0)
-        e.fx = {
-          price: solUsd,
-          at: Date.now(),
-          source: "PAPER_EXECUTION_SOL_SNAPSHOT",
-        };
       this.store.execution(e);
       this.controlled?.reserve(i);
-      if (i.side === "BUY" && i.mode === "paper")
-        this.memory.entry(
-          e,
-          this.store.latest<Snapshot>("snapshots", i.mint)!,
-          s,
+      if (i.mode === "demo") {
+        if (!this.demo) throw new Blocked("DEMO_EXECUTOR_UNAVAILABLE");
+        progress?.("BUY_QUOTE", "CHECKING");
+        const fill = await deadline.wait(() =>
+          this.demo!.prepare(e!, s, fx, () => {
+            deadline.assertActive();
+            this.validate(i);
+          }),
         );
-      else if (i.side === "SELL")
-        this.memory.exit(
-          e,
-          this.store.positions(i.mode).find((p) => p.id === i.positionId)!,
-        );
-      if (i.mode === "paper") {
-        for (const stage of [
-          "BUY_QUOTE",
-          "EXIT_FEASIBILITY",
-          "VALIDATE",
-          "SIMULATE",
-          "PRE_SIGN",
-        ] as const)
-          progress?.(stage, "SKIPPED");
-        progress?.("BUY", "CHECKING");
-        const snap = this.store.latest<Snapshot>("snapshots", i.mint),
-          p = this.store.positions("paper").find((p) => p.id === i.positionId);
-        const market =
-          i.side === "BUY"
-            ? snap?.market
-            : this.store.latest<Snapshot["market"]>("position_market", i.mint);
-        if (!market?.priceUsd || market.decimals === undefined)
-          throw new Blocked(
-            "GMGN price/decimals are required for a paper fill",
-          );
-        const amount = BigInt(i.amount);
-        const token =
-          i.side === "BUY"
-            ? (paperQuantity(amount, solUsd, market.priceUsd, market.decimals) *
-                BigInt(100 - s.slippagePercent)) /
-              100n
-            : -amount;
+        progress?.("BUY_QUOTE", "PASS");
+        progress?.("EXIT_FEASIBILITY", i.side === "BUY" ? "PASS" : "SKIPPED");
+        progress?.("VALIDATE", "PASS");
+        progress?.("SIMULATE", "SKIPPED");
+        progress?.("PRE_SIGN", "SKIPPED");
+        deadline.assertActive();
+        authorityCheck?.();
+        if (finalValidation) await deadline.wait(finalValidation);
+        this.validate(i);
+        const tokens = BigInt(fill.quantity) * (i.side === "BUY" ? 1n : -1n);
         const sol =
           i.side === "BUY"
-            ? -amount - BigInt(s.paperFeeLamports)
-            : (paperValue(amount, solUsd, market.priceUsd, market.decimals) *
-                BigInt(100 - s.slippagePercent)) /
-                100n -
-              BigInt(s.paperFeeLamports);
-        if (i.side === "BUY" && token <= 0n)
-          throw new Blocked("Paper fill rounds to zero atomic tokens");
-        if (!p) throw new Blocked("Paper position missing");
-        this.store.atomic(() => {
-          deadline.assertActive();
-          e!.evidence = {
-            solDelta: sol.toString(),
-            tokenDelta: token.toString(),
-            feeLamports: s.paperFeeLamports,
-            slot: 0,
-          };
-          e!.accounting = makeFillAccounting(
-            e!,
-            sol,
-            token,
-            BigInt(s.paperFeeLamports),
-            0n,
-            market.decimals,
-            e!.fx ?? null,
-            Date.now(),
-            "RECONCILIATION_TIME",
-          );
-          this.applyFill(e!, sol, token, s);
-          e!.state = "CONFIRMED";
-          e!.at = Date.now();
-          this.store.execution(e!);
-          this.memory.confirmed(e!);
-        });
+            ? -BigInt(fill.grossLamports) - BigInt(fill.feeLamports)
+            : BigInt(fill.grossLamports) - BigInt(fill.feeLamports);
+        this.demo.ledger.settle(
+          fill,
+          Math.min(s.maxSnapshotAgeMs, 20000),
+          () => {
+            deadline.assertActive();
+            this.validate(i);
+            e!.evidence = {
+              solDelta: String(sol),
+              tokenDelta: String(tokens),
+              feeLamports: fill.feeLamports,
+              simulated: true,
+              quoteAt: fill.quoteAt,
+              quoteId: fill.quoteId,
+            };
+            e!.accounting = makeFillAccounting(
+              e!,
+              sol,
+              tokens,
+              BigInt(fill.feeLamports),
+              0n,
+              fill.decimals,
+              fx ?? null,
+              Date.now(),
+              "RECONCILIATION_TIME",
+            );
+            this.applyFill(e!, sol, tokens, s);
+            e!.state = "CONFIRMED";
+            e!.at = Date.now();
+            this.store.execution(e!);
+          },
+        );
         progress?.("BUY", "PASS");
         return e;
       }
 
       const before = {
-        sol: await deadline.wait(() => this.provider.getWalletBalance()),
+        sol: await deadline.wait(() => this.live().getWalletBalance()),
         tokens: await deadline.wait(() =>
           this.rpc.tokenBalance(env.WALLET_PUBLIC_KEY, i.mint),
         ),
@@ -256,8 +271,8 @@ export class Executor {
             mint: i.mint,
             reason: "EXACT_SIZE_CHANGED",
           });
-        if (before.tokens > 0n)
-          throw new CandidateRejected("TOKEN_ALREADY_OWNED", { mint: i.mint });
+        // Existing wallet tokens may be external transfers. Bot ownership is
+        // enforced by Store; only this BUY's receipt delta opens the position.
       } else if (before.tokens < BigInt(i.amount))
         throw new Blocked("Wallet token balance changed before SELL");
       this.validate(i);
@@ -350,17 +365,17 @@ export class Executor {
       authorityCheck?.();
       progress?.("VALIDATE", "PASS");
       progress?.("SIMULATE", "CHECKING");
-      await deadline.wait(() => this.provider.simulate(q));
+      await deadline.wait(() => this.live().simulate(q));
       progress?.("SIMULATE", "PASS");
       progress?.("PRE_SIGN", "CHECKING");
       if (finalValidation) await deadline.wait(finalValidation);
       const fresh = {
-        sol: await deadline.wait(() => this.provider.getWalletBalance()),
+        sol: await deadline.wait(() => this.live().getWalletBalance()),
         tokens: await deadline.wait(() =>
           this.rpc.tokenBalance(env.WALLET_PUBLIC_KEY, i.mint),
         ),
       };
-      if (fresh.sol !== before.sol || fresh.tokens !== before.tokens)
+      if (fresh.sol < before.sol || fresh.tokens < before.tokens)
         throw new Blocked("Wallet changed during execution preflight");
       this.validate(i);
       e.before = {
@@ -389,11 +404,10 @@ export class Executor {
         throw new CandidateRejected("TOKEN_DECIMALS_MISMATCH", {
           mint: i.mint,
         });
-      if (i.side === "SELL") this.memory.preflight(e, q);
       if (i.side === "BUY") assertEntryExit(e.exitFeasibility!, q, s);
       this.validate(i);
       await deadline.wait(() =>
-        this.provider.execute(
+        this.live().execute(
           q,
           (signature) => {
             deadline.beginSigning();
@@ -402,14 +416,6 @@ export class Executor {
             e!.state = "SUBMITTED";
             e!.at = Date.now();
             this.store.atomic(() => {
-              if (i.side === "BUY") {
-                this.memory.entry(
-                  e!,
-                  this.store.latest<Snapshot>("snapshots", i.mint)!,
-                  s,
-                );
-                this.memory.preflight(e!, q);
-              }
               this.store.execution(e!);
               this.controlled?.submitted(e!);
             });
@@ -433,11 +439,12 @@ export class Executor {
       );
       e.state = "PENDING_CONFIRMATION";
       this.store.execution(e);
-      await this.provider.confirm(e.signature!);
+      await this.live().confirm(e.signature!);
       await this.reconcile(e, s);
       if (String(e.state) === "CONFIRMED") progress?.("BUY", "PASS");
       return e;
     } catch (error) {
+      if (e?.intent.mode === "demo") this.demo?.ledger.release(e.id);
       if (e && e.state !== "CONFIRMED") {
         e.error = safeError(error);
         if (error instanceof CandidateRejected) e.errorDetails = error.details;
@@ -454,7 +461,6 @@ export class Executor {
               details: e!.errorDetails,
             });
           if (!submitted) this.release(e!);
-          this.memory.failure(e!);
           this.controlled?.failed(e!);
         });
         if (!submitted && e.error === "EXECUTION_UNSIGNED_TIMEOUT") {
@@ -468,7 +474,7 @@ export class Executor {
           );
         }
         if (submitted)
-          this.store.halt(
+          this.store.reportFailure(
             "Unresolved Solana transaction; no automatic retry: " + e.error,
             "TRANSACTION",
           );
@@ -632,18 +638,13 @@ export class Executor {
       feesPaid: p.accounting.feesPaidLamports,
       netPnl: p.accounting.netPnlLamports,
     });
-    if (i.mode === "paper")
-      this.store.set(
-        "paperCash",
-        (BigInt(this.store.get<string>("paperCash") ?? "0") + sol).toString(),
-      );
     this.store.record("position_events", i.mint, {
       positionId: p.id,
       state: p.state,
       solDelta: sol.toString(),
       tokenDelta: tokens.toString(),
       signature: e.signature,
-      simulated: i.mode === "paper",
+      simulated: i.mode !== "live",
     });
     this.store.event(i.side, i.mint, i.reason);
   }
@@ -710,7 +711,7 @@ export class Executor {
     )
       return;
     if (e.intent.provider !== "JUPITER" || !e.signature || !e.before) {
-      this.store.halt(
+      this.store.reportFailure(
         "Legacy or unsigned pending trade requires manual review",
         "TRANSACTION",
       );
@@ -724,7 +725,7 @@ export class Executor {
       e.error = safeError(error);
       this.store.execution(e);
       await this.investigateUnknown(e, error);
-      this.store.halt(
+      this.store.reportFailure(
         "Receipt lookup unavailable; execution remains locked",
         "TRANSACTION",
       );
@@ -737,9 +738,8 @@ export class Executor {
     if (!receipt?.meta) {
       e.state = "UNKNOWN";
       this.store.execution(e);
-      this.memory.failure(e);
       this.controlled?.failed(e);
-      this.store.halt(
+      this.store.reportFailure(
         "On-chain receipt unresolved; BUY replay prohibited",
         "TRANSACTION",
       );
@@ -747,7 +747,7 @@ export class Executor {
       return;
     }
     if (receipt.transaction.signatures[0] !== e.signature) {
-      this.store.halt("RECEIPT_SIGNATURE_MISMATCH", "TRANSACTION");
+      this.store.reportFailure("RECEIPT_SIGNATURE_MISMATCH", "TRANSACTION");
       return;
     }
     if (e.investigation)
@@ -766,7 +766,6 @@ export class Executor {
       this.store.atomic(() => {
         this.store.execution(e);
         this.release(e);
-        this.memory.failure(e);
         this.controlled?.failed(e);
       });
       return;
@@ -784,45 +783,18 @@ export class Executor {
         delta.afterSol === undefined ||
         delta.beforeTokens === undefined ||
         delta.afterTokens === undefined ||
-        delta.beforeSol !== BigInt(e.before.sol) ||
-        delta.beforeTokens !== BigInt(e.before.tokens) ||
+        delta.beforeSol < 0n ||
+        delta.afterSol < 0n ||
+        delta.beforeTokens < 0n ||
+        delta.afterTokens < 0n ||
         delta.afterSol - delta.beforeSol !== delta.sol ||
         delta.afterTokens - delta.beforeTokens !== delta.tokens
       )
         throw new Blocked("TRANSACTION_LOCAL_BALANCE_EVIDENCE_MISMATCH");
-      const sol = await this.rpc.balance(env.WALLET_PUBLIC_KEY),
-        tokens = await this.rpc.tokenBalance(
-          env.WALLET_PUBLIC_KEY,
-          e.intent.mint,
-        );
-      const later = this.store
-        .executions()
-        .filter(
-          (x) =>
-            x.id !== e.id &&
-            x.intent.mode === e.intent.mode &&
-            x.state === "CONFIRMED" &&
-            x.signature &&
-            x.evidence &&
-            (x.evidence.slot > receipt.slot ||
-              (x.evidence.slot === receipt.slot &&
-                (x.submittedAt ?? x.intent.createdAt) >
-                  (e.submittedAt ?? e.intent.createdAt))),
-        );
-      const subsequentSol = later.reduce(
-        (sum, x) => sum + BigInt(x.evidence!.solDelta),
-        0n,
-      );
-      const subsequentTokens = later
-        .filter((x) => x.intent.mint === e.intent.mint)
-        .reduce((sum, x) => sum + BigInt(x.evidence!.tokenDelta), 0n);
-      if (
-        sol !== delta.afterSol + subsequentSol ||
-        tokens !== delta.afterTokens + subsequentTokens
-      )
-        throw new Blocked(
-          "Wallet balances differ from receipt; manual reconciliation required",
-        );
+      // The signed transaction's receipt is the fill authority. Wallet totals
+      // include transfers and later trades, so they cannot veto this receipt
+      // or increase the bot's position quantity/PnL. applyFill validates the
+      // BUY/SELL delta against the intent and the bot-owned position below.
       this.store.atomic(() => {
         if (
           this.store.executions().find((x) => x.id === e.id)?.state ===
@@ -894,9 +866,10 @@ export class Executor {
         );
         this.applyFill(e, delta.sol, delta.tokens, s);
         e.state = "CONFIRMED";
+        delete e.error;
+        delete e.errorDetails;
         e.at = Date.now();
         this.store.execution(e);
-        this.memory.confirmed(e);
         this.controlled?.confirmed(e);
       });
     } catch (error) {
@@ -908,7 +881,7 @@ export class Executor {
       e.state = "UNKNOWN";
       e.error = safeError(error);
       this.store.execution(e);
-      this.store.halt(e.error, "TRANSACTION");
+      this.store.reportFailure(e.error, "TRANSACTION");
     }
   }
   async recover(s: Settings) {
@@ -919,18 +892,22 @@ export class Executor {
         .pending()
         .filter((e) => e.intent.mode === env.TRADING_MODE)) {
         if (e.intent.provider !== "JUPITER") {
-          this.store.halt(
+          this.store.reportFailure(
             "Legacy GMGN pending trade requires manual review; never replayed",
             "TRANSACTION",
           );
           continue;
         }
-        if (e.state === "CREATED" && !e.signature) {
+        if (
+          (e.state === "CREATED" || e.intent.mode === "demo") &&
+          !e.signature
+        ) {
           e.state = "FAILED";
           e.error = "Unsubmitted intent discarded on restart; never replayed";
           this.store.atomic(() => {
             this.store.execution(e);
             this.release(e);
+            if (e.intent.mode === "demo") this.demo?.ledger.release(e.id);
           });
           if (e.intent.side === "BUY" && e.intent.attemptId)
             this.store.finishBuyOwnership(
@@ -942,7 +919,7 @@ export class Executor {
           try {
             await this.reconcile(e, s);
           } catch {
-            this.store.halt(
+            this.store.reportFailure(
               "Pending transaction recovery unavailable",
               "TRANSACTION",
             );

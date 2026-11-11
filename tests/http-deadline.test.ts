@@ -1,8 +1,8 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Http } from "../src/util.js";
+import { test } from "node:test";
 import { ProviderFailure } from "../src/domain.js";
 import { UNSIGNED_EXECUTION_TIMEOUT_MS as LIMIT } from "../src/execution-deadline.js";
+import { Http } from "../src/util.js";
 function deferred<T>() {
   let resolve!: (v: T) => void;
   const promise = new Promise<T>((r) => (resolve = r));

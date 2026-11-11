@@ -1,42 +1,29 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
 import { Keypair } from "@solana/web3.js";
+import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { Store } from "../src/store.js";
-import { Engine } from "../src/engine.js";
-import { settingsSchema } from "../src/config.js";
-import { CandidateRejected, type Candidate } from "../src/domain.js";
-import { DiscoveryCoordinator, discoveryContext } from "../src/discovery.js";
+import { test } from "node:test";
 import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
-import { parseTrending } from "../src/gmgn.js";
-import {
-  probeExits,
-  assertEntryExit,
-  ExitLiquidityMonitor,
-  exitLiquidityContext,
-} from "../src/exit-feasibility.js";
+import { settingsSchema } from "../src/config.js";
+import { DiscoveryCoordinator, discoveryContext } from "../src/discovery.js";
+import { CandidateRejected, type Candidate } from "../src/domain.js";
 import type {
   ExecutionQuote,
   SolanaExecutionProvider,
 } from "../src/execution-provider.js";
+import { assertEntryExit, probeExits } from "../src/exit-feasibility.js";
+import { parseTrending } from "../src/gmgn.js";
+import { Store } from "../src/store.js";
 import {
-  candidate,
-  provider,
-  position,
-  quote,
-  WALLET,
   MINT,
+  WALLET,
+  candidate,
   info,
+  position,
+  provider,
+  quote,
 } from "./fixtures.js";
-import { completedFixture } from "./learning-fixtures.js";
 const settings = settingsSchema.parse({ smartMoneyExitMode: "OFF" });
 const now = Date.now();
-const hold = {
-  action: "HOLD" as const,
-  sellBps: 0,
-  confidence: 0.9,
-  reason: "UNCHANGED",
-};
 function sniper(
   mint = Keypair.generate().publicKey.toBase58(),
   at = now,
@@ -129,7 +116,7 @@ test("canonical multi-source merge preserves bounded rising/falling evidence and
   const db = new Store(":memory:");
   try {
     const c = sniper(),
-      owned = { ...position(), mint: c.mint, mode: "paper" as const };
+      owned = { ...position(), mint: c.mint, mode: "demo" as const };
     db.savePosition(owned);
     db.discover(c);
     for (const [n, r] of [42, 28, 15, 7].entries())
@@ -144,7 +131,7 @@ test("canonical multi-source merge preserves bounded rising/falling evidence and
     for (let n = 5; n < 50; n++)
       db.discover(trending(c.mint, n, now + n * 60000));
     assert.ok(db.token(c.mint)!.discovery!.trending!.history.length <= 20);
-    assert.equal(db.positions("paper")[0]?.quantity, owned.quantity);
+    assert.equal(db.positions("demo")[0]?.quantity, owned.quantity);
     assert.equal(
       new CandidateLifecycle(db, () => settings).refill(db.tokens()).length,
       1,
@@ -251,7 +238,7 @@ for (const failed of ["TRENDING", "SNIPER"] as const)
     };
     const d = new DiscoveryCoordinator(db, g, () => settings);
     try {
-      db.savePosition({ ...position(), mode: "paper" });
+      db.savePosition({ ...position(), mode: "demo" });
       await d.poll(now);
       assert.equal(
         d.feeds[failed].state,
@@ -263,7 +250,7 @@ for (const failed of ["TRENDING", "SNIPER"] as const)
       );
       assert.equal(!!db.token(c.mint), failed !== "TRENDING");
       assert.equal(db.get("haltReason"), undefined);
-      assert.equal(db.positions("paper")[0]?.state, "OPEN");
+      assert.equal(db.positions("demo")[0]?.state, "OPEN");
       await d.poll(now + 1);
       assert.equal(d.feeds.TRENDING.calls.length, 1);
       assert.equal(d.feeds.SNIPER.calls.length, 0);
@@ -403,103 +390,6 @@ test("temporary probe outage is UNKNOWN and amount dust never produces fake exec
   assert.equal(dust.amounts.length, 1);
   assert.equal(small.levels[0]?.reason, "BELOW_ONE_ATOMIC_UNIT");
 });
-test("20 positions: quote checks are bounded, isolated, and refreshed health reaches independent Jev context", async () => {
-  const db = new Store(":memory:"),
-    g = provider().gmgn,
-    engine = new Engine(db, { gmgn: g });
-  const h = ports(),
-    bad = Keypair.generate().publicKey.toBase58();
-  const quoteSell = h.p.quoteSell;
-  h.p.quoteSell = async (m, n, b, r) => {
-    if (m === bad) throw new CandidateRejected("NO_SELL_ROUTE");
-    const q = await quoteSell(m, n, b, r);
-    q.mint = m;
-    q.order.inputMint = m;
-    q.order.routePlan[0]!.swapInfo.inputMint = m;
-    return q;
-  };
-  const monitor = new ExitLiquidityMonitor(
-    h.p,
-    db,
-    () => settings,
-    () => WALLET,
-    () => false,
-  );
-  const seen: unknown[] = [];
-  engine.jev.decideExit = async (state) => {
-    seen.push(state);
-    return hold;
-  };
-  try {
-    for (let n = 0; n < 20; n++) {
-      const p = {
-        ...position(),
-        id: `liq-${n}`,
-        mode: "paper" as const,
-        mint: n === 0 ? bad : Keypair.generate().publicKey.toBase58(),
-        quantity: "1000000",
-        originalQuantity: "1000000",
-      };
-      db.savePosition(p);
-      monitor.schedule(p);
-    }
-    for (let n = 0; n < 20; n++)
-      await monitor.pump(now + n * (settings.positionExitProbeSpacingMs + 1));
-    assert.equal(monitor.status().checks, 20);
-    assert.equal(monitor.status().queued, 0);
-    assert.equal(
-      db.positions("paper").find((p) => p.id === "liq-0")!.exitLiquidity
-        ?.status,
-      "NO_EXIT",
-    );
-    assert.ok(
-      db.positions("paper").filter((p) => p.exitLiquidity?.status === "HEALTHY")
-        .length === 19,
-    );
-    assert.equal(h.sent(), 0);
-    await engine.monitor();
-    await engine.exitScheduler.idle();
-    assert.equal(seen.length, 20);
-    assert.ok(
-      seen.some(
-        (s) =>
-          (s as { exitLiquidity: { status: string } }).exitLiquidity?.status ===
-          "NO_EXIT",
-      ),
-    );
-    assert.equal(db.get("haltReason"), undefined);
-    const p = db.positions("paper")[0]!;
-    p.quantity = "500000";
-    assert.equal(exitLiquidityContext(p, settings)?.stale, true);
-  } finally {
-    await monitor.stop();
-    await engine.stop();
-    db.close();
-  }
-});
-test("source learning records immutable discovery/flow and actual exit feasibility, not current token labels", () => {
-  const db = new Store(":memory:"),
-    engine = new Engine(db, { gmgn: provider().gmgn });
-  try {
-    const base = Date.now() - 3600000;
-    const f = completedFixture(engine.memory, {
-      mode: "paper",
-      base,
-      discovery: trending(undefined, 7, base).discovery,
-    });
-    db.discover(sniper(f.position.mint));
-    const report = engine.memory.report("paper");
-    assert.equal(report.discoveryOutcomes.groups[0]?.source, "TRENDING");
-    assert.equal(report.discoveryOutcomes.groups[0]?.trades, 1);
-    assert.equal(report.discoveryOutcomes.groups[0]?.closed, 1);
-    assert.equal(
-      engine.memory.sample(f.position.id)?.snapshot.candidate.mint,
-      f.position.mint,
-    );
-  } finally {
-    db.close();
-  }
-});
 test("100 Trending plus 500 Sniper observations dedupe, bounded scheduler/history and measured provider budget", async () => {
   const db = new Store(":memory:"),
     g = provider().gmgn;
@@ -514,7 +404,11 @@ test("100 Trending plus 500 Sniper observations dedupe, bounded scheduler/histor
   try {
     await d.poll(now);
     assert.equal(
-      Number(db.db.prepare("SELECT count(*) n FROM tokens").get()!.n),
+      Number(
+        db.db
+          .prepare("SELECT count(*) n FROM mode_tokens WHERE mode='demo'")
+          .get()!.n,
+      ),
       100,
     );
     const q = l.refill(db.tokens(), now);

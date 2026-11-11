@@ -28,23 +28,17 @@ export const obsoleteSettingsFields = new Set([
 // Operator-requested UI exclusions. These settings remain active in the backend
 // and are preserved by the settingsData copy when other fields are saved.
 const hiddenSettingsFields = new Set([
-  "entryStrategy",
   "tokenFailureThreshold",
   "recentRejectTtlMs",
-  "jevExitDecisionMaxAgeMs",
   "flowMaxTransitions",
   "flowObservationIntervalMs",
-  "jevExitTradeCooldownMs",
   "flowRegimeConfirmations",
   "exitProbeMaxImpactPercent",
   "positionRecheckMs",
   "gmgnQueueMaxSize",
   "exitProbeEntryBps",
   "positionExitProbeMs",
-  "jevExitQueueSize",
-  "jevExitRecheckMs",
   "positionExitProbeSpacingMs",
-  "jevExitConcurrency",
   "exitProbeMaxAgeMs",
   "structureMaxGapMs",
   "intelligenceCacheMs",
@@ -55,14 +49,12 @@ const hiddenSettingsFields = new Set([
   "trailingActivationBps",
   "gmgnBackoffBaseMs",
   "trendingPollMs",
-  "jevExitMaterialPnlPoints",
   "flowMaxObservations",
   "flowMinSpanMs",
   "flowHistoryMs",
   "flowMeaningfulChangePercent",
   "trendingFreshMs",
   "candidateQueueSize",
-  "jevExitMinIntervalMs",
   "paperFeeLamports",
   "exitProbeMinNetLamports",
   "flowStaleMs",
@@ -112,11 +104,7 @@ const settingsGroups = [
   {
     id: "exits",
     title: "Thoát lệnh",
-    fields: [
-      "smartMoneyExitMode",
-      "jevExitMinConfidence",
-      "exitExecutionsPerCycle",
-    ],
+    fields: ["smartMoneyExitMode", "exitExecutionsPerCycle"],
   },
 ];
 
@@ -213,18 +201,15 @@ export async function mount(ctx) {
             typeof value === "boolean" ||
             key === "smartMoneyExitMode" ||
             key === "positionSizeMode" ||
-            key === "trendingInterval" ||
-            (key === "entryStrategy" && value !== "FIRST_BUY_WINS")
+            key === "trendingInterval"
           ) {
             input = el("select");
             const options =
               typeof value === "boolean"
                 ? ["true", "false"]
-                : key === "entryStrategy"
-                  ? ["STANDARD", "KRONOS"]
-                  : key === "trendingInterval"
-                    ? ["1m", "5m", "1h", "6h", "24h"]
-                    : ["OFF", "WARNING", "EXIT"];
+                : key === "trendingInterval"
+                  ? ["1m", "5m", "1h", "6h", "24h"]
+                  : ["OFF", "WARNING", "EXIT"];
             const choices =
               key === "positionSizeMode" ? ["PERCENT", "SOL"] : options;
             choices.forEach((v) => {
@@ -277,8 +262,6 @@ export async function mount(ctx) {
                 ),
               );
             }
-            if (key === "entryStrategy" && value === "FIRST_BUY_WINS")
-              input.readOnly = true;
           }
           input.name = key;
           input.id = "setting-" + key;

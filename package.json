@@ -1,5 +1,5 @@
 {
-  "name": "gmgn-jev-terminal",
+  "name": "rug-killer",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -15,18 +15,14 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests scripts/*.ts public/*.js",
     "test": "tsx --import ./scripts/test-env.mjs --test tests/*.test.ts",
-    "test:ui": "pnpm build && node scripts/ui-test.mjs",
+    "test:ui": "node --import ./scripts/test-env.mjs --import tsx scripts/demo-live-ui.ts",
     "verify:gmgn": "tsx src/verify.ts gmgn",
-    "verify:jev": "tsx src/verify.ts jev",
     "verify:wallet": "tsx src/verify.ts wallet",
-    "verify:paper": "tsx src/verify.ts paper",
     "smoke:live": "tsx src/smoke-live.ts",
     "verify:execution": "tsx src/verify.ts execution",
-    "learning:report": "tsx scripts/learning.ts report",
-    "learning:rebuild": "tsx scripts/learning.ts rebuild",
-    "learning:example": "tsx scripts/learning-example.ts",
     "ui": "tsx watch src/ui-preview.ts",
-    "live:controlled": "tsx src/live-controlled.ts"
+    "live:controlled": "tsx src/live-controlled.ts",
+    "verify:migration": "tsx scripts/kronos-migration-preflight.ts"
   },
   "dependencies": {
     "@solana/spl-token": "0.4.15",

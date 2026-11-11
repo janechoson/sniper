@@ -13,8 +13,6 @@ export const ATTEMPT_STAGES = [
   "CAPITAL_FLOW",
   "COMMON_RISK",
   "KRONOS",
-  "STRUCTURE",
-  "JEV",
   "RISK",
   "FINAL_ANALYSIS",
   "OWNERSHIP_CAPITAL",
@@ -58,6 +56,7 @@ export interface CandidateAttempt {
   reasonDetail?: string;
   stages: Record<AttemptStage, StageStatus>;
   summaries: Record<string, unknown>;
+  demoAccountId?: string;
   logs: Array<{
     at: number;
     stage: AttemptStage;
@@ -106,9 +105,9 @@ export class CandidateAttempts {
     store.recoverTrendingBatch();
     const latest = store.db
       .prepare(
-        "SELECT payload FROM candidate_attempts WHERE mode=? ORDER BY started_at DESC LIMIT 1",
+        "SELECT payload FROM candidate_attempts WHERE mode=? AND (?<>'demo' OR json_extract(payload,'$.demoAccountId')=?) ORDER BY started_at DESC LIMIT 1",
       )
-      .get(env.TRADING_MODE);
+      .get(env.TRADING_MODE, env.TRADING_MODE, store.demoAccountId());
     if (latest) this.current = JSON.parse(String(latest.payload));
   }
   subscribe(listener: () => void) {
@@ -154,6 +153,8 @@ export class CandidateAttempts {
         ...binding,
         attemptId,
         mode: env.TRADING_MODE,
+        demoAccountId:
+          env.TRADING_MODE === "demo" ? this.store.demoAccountId() : undefined,
         mint: candidate.mint,
         symbol: candidate.symbol,
         source: "GMGN_TRENDING",
@@ -314,14 +315,14 @@ export class CandidateAttempts {
     );
     this.store.db
       .prepare(
-        "DELETE FROM records WHERE kind='events' AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' AND id NOT IN (SELECT id FROM records WHERE kind='events' AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' ORDER BY id DESC LIMIT 4000)",
+        "DELETE FROM records WHERE kind='events' AND scope_mode=? AND scope_account IS ? AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' AND id NOT IN (SELECT id FROM records WHERE kind='events' AND scope_mode=? AND scope_account IS ? AND json_extract(payload,'$.type') LIKE 'ATTEMPT_%' ORDER BY id DESC LIMIT 4000)",
       )
-      .run();
-    this.store.db
-      .prepare(
-        "DELETE FROM records WHERE kind='jev_inputs' AND json_extract(payload,'$.attemptId') IS NOT NULL AND id NOT IN (SELECT id FROM records WHERE kind='jev_inputs' AND json_extract(payload,'$.attemptId') IS NOT NULL ORDER BY id DESC LIMIT 500)",
-      )
-      .run();
+      .run(
+        env.TRADING_MODE,
+        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
+        env.TRADING_MODE,
+        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
+      );
   }
   private persist(a = this.current!) {
     a.logs = a.logs.slice(-100);

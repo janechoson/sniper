@@ -7,16 +7,9 @@ const routes = {
     module: "history",
     title: "Lịch sử giao dịch",
   },
-  "/memory": { view: "learning", module: "memory", title: "Bộ nhớ giao dịch" },
   "/settings": { view: "settings", module: "settings", title: "Cấu hình" },
   "/logs": { view: "logs", module: "logs", title: "Log" },
   "/thongke": { view: "statistics", module: "statistics", title: "Thống kê" },
-  "/watchlist": {
-    view: "watchlist",
-    module: "watch",
-    title: "Theo dõi điểm vào",
-  },
-  "/deferred": { view: "deferred", module: "watch", title: "Tạm hoãn" },
 };
 let shell,
   shellPromise,
@@ -62,6 +55,9 @@ function notice(error) {
   if (error?.name !== "AbortError") $("notice").textContent = error.message;
 }
 function renderShell(s) {
+  const scopeChanged =
+    !!shell &&
+    (shell.mode !== s.mode || shell.demoAccountId !== s.demoAccountId);
   shell = s;
   $("mode").textContent = window.BOTText.vi(s.mode.toUpperCase());
   $("overviewMode").textContent = s.mode.toUpperCase();
@@ -98,13 +94,16 @@ function renderShell(s) {
     renderPositionCount(s.positionSummary.count);
   $("notice").textContent = s.haltReason
     ? "TẠM DỪNG MUA MỚI · " + s.haltReason
-    : s.mode === "paper"
-      ? "PAPER · Chỉ giao dịch mô phỏng"
+    : s.mode === "demo"
+      ? "DEMO · Vốn ảo, dữ liệu thị trường thật"
       : s.newEntriesEnabled
         ? "LIVE · Thực thi theo quyết định và các kiểm tra hiện hành"
         : "LIVE · Mua mới đã tắt; vẫn quản lý vị thế";
   $("notice").classList.toggle("system-pause", !!s.haltReason);
-  for (const listener of shellListeners) listener(s);
+  if (scopeChanged) {
+    window.dispatchEvent(new window.Event("trading-mode-changing"));
+    window.dispatchEvent(new window.Event("trading-mode-changed"));
+  } else for (const listener of shellListeners) listener(s);
 }
 async function refreshShell(force = false) {
   if (force && shellPromise) await shellPromise.catch(() => {});
@@ -397,3 +396,16 @@ window.addEventListener("pageshow", (event) => {
 });
 window.BOTDashboard = { navigate };
 void navigate(location.href, { replace: true });
+
+window.addEventListener("trading-mode-changing", () => {
+  current?.dispose();
+  current = undefined;
+  $("routeOutlet").replaceChildren();
+});
+window.addEventListener("trading-mode-changed", () => {
+  current?.dispose();
+  current = undefined;
+  shell = undefined;
+  badgeLoaded = false;
+  void navigate(location.href, { replace: true }).catch(notice);
+});

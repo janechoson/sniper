@@ -82,9 +82,9 @@ export function statisticModel(data, strategy) {
       ? data.winRate
       : null
     : statisticRatio(wins, classified);
-  const calls = count("jevCalls"),
-    buys = count("jevBuy"),
-    skips = count("jevSkip");
+  const calls = count("kronosCalls"),
+    buys = count("kronosBuy"),
+    skips = count("kronosWait");
   const allowed = count("riskAllow"),
     rejected = count("riskReject");
   return {
@@ -178,9 +178,7 @@ export async function mount(ctx) {
     errorBox = $("statisticsError"),
     feedback = $("statisticsFeedback");
   const requested = new URLSearchParams(location.search).get("strategy");
-  filter.value = ["ALL", "STANDARD", "KRONOS"].includes(requested)
-    ? requested
-    : "ALL";
+  filter.value = ["ALL", "KRONOS"].includes(requested) ? requested : "ALL";
   $("statisticsHeadingIcon").append(icon("chart"));
   let latest = null,
     generation = 0,
@@ -200,7 +198,8 @@ export async function mount(ctx) {
       "Tổng các khoản phí đã xác định ở cohort CLOSED. Có thể chỉ là phần phí đã biết khi coverage chưa đầy đủ.",
     gross:
       "Gross PnL của cohort CLOSED có originalQuantity > 0. Không bao gồm phí.",
-    jev: "Số quyết định JEV trong records theo mode hiện tại, tối đa 100.000 records được backend đọc. Không phải số token duy nhất.",
+    kronos:
+      "Số quyết định KRONOS trong records theo mode hiện tại, tối đa 100.000 records được backend đọc. Không phải số token duy nhất.",
     risk: "Số kết quả Risk trong records theo mode hiện tại; một token có thể có nhiều lần kiểm tra. Không phải số token duy nhất.",
   };
   function label(text, tip) {
@@ -410,11 +409,11 @@ export async function mount(ctx) {
         "stats-basis",
       ),
     );
-    const jev = card("JEV Decisions", "brain", "statsJev");
-    row(jev, "Calls", countText(m.calls), { tip: tips.jev });
-    row(jev, "BUY", countText(m.buys), { tone: "positive" });
-    row(jev, "Skip", countText(m.skips));
-    row(jev, "BUY Rate", rateText(m.buyRate), {
+    const kronos = card("KRONOS Decisions", "brain", "statsKronos");
+    row(kronos, "Calls", countText(m.calls), { tip: tips.kronos });
+    row(kronos, "BUY", countText(m.buys), { tone: "positive" });
+    row(kronos, "Skip", countText(m.skips));
+    row(kronos, "BUY Rate", rateText(m.buyRate), {
       tone: "positive",
       tip: "BUY / Calls. Không có Calls thì chưa xác định.",
     });
@@ -423,7 +422,7 @@ export async function mount(ctx) {
       bar.setAttribute("role", "img");
       bar.setAttribute(
         "aria-label",
-        "JEV: BUY " +
+        "KRONOS: BUY " +
           rateText(m.buyRate) +
           ", Skip " +
           rateText(m.skipRate) +
@@ -443,9 +442,9 @@ export async function mount(ctx) {
           segment.style.width = rate * 100 + "%";
           bar.append(segment);
         }
-      jev.append(bar);
-    } else jev.append(progress(null, "JEV distribution"));
-    jev.append(
+      kronos.append(bar);
+    } else kronos.append(progress(null, "KRONOS distribution"));
+    kronos.append(
       make(
         "p",
         "● BUY (" +
@@ -483,40 +482,7 @@ export async function mount(ctx) {
       emphasis: true,
     });
     risk.append(progress(m.allowRate, "Risk Allow Rate"));
-    const comparison = card("So sánh chiến lược", "scales", "statsComparison"),
-      wrap = make("div", undefined, "stats-comparison-wrap"),
-      table = make("table"),
-      head = make("thead"),
-      hr = make("tr");
-    for (const [title, strategy] of [
-      ["Chỉ số", ""],
-      ["STANDARD", "STANDARD"],
-      ["KRONOS", "KRONOS"],
-    ]) {
-      const th = make("th", title);
-      th.scope = "col";
-      if (strategy) th.dataset.strategy = strategy;
-      hr.append(th);
-    }
-    head.append(hr);
-    table.append(head);
-    const body = make("tbody"),
-      tr = make("tr"),
-      td = make(
-        "td",
-        "Chưa có bộ số liệu STANDARD và KRONOS để so sánh.",
-        "stats-comparison-empty",
-      );
-    td.colSpan = 3;
-    tr.append(td);
-    body.append(tr);
-    table.append(body);
-    wrap.append(table);
-    comparison.append(
-      wrap,
-      make("p", "Chọn một strategy để xem hạch toán riêng.", "stats-card-note"),
-    );
-    grid.append(performance, pnl, accounting, jev, risk, comparison);
+    grid.append(performance, pnl, accounting, kronos, risk);
     root.append(grid);
     $("statisticsFx").textContent =
       fx === null

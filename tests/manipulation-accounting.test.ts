@@ -1,24 +1,22 @@
-import { test } from "node:test";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
+import type { Execution, Position } from "../src/domain.js";
 import { analyzeManipulationStructure } from "../src/manipulation-structure.js";
+import type { Candle } from "../src/market-history.js";
+import { Store } from "../src/store.js";
 import {
   makeFillAccounting,
   receiptRentDelta,
   tradeAccounting,
 } from "../src/trade-accounting.js";
-import { RiskEngine } from "../src/risk.js";
-import { position, snapshot, settings, MINT } from "./fixtures.js";
-import { setup } from "./one-shot-fixtures.js";
-import type { Candle } from "../src/market-history.js";
-import type { Execution, Position } from "../src/domain.js";
-import { Store } from "../src/store.js";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { MINT, position } from "./fixtures.js";
 const T = 1793530800000;
 function series(steps: number[], wick = 0.01): Candle[] {
   let price = 20;
@@ -165,21 +163,6 @@ test("6 real loss snapshots replay only persisted pre-BUY candles, without hinds
       ),
     );
 });
-test("bullish JEV cannot override deterministic STRONG controlled-markup veto", () => {
-  const s = {
-    ...snapshot(),
-    manipulationStructure: analyze(series(Array(20).fill(0.2))),
-  };
-  assert.equal(s.jev!.action, "BUY");
-  const result = new RiskEngine().evaluate(s, settings, {
-    balance: 1000000000n,
-    pending: 0n,
-    positions: 0,
-    duplicate: false,
-    entriesEnabled: true,
-  });
-  assert.equal(result.reason, "CONTROLLED_MARKUP_STRUCTURE");
-});
 
 function execution(
   id: string,
@@ -197,7 +180,7 @@ function execution(
       positionId: "accounting-test",
       side,
       amount: principal,
-      mode: "paper",
+      mode: "demo",
       mint: MINT,
     },
     signature: id,
@@ -228,7 +211,7 @@ function accountingPosition(): Position {
   return {
     ...position(),
     id: "accounting-test",
-    mode: "paper",
+    mode: "demo",
     decimals: 0,
     quantity: "100",
     originalQuantity: "100",
@@ -387,7 +370,7 @@ test("three partial/final sells preserve quantities, weighted exit price and fee
     store.savePosition(open);
     store.close();
     store = new Store(path);
-    assert.equal(store.positions("paper").length, 1);
+    assert.equal(store.positions("demo").length, 1);
     store.execution(es.at(-1)!);
     const restored = JSON.parse(
       JSON.stringify({
@@ -439,62 +422,4 @@ test("UNKNOWN submitted SELL cannot finalize history; legacy fields stay unknown
   assert.equal(a.grossPnlLamports, null);
   assert.equal(a.netPnlLamports, null);
   assert.equal(a.finalExit?.priceUsd, null);
-});
-test("paper reconciliation persists lifecycle and gross MFE/MAE independently of entry fees", async () => {
-  const x = setup();
-  try {
-    let buyInput: any, exitInput: any;
-    const decide = x.j.decide.bind(x.j);
-    x.j.decide = async (state, fresh) => {
-      buyInput = state;
-      return decide(state, fresh);
-    };
-    x.j.decideExit = async (state) => {
-      exitInput = state;
-      return {
-        action: "HOLD",
-        sellBps: 0,
-        confidence: 0.9,
-        reason: "UNCHANGED",
-      };
-    };
-    await x.engine.analyze(MINT);
-    assert(Object.hasOwn(buyInput.manipulationStructure, "evidence"));
-    assert.equal(
-      buyInput.manipulationStructure.policy.version,
-      "CONTROLLED_MARKUP_V1",
-    );
-    const p = x.store.positions("paper")[0]!;
-    assert(p.accounting?.entry);
-    assert.equal(p.grossMaePercent, 0);
-    assert.notEqual(p.entryPriceUsd, p.signalPriceUsd);
-    delete p.lastQuoteAt;
-    x.store.savePosition(p);
-    await x.engine.monitor();
-    await x.engine.settleExitWork();
-    assert(exitInput?.currentPosition.accounting);
-    const cp = exitInput.currentPosition;
-    assert.equal(cp.grossPnlPct, cp.accounting.grossPnlPct);
-    assert.equal(cp.feesPaidSol, Number(cp.accounting.feesPaidLamports) / 1e9);
-    assert.equal(cp.netPnlSol, Number(cp.accounting.netPnlLamports) / 1e9);
-    assert.equal(
-      x.store.positions("paper")[0]!.state,
-      "OPEN",
-      "incurred fees do not trigger SELL",
-    );
-    x.engine.emergency(p.id);
-    await x.engine.monitor();
-    await x.engine.settleExitWork();
-    const closed = x.store.positions("paper")[0]!;
-    assert(closed.accounting?.finalExit);
-    assert(closed.closedAt);
-    assert.equal(closed.accounting.exits.length, 1);
-    assert.equal(
-      closed.accounting.finalExit.signature,
-      closed.sellSignature ?? null,
-    );
-  } finally {
-    await x.engine.stop();
-    x.store.close();
-  }
 });

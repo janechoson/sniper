@@ -1,12 +1,13 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Store } from "../src/store.js";
+import { test } from "node:test";
 import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
-import { flowView } from "../src/flow-view.js";
-import { candidate, settings, MINT, snapshot } from "./fixtures.js";
-import { RiskEngine } from "../src/risk.js";
 import { CandidateRejected } from "../src/domain.js";
 import { failureInfo } from "../src/failures.js";
+import { flowView } from "../src/flow-view.js";
+import { RiskEngine } from "../src/risk.js";
+import { Store } from "../src/store.js";
+import { candidate, MINT, settings, snapshot } from "./fixtures.js";
+import { bindFixtureClaim } from "./kronos-fixtures.js";
 
 test("flow transition IDs record actual lifecycle changes, not rank refreshes or repeated saves", () => {
   const db = new Store(":memory:");
@@ -106,9 +107,9 @@ test("BUY submitted is never counted as traded; confirmed persistence emits one 
         duplicate: false,
         entriesEnabled: true,
       },
-      "paper",
+      "demo",
     );
-    const execution = db.claim(intent);
+    const execution = db.claim(bindFixtureClaim(db, intent));
     execution.state = "SUBMITTED";
     execution.signature = "fixture-signature";
     db.execution(execution);

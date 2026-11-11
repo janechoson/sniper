@@ -59,7 +59,7 @@ export const buyQuoteBinding = (q: ExecutionQuote) =>
     requestId: q.order.requestId,
   });
 export async function probeExits(
-  provider: SolanaExecutionProvider,
+  provider: Pick<SolanaExecutionProvider, "quoteSell">,
   mint: string,
   quantity: bigint,
   wallet: string,
@@ -247,7 +247,7 @@ export class ExitLiquidityMonitor {
   readonly counters = { checks: 0, probes: 0, failures: 0, discarded: 0 };
   private starts: number[] = [];
   constructor(
-    private provider: SolanaExecutionProvider,
+    private provider: Pick<SolanaExecutionProvider, "quoteSell">,
     private store: Store,
     private settings: () => Settings,
     private wallet: () => string,

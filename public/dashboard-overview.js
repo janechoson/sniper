@@ -12,10 +12,7 @@ export async function mount(ctx) {
       const n = document.createElement(tag);
       if (text !== undefined) n.textContent = text;
       if (cls) n.className = cls;
-      if (
-        cls?.includes("strategy-badge") &&
-        ["STANDARD", "KRONOS"].includes(text)
-      )
+      if (cls?.includes("strategy-badge") && ["KRONOS"].includes(text))
         n.dataset.strategy = text;
       return n;
     };
@@ -42,7 +39,6 @@ export async function mount(ctx) {
       COMMON_RISK: "Common Risk",
       KRONOS: "Kronos Analysis",
       STRUCTURE: "Structure Evidence V3",
-      JEV: "JEV BUY Analysis",
       RISK: "Risk Engine",
       FINAL_ANALYSIS: "Fresh Final Analysis",
       OWNERSHIP_CAPITAL: "Capital / Ownership",
@@ -194,13 +190,11 @@ export async function mount(ctx) {
         "CAPITAL_FLOW",
         "COMMON_RISK",
       ];
-      for (const strategy of ["STANDARD", "KRONOS"]) {
+      for (const strategy of ["KRONOS"]) {
         const card = document.querySelector(
           '.strategy-card[data-strategy="' + strategy + '"]',
         );
-        const root = $(
-          strategy === "STANDARD" ? "terminalStages" : "kronosStages",
-        );
+        const root = $("kronosStages");
         const evaluation = summaries.strategies?.[strategy] || {};
         const legacy = !summaries.strategies && summaries.strategy === strategy;
         const branchStages = legacy ? a?.stages || {} : evaluation.stages || {};
@@ -211,22 +205,7 @@ export async function mount(ctx) {
         rows.push(
           node("div", strategy + " – Phân tích chi tiết", "strategy-fork"),
         );
-        if (strategy === "STANDARD") {
-          const markup = summaries.manipulationStructure;
-          const indicator = stageIndicator(
-            "CONTROLLED_MARKUP",
-            markup?.status || "PENDING",
-            "Controlled Markup",
-          );
-          indicator.title =
-            "Classification OHLCV: LOW / MODERATE / STRONG / INSUFFICIENT_DATA. Risk enforces STRONG; this label is not a separate BUY approval.";
-          rows.push(
-            indicator,
-            ...["STRUCTURE", "JEV"].map((stage) =>
-              stageIndicator(stage, branchStages[stage] || "PENDING"),
-            ),
-          );
-        } else {
+        {
           // WAIT is a valid completed inference; the entry pipeline may reject BUY afterwards.
           const inferred = summaries.kronos;
           const complete =
@@ -554,7 +533,7 @@ export async function mount(ctx) {
             identity = node("div");
           identity.append(
             node("strong", p.symbol || short(p.mint)),
-            node("small", p.strategy || "STANDARD", "strategy-badge"),
+            node("small", p.strategy || "LEGACY", "strategy-badge"),
             node("small", short(p.mint)),
           );
           id.append(avatar(p), identity);

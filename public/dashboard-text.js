@@ -39,8 +39,6 @@ window.BOTText = (() => {
     Completed: "Đã hoàn tất",
     "Cannot BUY": "Không thể mua",
     "BUY confirmed": "Đã xác nhận mua",
-    "Jev analyzed; awaiting risk decision":
-      "Jev đã phân tích; chờ kiểm tra rủi ro",
     "Analyzing candidate": "Đang phân tích ứng viên",
     "Candidate rejected": "Ứng viên bị loại",
     "CANDIDATE QUEUED": "ỨNG VIÊN VÀO HÀNG ĐỢI",
@@ -49,10 +47,6 @@ window.BOTText = (() => {
     "CANDIDATE DEFERRED": "ỨNG VIÊN TẠM HOÃN",
     "CANDIDATE WATCH": "ỨNG VIÊN THEO DÕI",
     "CANDIDATE RECOVERED": "ỨNG VIÊN ĐÃ PHỤC HỒI",
-    "JEV STARTED": "JEV BẮT ĐẦU PHÂN TÍCH",
-    "JEV COMPLETED": "JEV PHÂN TÍCH XONG",
-    "JEV BUY": "JEV ĐỀ XUẤT MUA",
-    "JEV SKIP": "JEV BỎ QUA",
     "RISK REJECT": "RỦI RO KHÔNG ĐẠT",
     "TOKEN DEFERRED": "TOKEN TẠM HOÃN",
     "TOKEN REJECTED": "TOKEN BỊ LOẠI",
@@ -62,10 +56,7 @@ window.BOTText = (() => {
     TRADE: "GIAO DỊCH",
     ERROR: "LỖI",
     ANALYZE: "PHÂN TÍCH",
-    JEV_ANALYZING: "JEV ĐANG PHÂN TÍCH",
     EXECUTION: "THỰC HIỆN GIAO DỊCH",
-    "Fresh deep checks passed; Jev and Risk still required":
-      "Đã qua kiểm tra chuyên sâu mới; vẫn cần Jev và kiểm tra rủi ro",
     "GMGN reports no usable liquidity":
       "GMGN không ghi nhận thanh khoản có thể sử dụng",
     "Watch capacity exceeded; recent-reject cooldown":
@@ -84,7 +75,6 @@ window.BOTText = (() => {
     CURRENT_HOLDERS: "CƠ CẤU NẮM GIỮ HIỆN TẠI",
     SKIP_RISK: "BỎ QUA DO RỦI RO",
     SKIP_MARKET: "BỎ QUA DO THỊ TRƯỜNG",
-    SKIP_JEV: "JEV BỎ QUA",
     SKIP_RUG: "BỎ QUA DO RỦI RO RUG",
     SKIP_MISSING_CRITICAL_DATA: "THIẾU DỮ LIỆU QUAN TRỌNG",
     TOKEN_SIMULATION_FAILED: "MÔ PHỎNG GIAO DỊCH THẤT BẠI",
@@ -112,7 +102,6 @@ window.BOTText = (() => {
     received: "đã nhận",
     true: "BẬT",
     false: "TẮT",
-    "GMGN × JEV · Local Terminal": "K1ll of BOT · Bảng điều khiển",
     "PRIVATE SOLANA TERMINAL": "BẢNG GIAO DỊCH SOLANA RIÊNG",
     "LOCAL CONNECTION": "KẾT NỐI NỘI BỘ",
     "Single wallet": "Một ví giao dịch",
@@ -337,7 +326,6 @@ window.BOTText = (() => {
     "Awaiting current qualification": "Đang chờ đánh giá bằng dữ liệu hiện tại",
     "waiting for execution gates": "chờ kiểm duyệt giao dịch",
     "not yet a confirmed BUY": "chưa có giao dịch mua được xác nhận",
-    "JEV ANALYZING": "JEV ĐANG PHÂN TÍCH",
     "RISK REVIEW": "ĐÁNH GIÁ RỦI RO",
     "RISK REJECTED": "BỊ LOẠI DO RỦI RO",
     "LIVE · Jupiter executes swaps signed by the local backend wallet.":
@@ -346,8 +334,6 @@ window.BOTText = (() => {
       "GIAO DỊCH THẬT · Người vận hành đã tắt mua mới; vẫn quản lý các vị thế.",
     "LIVE · Controlled BUY allowance consumed; scanner and position management continue.":
       "GIAO DỊCH THẬT · Đã dùng lượt mua thử có giới hạn; vẫn quét và quản lý vị thế.",
-    "PAPER · Real GMGN + Jev decisions. Only trade fills and portfolio cash are simulated.":
-      "MÔ PHỎNG · Dữ liệu GMGN và quyết định Jev là thật. Chỉ mô phỏng khớp lệnh và tiền trong danh mục.",
     "LIVE BLOCKED · Set LIVE_TRADING_ACK=true in the backend environment.":
       "CHƯA CHO PHÉP GIAO DỊCH THẬT · Cần cấu hình LIVE_TRADING_ACK=true ở máy chủ.",
     "Local connection interrupted. Reconnecting…":
@@ -373,15 +359,10 @@ window.BOTText = (() => {
     "Suggestions · never automatically applied":
       "Đề xuất · không tự động áp dụng",
     "No historical comparison": "Chưa có so sánh lịch sử",
-    "GMGN evidence, Jev and deterministic policy allow entry":
-      "Dữ liệu GMGN, Jev và chính sách rủi ro cho phép mua",
     "historical context": "bối cảnh lịch sử",
     "supplied samples (advisory only)": "mẫu được cung cấp (chỉ tham khảo)",
-    "Jev chose SKIP": "Jev quyết định bỏ qua",
     "Liquidity is below the configured entry policy":
       "Thanh khoản thấp hơn ngưỡng mua đã cấu hình",
-    "GMGN price changed materially after Jev; a new decision is required":
-      "Giá GMGN thay đổi đáng kể sau phân tích Jev; cần đánh giá mới",
     "GMGN rug-risk label exceeds the configured critical threshold":
       "Rủi ro rug theo GMGN vượt ngưỡng nghiêm trọng đã cấu hình",
     "Qualification complete; new entries are disabled":
@@ -391,7 +372,6 @@ window.BOTText = (() => {
     "This mint already has a position or durable BUY intent":
       "Mint này đã có vị thế hoặc ý định mua được lưu bền vững",
     "Decision evidence is stale": "Dữ liệu ra quyết định đã cũ",
-    "Jev did not approve this entry": "Jev không phê duyệt lệnh mua này",
     "Maximum holding time reached": "Đã hết thời gian nắm giữ tối đa",
     "Manual emergency exit": "Thoát lệnh khẩn cấp thủ công",
     "Monitoring recovered": "Đã khôi phục theo dõi",
@@ -411,8 +391,6 @@ window.BOTText = (() => {
     maxDecisionPriceMovePercent: "Biến động giá tối đa sau quyết định (%)",
     slippagePercent: "Trượt giá (%)",
     paperFeeLamports: "Phí mô phỏng (lamport)",
-    trailingActivationBps: "Ngưỡng bám đuôi tham khảo cho Jev (bps)",
-    trailingStopBps: "Mức hồi tham khảo cho Jev (bps)",
     maxHoldSeconds: "Thời gian giữ tối đa (giây)",
     liquidityCollapseBps: "Ngưỡng sụt thanh khoản (bps)",
     smartMoneyExitMode: "Thoát lệnh theo dòng tiền thông minh",
@@ -438,13 +416,6 @@ window.BOTText = (() => {
     tokenFailureThreshold: "Ngưỡng số lần lỗi token",
     recentRejectTtlMs: "Thời gian cách ly token bị loại (ms)",
     positionRecheckMs: "Chu kỳ kiểm tra lại vị thế (ms)",
-    jevExitConcurrency: "Số phân tích Jev thoát lệnh đồng thời",
-    jevExitQueueSize: "Sức chứa hàng đợi Jev thoát lệnh",
-    jevExitRecheckMs: "Chu kỳ Jev đánh giá lại vị thế (ms)",
-    jevExitMinIntervalMs: "Khoảng cách tối thiểu giữa hai lần Jev (ms)",
-    jevExitDecisionMaxAgeMs: "Thời hạn quyết định Jev thoát lệnh (ms)",
-    jevExitMaterialPnlPoints: "Biến động PnL kích hoạt Jev (điểm phần trăm)",
-    jevExitMinConfidence: "Độ tin cậy tối thiểu cho Jev SELL (0–1)",
     exitExecutionsPerCycle: "Số lệnh thoát tối đa mỗi lượt xử lý",
     trendingInterval: "Cửa sổ bảng xếp hạng xu hướng",
     trendingLimit: "Số token xu hướng mỗi lần lấy",
@@ -472,8 +443,6 @@ window.BOTText = (() => {
     EXIT_LIQUIDITY_TOO_THIN: "THANH KHOẢN THOÁT QUÁ MỎNG",
     EXIT_FEASIBILITY_UNAVAILABLE: "CHƯA ĐÁNH GIÁ ĐƯỢC KHẢ NĂNG THOÁT",
     EXIT_FEASIBILITY_STALE: "ƯỚC TÍNH THOÁT ĐÃ CŨ",
-    jevExitTradeCooldownMs:
-      "Khoảng cách tối thiểu giữa hai lần bán chiến lược (ms)",
     flowMaxObservations: "Số quan sát dòng tiền tối đa mỗi vị thế",
     flowHistoryMs: "Thời gian giữ quan sát dòng tiền (ms)",
     flowMinObservations: "Số quan sát tối thiểu để đánh giá dòng tiền",

@@ -1,34 +1,27 @@
-import { setup } from "./one-shot-fixtures.js";
-import { qualifiedWatch, legacyCandidate } from "./fixtures.js";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
+import { test } from "node:test";
+import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
+import type { FlowObservation } from "../src/capital-flow.js";
+import { Engine } from "../src/engine.js";
 import {
   GmgnCoordinator,
   GmgnRateLimited,
   retryDelay,
 } from "../src/gmgn-coordinator.js";
+import { Gmgn, normalizeMarket } from "../src/gmgn.js";
 import {
   evolveStructure,
   SniperStructure,
   type StructureWatch,
 } from "../src/sniper-structure.js";
-import type { FlowObservation } from "../src/capital-flow.js";
 import { Store } from "../src/store.js";
-import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
-import { Gmgn, normalizeMarket } from "../src/gmgn.js";
-import { Engine } from "../src/engine.js";
+import { legacyCandidate, qualifiedWatch } from "./fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
+import { setup } from "./one-shot-fixtures.js";
 
-import { RiskEngine } from "../src/risk.js";
-import { ProviderFailure, CandidateRejected } from "../src/domain.js";
-import {
-  settings,
-  candidate,
-  MINT,
-  info,
-  snapshot,
-  position,
-} from "./fixtures.js";
+import { CandidateRejected, ProviderFailure } from "../src/domain.js";
+import { candidate, info, MINT, position, settings } from "./fixtures.js";
 const start = 10_000_000;
 function obs(
   at: number,
@@ -240,28 +233,6 @@ test("old Structure Watch state cannot defer a newly fetched Trending appearance
     db.close();
   }
 });
-test("Jev confidence cannot bypass unfinished or stale structure; pre-Watch review alone skips timing", () => {
-  const risk = new RiskEngine(),
-    snap = snapshot(),
-    ctx = {
-      balance: 1000000000n,
-      pending: 0n,
-      positions: 100,
-      duplicate: false,
-      entriesEnabled: true,
-    };
-  snap.entryDiscoverySource = "SNIPER";
-  snap.jev!.confidence = 0.99;
-  assert.equal(risk.evaluate(snap, settings, ctx).allowed, false);
-  snap.sniperStructureAtEntry = sequence(defensive);
-  assert.equal(risk.evaluate(snap, settings, ctx).allowed, false);
-  snap.entryDiscoverySource = "TRENDING";
-  assert.equal(risk.evaluate(snap, settings, ctx).allowed, false);
-  assert.equal(
-    risk.evaluate(snap, settings, ctx, Date.now(), "PRE_WATCH").allowed,
-    true,
-  );
-});
 test("single-flight and cache reduce four consumers and 100 same-key reads to one transport call", async () => {
   const { c } = clock();
   let calls = 0;
@@ -272,7 +243,7 @@ test("single-flight and cache reduce four consumers and 100 same-key reads to on
   const rows = await Promise.all(
     Array.from({ length: 100 }, (_, i) =>
       c.read("token:sol:mint:1m", 1000, work, {
-        consumer: ["structure", "flow", "jev", "ui"][i % 4],
+        consumer: ["structure", "flow", "kronos", "ui"][i % 4],
       }),
     ),
   );
@@ -444,13 +415,13 @@ test("Engine GMGN cooldown does not halt/reject candidate/structure or block ind
     g = new Gmgn(async () => {
       throw new GmgnRateLimited(10000);
     }),
-    engine = new Engine(db, { gmgn: g });
+    engine = new Engine(db, { gmgn: g, kronos: fakeKronos() });
   try {
     const c = candidate();
     db.discover(c);
     engine.candidates.refill([c]);
     qualifiedWatch(engine, c, false);
-    const p = { ...position(), mode: "paper" as const };
+    const p = { ...position(), mode: "demo" as const };
     db.savePosition(p);
     engine.emergency(p.id, 5000);
     await (
@@ -493,7 +464,10 @@ test("Engine GMGN cooldown does not halt/reject candidate/structure or block ind
       MINT,
       "DEEP_CHECK",
     );
-    assert.match(db.get<string>("haltReason")!, /GMGN_AUTHORIZATION_FAILED/);
+    assert.match(
+      db.get<{ reason: string }>("lastFailure")!.reason,
+      /GMGN_AUTHORIZATION_FAILED/,
+    );
   } finally {
     db.close();
   }
@@ -503,7 +477,7 @@ test("only Trending can start one-shot entry; an old Sniper signal creates no wa
   try {
     f.store.discover({ ...candidate(), discovery: undefined });
     f.store.db
-      .prepare("UPDATE tokens SET payload=? WHERE mint=?")
+      .prepare("UPDATE mode_tokens SET payload=? WHERE mode='demo' AND mint=?")
       .run(JSON.stringify(legacyCandidate()), MINT);
     await assert.rejects(f.engine.analyze(MINT));
     assert.equal(f.engine.attempts.current!.failedStage, "CHEAP_FILTER");

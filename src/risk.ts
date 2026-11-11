@@ -12,15 +12,9 @@ import {
   type Intent,
   type Position,
 } from "./domain.js";
-import { deepFreeze, hash, log } from "./util.js";
+import { deepFreeze, hash } from "./util.js";
 import { size } from "./position-sizing.js";
 export { size } from "./position-sizing.js";
-import { validRecoveryBypass } from "./recovery-guard.js";
-import {
-  hasTimelyStructurePass,
-  hasEligibleStructurePass,
-  ENTRY_WATCH_POLICY,
-} from "./sniper-structure.js";
 export function decision(
   outcome: RiskResult["outcome"],
   reason: string,
@@ -28,6 +22,8 @@ export function decision(
   return { allowed: outcome === "BUY", outcome, reason, at: Date.now() };
 }
 export function cheapGuard(c: Candidate, m: Market, s: Settings) {
+  if (s.tokenBlacklist.includes(c.mint))
+    return decision("SKIP_RISK", "TOKEN_BLACKLISTED");
   try {
     address(c.mint);
   } catch {
@@ -73,94 +69,13 @@ export class RiskEngine {
     now = Date.now(),
     phase: "COMMON" | "PRE_WATCH" | "QUALIFICATION" | "EXECUTION" = "EXECUTION",
   ): RiskResult {
+    if (s.tokenBlacklist.includes(snap.candidate.mint))
+      return decision("SKIP_RISK", "TOKEN_BLACKLISTED");
     const kronos = snap.strategy === "KRONOS";
-    if (!kronos && snap.manipulationStructure?.status === "STRONG")
-      return decision("SKIP_RISK", "CONTROLLED_MARKUP_STRUCTURE");
-    const recoveryBypassed =
-      !kronos &&
-      phase === "EXECUTION" &&
-      snap.entryDiscoverySource === "TRENDING" &&
-      validRecoveryBypass(
-        snap.sniperStructureAtEntry,
-        s,
-        snap.entryAuthority,
-        now,
-      );
+    if (phase !== "COMMON" && !kronos)
+      return decision("SKIP_RISK", "KRONOS_ONLY");
     if (snap.gmgnQuality && snap.gmgnQuality.freshness !== "FRESH")
       return decision("SKIP_RISK", "Fresh GMGN evidence is required");
-    if (
-      !kronos &&
-      snap.entryAuthority?.policy === "TRENDING_ONE_SHOT_V1" &&
-      snap.oneShotStructure?.version === "STRUCTURE_EVIDENCE_V3"
-    ) {
-      const v3 = snap.oneShotStructure;
-      const relevantAt = v3.priceStructure.latestRelevantAt;
-      if (
-        !v3.passed ||
-        relevantAt === null ||
-        relevantAt > now ||
-        now - relevantAt > s.structureMaxGapMs ||
-        !snap.marketHistory ||
-        snap.marketHistory.fetchedAt > now ||
-        now - snap.marketHistory.fetchedAt > s.maxSnapshotAgeMs ||
-        snap.marketHistory.historyTo === null ||
-        now - snap.marketHistory.historyTo > s.maxSnapshotAgeMs + 60000
-      )
-        return decision(
-          "SKIP_RISK",
-          !v3.passed ? v3.reason : "STALE_PRICE_RECOVERY",
-        );
-    }
-    if (
-      !kronos &&
-      snap.entryAuthority?.policy === "TRENDING_ONE_SHOT_V1" &&
-      phase === "EXECUTION" &&
-      (!snap.attemptId ||
-        !snap.oneShotStructure?.passed ||
-        now - snap.oneShotStructure.at > s.maxSnapshotAgeMs ||
-        snap.oneShotStructure.at > now ||
-        !snap.capitalFlow ||
-        snap.capitalFlow.regime === "INSUFFICIENT_DATA" ||
-        now - snap.capitalFlow.at > s.maxSnapshotAgeMs)
-    )
-      return decision(
-        "SKIP_RISK",
-        "Fresh one-shot structure and flow required",
-      );
-    if (
-      !kronos &&
-      snap.entryAuthority?.policy !== "TRENDING_ONE_SHOT_V1" &&
-      phase === "EXECUTION" &&
-      (snap.entryDiscoverySource === "SNIPER" ||
-        snap.entryDiscoverySource === "TRENDING") &&
-      (!(
-        hasTimelyStructurePass(snap.sniperStructureAtEntry, now) ||
-        recoveryBypassed
-      ) ||
-        (snap.entryDiscoverySource === "TRENDING" &&
-          (!(
-            hasEligibleStructurePass(snap.sniperStructureAtEntry, now) ||
-            recoveryBypassed
-          ) ||
-            snap.entryAuthority?.policy !== ENTRY_WATCH_POLICY ||
-            snap.sniperStructureAtEntry?.eligibility?.authorityRevision !==
-              snap.entryAuthority.revision)) ||
-        !snap.sniperStructureAtEntry ||
-        snap.sniperStructureAtEntry.quality !== "FRESH" ||
-        !snap.sniperStructureAtEntry.lastObservedAt ||
-        now - snap.sniperStructureAtEntry.lastObservedAt >
-          s.structureMaxGapMs ||
-        snap.sniperStructureAtEntry.lastObservedAt > now)
-    )
-      return decision(
-        "SKIP_RISK",
-        "Entry buyer defense is not freshly confirmed",
-      );
-    if (recoveryBypassed)
-      log("temp_recovery_guard_bypassed", {
-        message: "[TEMP] Risk EXECUTION Recovery guard bypassed",
-        mint: snap.candidate.mint,
-      });
     if (!ctx.entriesEnabled)
       return decision("SKIP_RISK", "New entries are disabled");
     if (ctx.duplicate)
@@ -191,11 +106,9 @@ export class RiskEngine {
       now - snap.market.at > s.maxSnapshotAgeMs ||
       now - snap.security.at > s.maxSnapshotAgeMs ||
       (phase !== "COMMON" &&
-        (kronos
-          ? !snap.kronos ||
-            now - snap.kronos.decisionAt > s.maxSnapshotAgeMs ||
-            snap.kronos.decisionAt > now
-          : !snap.jev || now - snap.jev.at > s.maxSnapshotAgeMs))
+        (!snap.kronos ||
+          now - snap.kronos.decisionAt > s.maxSnapshotAgeMs ||
+          snap.kronos.decisionAt > now))
     )
       return decision("SKIP_RISK", "Decision evidence is stale");
     if (
@@ -249,22 +162,6 @@ export class RiskEngine {
           "Fresh Kronos BUY, common history/flow and bound authority required",
         );
     }
-    const j = snap.jev;
-    if (
-      phase !== "COMMON" &&
-      !kronos &&
-      (!j || j.model !== "jev-1.14.0" || j.insufficientData)
-    )
-      return decision(
-        "SKIP_JEV",
-        "Jev could not make a sufficiently supported pinned-model decision",
-      );
-    if (
-      phase !== "COMMON" &&
-      !kronos &&
-      (!j || j.action !== "BUY" || j.risk === "HIGH" || j.suspicious)
-    )
-      return decision("SKIP_JEV", "Jev did not approve this entry");
     if (
       size(ctx.balance, BigInt(s.feeReserveLamports), ctx.pending, s).amount <=
       0n
@@ -275,12 +172,7 @@ export class RiskEngine {
       );
     return decision(
       "BUY",
-      (kronos
-        ? "GMGN evidence, Kronos and deterministic policy allow entry"
-        : "GMGN evidence, Jev and deterministic policy allow entry") +
-        (snap.jev?.historicalAssessment
-          ? `; historical context ${snap.jev.historicalAssessment.strength}, ${snap.jev.historicalAssessment.similarTradeCount} supplied samples (advisory only)`
-          : ""),
+      "GMGN evidence, Kronos and deterministic policy allow entry",
     );
   }
   approve(
@@ -299,10 +191,10 @@ export class RiskEngine {
       id: randomUUID(),
       attemptId: snap.attemptId,
       ownershipClaimId: snap.ownershipClaimId,
-      strategy: snap.strategy ?? "STANDARD",
-      decisionSource: snap.strategy === "KRONOS" ? "KRONOS" : "JEV",
-      decisionId: snap.kronos?.decisionId ?? snap.jev?.inputHash,
-      decisionAt: snap.kronos?.decisionAt ?? snap.jev?.at,
+      strategy: "KRONOS",
+      decisionSource: "KRONOS",
+      decisionId: snap.kronos!.decisionId,
+      decisionAt: snap.kronos!.decisionAt,
       entryAuthority: snap.entryAuthority,
       provider: "JUPITER",
       key: `${mode}:BUY:${snap.candidate.mint}`,
@@ -350,41 +242,19 @@ export function exitDecision(
       p.initialLiquidity * (10000 - s.liquidityCollapseBps)
   )
     return { reason: "GMGN liquidity removal/collapse", sellBps: 10000 };
-  // Smart-money participant trades are advisory evidence for JEV, never
-  // direct SELL authority (including legacy smartMoneyExitMode=EXIT).
-  if (p.strategy === "KRONOS") return;
-  const cost = BigInt(p.remainingCostLamports);
-  if (
-    cost > 0n &&
-    BigInt(p.highWaterLamports) * 10000n >=
-      cost * BigInt(10000 + s.trailingActivationBps) &&
-    value > cost &&
-    value * 10000n <=
-      BigInt(p.highWaterLamports) * BigInt(10000 - s.trailingStopBps)
-  )
-    return { reason: "Trailing profit", sellBps: 10000 };
-  for (let i = 0; i < s.takeProfits.length; i++) {
-    const t = s.takeProfits[i]!;
-    if (
-      !p.takenProfits.includes(i) &&
-      value * 10000n >= cost * BigInt(10000 + t.gainBps)
-    )
-      return { reason: "Take profit", sellBps: t.sellBps, takeProfitIndex: i };
-  }
+  // KRONOS owns strategic exits. Shared protection never adds a profit policy.
   return;
 }
-/** Security-only decision path for the normal Jev-managed strategy. */
+/** Shared security and liquidity protection, unchanged for KRONOS. */
 export function protectiveExitDecision(
   p: Position,
   value: bigint,
   s: Settings,
   signals: Parameters<typeof exitDecision>[3],
 ) {
-  const result = exitDecision(p, value, s, signals);
-  return result && !["Take profit", "Trailing profit"].includes(result.reason)
-    ? result
-    : undefined;
+  return exitDecision(p, value, s, signals);
 }
+
 function fraction(value: string) {
   const match = /^(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i.exec(value);
   if (!match || value.length > 128) throw new Blocked("Invalid decimal price");

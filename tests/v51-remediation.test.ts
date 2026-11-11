@@ -1,32 +1,29 @@
-import { setup, mockExecutionCase } from "./one-shot-fixtures.js";
-import { qualifiedWatch } from "./fixtures.js";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { Gmgn, normalizeSecurity } from "../src/gmgn.js";
+import { CandidateRejected, ProviderFailure } from "../src/domain.js";
+import { Engine } from "../src/engine.js";
 import { GmgnCoordinator, GmgnRateLimited } from "../src/gmgn-coordinator.js";
 import { GmgnProviderState } from "../src/gmgn-provider-state.js";
 import { transportRetryDelay } from "../src/gmgn-rate-metadata.js";
-import { Store } from "../src/store.js";
-import { Engine } from "../src/engine.js";
+import { Gmgn, normalizeSecurity } from "../src/gmgn.js";
 import { RiskEngine } from "../src/risk.js";
-import { TradingMemory } from "../src/trading-memory.js";
-import { Jev } from "../src/jev.js";
-import { CandidateRejected, ProviderFailure } from "../src/domain.js";
-import { env } from "../src/config.js";
+import { Store } from "../src/store.js";
 import {
-  settings,
   candidate,
-  position,
-  snapshot,
-  securityRaw,
   info,
   MINT,
+  position,
+  qualifiedWatch,
+  securityRaw,
+  settings,
+  snapshot,
 } from "./fixtures.js";
-import { typedJevFixture } from "./learning-fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
+import { mockExecutionCase, setup } from "./one-shot-fixtures.js";
 
 test("H1 endpoint critical wins; unknown retains current critical; newer safe endpoint supersedes bounded old listing", () => {
   const c = {
@@ -302,7 +299,7 @@ test("M2 independent stores and a reopened store preserve the longest authoritat
 test("M1 owned PASSED Sniper error stays POSITION, quantity and BOUGHT survive even without supplied position context", async () => {
   const db = new Store(":memory:"),
     g = new Gmgn(async () => ({})),
-    e = new Engine(db, { gmgn: g });
+    e = new Engine(db, { gmgn: g, kronos: fakeKronos() });
   try {
     const c = candidate();
     db.discover(c);
@@ -313,7 +310,7 @@ test("M1 owned PASSED Sniper error stays POSITION, quantity and BOUGHT survive e
     db.db
       .prepare("UPDATE sniper_structure_watch SET payload=? WHERE mint=?")
       .run(JSON.stringify(structure), MINT);
-    const p = { ...position(), mode: "paper" as const };
+    const p = { ...position(), mode: "demo" as const };
     db.savePosition(p);
     e.candidates.setState(MINT, "BOUGHT");
     await (
@@ -325,7 +322,7 @@ test("M1 owned PASSED Sniper error stays POSITION, quantity and BOUGHT survive e
       MINT,
       "POSITION_MONITOR",
     );
-    const after = db.positions("paper")[0]!;
+    const after = db.positions("demo")[0]!;
     assert.equal(after.quantity, p.quantity);
     assert.equal(after.state, "OPEN");
     assert.equal(after.monitoring?.status, "DEGRADED");
@@ -363,7 +360,7 @@ test("removed Watch observer performs no provider calls and cannot manufacture a
     calls++;
     throw new ProviderFailure("GMGN_AUTHORIZATION_FAILED", "GMGN", false);
   });
-  const e = new Engine(db, { gmgn: g });
+  const e = new Engine(db, { gmgn: g, kronos: fakeKronos() });
   try {
     qualifiedWatch(e, candidate(), false);
     await e.observeStructureWatches();
@@ -371,62 +368,6 @@ test("removed Watch observer performs no provider calls and cannot manufacture a
     assert.equal(db.get("haltReason"), undefined);
   } finally {
     await e.stop();
-    db.close();
-  }
-});
-
-test("H5 FINAL Jev provider body keeps bounded V5 context and explicit timestamps", async () => {
-  const old = env.TYPESAFE_API_KEY;
-  env.TYPESAFE_API_KEY = "fixture-only";
-  const db = new Store(":memory:"),
-    memory = new TradingMemory(db),
-    j = new Jev();
-  try {
-    const snap = snapshot();
-    const context = memory.jevContext(
-      {
-        market: snap.market,
-        security: snap.security,
-        discovery: { sources: ["SNIPER", "TRENDING"] },
-        entryDiscoverySource: "TRENDING",
-        sniperStructureAtEntry: {
-          phase: "SUPPORT_FORMING",
-          observations: Array(1000).fill("excluded"),
-          structureWatchExpiresAt: Date.now() + 10000,
-        },
-        capitalFlow: {
-          regime: "STRONG_INFLOW",
-          at: Date.now(),
-          features: { buyPressure: 0.6 },
-        },
-        gmgnQuality: {
-          freshness: "STALE_USABLE",
-          fetchedAt: Date.now() - 10000,
-        },
-      },
-      memory.retrieve(snap, "paper"),
-    );
-    let body: { state?: { currentToken: Record<string, unknown> } } = {};
-    j.http.request = async (_url, init) => {
-      body = JSON.parse(String(init?.body));
-      return typedJevFixture("SKIP", "UNAVAILABLE", "NONE");
-    };
-    await j.decide(context, true);
-    const token = body.state!.currentToken;
-    for (const key of [
-      "discovery",
-      "entryDiscoverySource",
-      "sniperStructureAtEntry",
-      "capitalFlow",
-      "gmgnQuality",
-      "marketObservedAt",
-      "flowObservedAt",
-    ])
-      assert.notEqual(token[key], undefined, key);
-    assert(!JSON.stringify(body).includes("excluded"));
-    assert.equal(token.entryDiscoverySource, "TRENDING");
-  } finally {
-    env.TYPESAFE_API_KEY = old;
     db.close();
   }
 });

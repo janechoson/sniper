@@ -1,6 +1,9 @@
-export type Mode = "paper" | "live";
+/** paper remains readable historical state; new sessions use demo or live. */
+export type Mode = "paper" | "demo" | "live";
+export type TradingMode = "DEMO" | "LIVE";
 export type Strategy = "STANDARD" | "KRONOS";
 export interface StrategyTrace {
+  demoAccountId?: string;
   attemptId?: string;
   ownershipClaimId?: string;
   strategy?: Strategy;
@@ -318,7 +321,7 @@ export interface Position extends StrategyTrace {
   exitLiquidity?: import("./exit-feasibility.js").ExitFeasibility;
   decisionRevision?: number;
   flow?: import("./capital-flow.js").CapitalFlowSummary;
-  runner?: import("./runner-memory.js").RunnerSummary;
+  runner?: import("./legacy-runner-types.js").RunnerSummary;
   lastStrategicExit?: {
     grossPnlKnown?: boolean;
     at: number;
@@ -437,7 +440,10 @@ export interface Execution {
     solDelta: string;
     tokenDelta: string;
     feeLamports: string;
-    slot: number;
+    slot?: number;
+    simulated?: true;
+    quoteAt?: number;
+    quoteId?: string;
     transactionBalances?: {
       beforeSol: string;
       afterSol: string;

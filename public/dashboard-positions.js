@@ -23,10 +23,7 @@ export async function mount(ctx) {
             ? String(text)
             : window.BOTText.vi(text);
       if (cls) n.className = cls;
-      if (
-        cls?.includes("strategy-badge") &&
-        ["STANDARD", "KRONOS"].includes(text)
-      )
+      if (cls?.includes("strategy-badge") && ["KRONOS"].includes(text))
         n.dataset.strategy = text;
       return n;
     };
@@ -55,78 +52,6 @@ export async function mount(ctx) {
         .toLowerCase()
         .replaceAll("_", " ")
         .replace(/^./, (c) => c.toUpperCase());
-    function analystFailure(jev) {
-      const state = jev.decisionState || "",
-        code = jev.error || "",
-        noAuthority = "Chưa cấp quyết định mới.";
-      // Read the exact error first: older backends classified this response
-      // consistency failure as PROVIDER_FAILURE. No stored decision is changed.
-      if (code === "JEV_EXIT_ACTION_FRACTION_MISMATCH")
-        return {
-          title: "Phản hồi JEV mâu thuẫn",
-          detail: "Hành động và tỷ lệ bán không khớp. " + noAuthority,
-        };
-      if (state === "NO_DECISION_INSUFFICIENT_DATA") {
-        const score = jev.analystResponse?.answers?.data_sufficiency?.noul,
-          known = typeof score === "number" && Number.isFinite(score);
-        return {
-          title: "Chưa đủ điều kiện dữ liệu để ra quyết định",
-          detail:
-            (known
-              ? "Điểm đủ dữ liệu do JEV chấm: " +
-                score.toLocaleString("vi-VN", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                }) +
-                "/1; ngưỡng yêu cầu: 0,70/1. Không phải xác suất thắng. " +
-                (score >= 0.7
-                  ? "Điểm đã đạt ngưỡng nhưng lý do và hành động chưa đáp ứng điều kiện phản hồi. "
-                  : "")
-              : "JEV đánh giá chưa đủ bằng chứng hoặc phản hồi chưa đáp ứng điều kiện dữ liệu. ") +
-            noAuthority,
-        };
-      }
-      if (state === "NO_DECISION_LOW_CONFIDENCE")
-        return {
-          title: "Độ tin cậy quyết định JEV chưa đạt ngưỡng",
-          detail:
-            "Đây là độ tin cậy của quyết định, khác với điểm đủ dữ liệu. " +
-            noAuthority,
-        };
-      if (state === "NO_DECISION_TIMEOUT" || /TIMEOUT/.test(code))
-        return {
-          title: "JEV hết thời gian phản hồi",
-          detail: "Yêu cầu đánh giá đã quá thời gian chờ. " + noAuthority,
-        };
-      if (
-        ["NO_DECISION_INVALID_RESPONSE", "NO_DECISION_SCHEMA_FAILURE"].includes(
-          state,
-        )
-      )
-        return {
-          title: "Phản hồi JEV sai định dạng",
-          detail:
-            "Không đọc được phản hồi theo định dạng yêu cầu. " + noAuthority,
-        };
-      const http = code.match(/_HTTP_(\d{3})$/)?.[1];
-      if (http)
-        return {
-          title:
-            (http === "401" || http === "403"
-              ? "JEV từ chối xác thực hoặc quyền truy cập"
-              : http === "429"
-                ? "JEV giới hạn tần suất yêu cầu"
-                : "Dịch vụ JEV trả lỗi") + ` (HTTP ${http})`,
-          detail: noAuthority,
-        };
-      return {
-        title:
-          state === "NO_DECISION_PROVIDER_FAILURE"
-            ? "Lỗi gọi dịch vụ JEV"
-            : "JEV chưa có kết luận hợp lệ",
-        detail: "Không có phản hồi hợp lệ cho lần đánh giá này. " + noAuthority,
-      };
-    }
     function relative(at, countdown = false) {
       if (!Number.isFinite(at)) return "—";
       const seconds = Math.max(
@@ -224,7 +149,7 @@ export async function mount(ctx) {
           name + (name !== symbol ? ` (${symbol})` : ""),
           "token-name",
         ),
-        node("small", p.strategy || "STANDARD", "strategy-badge"),
+        node("small", p.strategy || "LEGACY", "strategy-badge"),
       );
       const mint = node(
         "button",
@@ -377,10 +302,7 @@ export async function mount(ctx) {
         ? p.pendingExits
             .map((x) =>
               x.kind === "STRATEGIC"
-                ? (p.strategy === "KRONOS" ? "KRONOS" : "JEV") +
-                  " · BÁN " +
-                  x.sellBps / 100 +
-                  "%"
+                ? "KRONOS" + " · BÁN " + x.sellBps / 100 + "%"
                 : x.kind === "TAKE_PROFIT"
                   ? "TP" + (x.takeProfitIndex + 1)
                   : x.kind === "TRAILING"
@@ -403,54 +325,7 @@ export async function mount(ctx) {
           new Date(p.monitoring.lastSuccessAt).toLocaleString("vi-VN")
         : "Chưa có quan sát mới sau khi nâng cấp";
       card.append(management);
-      const jev = p.lastAnalystAttempt ?? p.jevExit,
-        failure = jev?.action === "NO_DECISION" ? analystFailure(jev) : null,
-        strategic = node("div", undefined, "position-jev");
-      const actionsVi = {
-        HOLD: "GIỮ",
-        PARTIAL_SELL: "BÁN MỘT PHẦN",
-        FULL_SELL: "BÁN TOÀN BỘ",
-        NO_DECISION: "CHƯA CÓ QUYẾT ĐỊNH",
-      };
-      const reasonsVi = {
-        MOMENTUM_DETERIORATION: "Động lượng suy yếu",
-        ORDER_FLOW: "Dòng lệnh",
-        LIQUIDITY_TREND: "Xu hướng thanh khoản",
-        SMART_MONEY: "Dòng tiền thông minh",
-        HOLDER_BEHAVIOR: "Hành vi người nắm giữ",
-        DEV_ACTIVITY: "Hoạt động nhà phát triển",
-        PROFIT_MANAGEMENT: "Quản lý lợi nhuận",
-        HISTORY_CONTEXT: "Dữ liệu giao dịch tương tự",
-        INSUFFICIENT_DATA: "Chưa đủ dữ liệu",
-        UNCHANGED: "Tiếp tục giữ",
-        LOW_CONFIDENCE: "Độ tin cậy thấp",
-        PROVIDER_UNAVAILABLE: "Jev tạm thời không khả dụng",
-      };
-      strategic.append(
-        node(
-          "b",
-          "JEV · " +
-            (jev ? actionsVi[jev.action] || "CHỜ ĐÁNH GIÁ" : "CHỜ ĐÁNH GIÁ"),
-        ),
-      );
-      if (jev) {
-        strategic.append(
-          node(
-            "span",
-            failure
-              ? failure.title
-              : `${Math.round(jev.confidence * 100)}% tin cậy${jev.sellBps ? " · Bán " + jev.sellBps / 100 + "%" : ""}`,
-          ),
-          node(
-            "p",
-            failure?.detail ||
-              reasonsVi[jev.reason] ||
-              "Đánh giá theo dữ liệu hiện tại",
-          ),
-          time(jev.createdAt),
-        );
-        if (failure) strategic.title = jev.error || jev.decisionState || "";
-      }
+      const strategic = node("div", undefined, "position-strategy");
       if (p.strategy === "KRONOS") {
         const k = p.kronosDecision;
         strategic.replaceChildren(
@@ -508,7 +383,7 @@ export async function mount(ctx) {
           strategic.append(message);
         }
       }
-      if (p.finalExitAction && p.finalExitAction.authority !== "JEV")
+      if (p.finalExitAction && p.finalExitAction.authority !== "HISTORICAL")
         strategic.append(
           node(
             "p",
@@ -527,26 +402,6 @@ export async function mount(ctx) {
           "negative valuation-warning",
         ),
       );
-      const thesisText = {
-        RUNNER_CONTINUATION: "Bằng chứng hiện tại tiếp tục hỗ trợ giữ vị thế.",
-        DEMAND_DETERIORATION: "Nhu cầu đang suy yếu theo dữ liệu quan sát.",
-        DE_RISK_PRESERVE_RUNNER:
-          "Giảm một phần rủi ro, giữ phần còn lại tiếp tục chạy.",
-        EXIT_INVALIDATED:
-          "Bằng chứng hiện tại không còn hỗ trợ giữ toàn bộ vị thế.",
-        INSUFFICIENT_EVIDENCE: "Chưa đủ bằng chứng để xác lập luận điểm mới.",
-      };
-      if (jev?.thesis)
-        strategic.append(node("p", thesisText[jev.thesis] || jev.thesis));
-      if (jev?.error && !failure)
-        strategic.append(
-          node(
-            "small",
-            jev.status === "CANCELLED"
-              ? "Chưa cấp lệnh mới: đang chờ khoảng nghỉ hoặc thay đổi có ý nghĩa."
-              : "Quyết định chưa được cấp quyền thực thi; xem trạng thái kiểm tra.",
-          ),
-        );
       card.append(strategic);
       const original = BigInt(p.originalQuantity),
         remaining = BigInt(p.quantity),
@@ -799,18 +654,10 @@ export async function mount(ctx) {
         actions.append(b);
       }
       const chips = node("div", undefined, "position-strategy");
-      for (const t of status.settings.takeProfits)
-        chips.append(node("span", `THAM KHẢO TP +${t.gainBps / 100}%`));
-      chips.append(
-        node("span", "NO STOP LOSS"),
-        node(
-          "span",
-          `THAM KHẢO BÁM ĐUÔI +${status.settings.trailingActivationBps / 100}% / ${status.settings.trailingStopBps / 100}%`,
-        ),
-      );
+      chips.append(node("span", "NO STOP LOSS"));
       chips.title =
-        "Jev quyết định thoát lệnh. TP và bám đuôi chỉ là dữ kiện tham khảo; không tự buộc bán.";
-      chips.prepend(node("span", "JEV QUẢN LÝ THOÁT LỆNH"));
+        "KRONOS quyết định thoát lệnh; kiểm tra an toàn và lệnh thoát thủ công vẫn được giữ nguyên.";
+      chips.prepend(node("span", "KRONOS QUẢN LÝ THOÁT LỆNH"));
       card.append(actions, chips);
       const footer = node("div", undefined, "position-card-footer");
       const valuation = node("span", "Valuation: GMGN · ");
@@ -981,9 +828,6 @@ export async function mount(ctx) {
           token?.symbol,
           window.BOTTokenAvatar?.logo(token),
           token?.market,
-          status.settings.takeProfits,
-          status.settings.trailingActivationBps,
-          status.settings.trailingStopBps,
           queued.get(p.id),
         ]);
         let old = cache.get(p.id);
@@ -1081,9 +925,6 @@ export async function mount(ctx) {
     document
       .getElementById("positionEmpty")
       .classList.toggle("hidden", data.positions.length > 0);
-    document.getElementById("jevExitDiagnostics").textContent = JSON.stringify(
-      data.jevExit,
-    );
   };
   ctx.setRefresh(refresh);
   ctx.interval(() => window.BOTPositions?.tick(), 1000);

@@ -1,23 +1,22 @@
-import assert from "node:assert/strict";
-import { Store } from "../src/store.js";
-import { Engine } from "../src/engine.js";
-import { Jev } from "../src/jev.js";
-import { Solana } from "../src/solana.js";
 import { env } from "../src/config.js";
 import { CandidateRejected } from "../src/domain.js";
-import type { KronosDecisionStrategy } from "../src/kronos-strategy.js";
+import { Engine } from "../src/engine.js";
 import type { SolanaExecutionProvider } from "../src/execution-provider.js";
+import type { KronosDecisionStrategy } from "../src/kronos-strategy.js";
+import { Solana } from "../src/solana.js";
+import { Store } from "../src/store.js";
 import {
-  provider,
   candidate,
   info,
-  jev,
-  settings,
   MINT,
-  securityRaw,
+  position,
+  provider,
   quote,
+  securityRaw,
+  settings,
   WALLET,
 } from "./fixtures.js";
+import { fakeKronos, fixtureQuotes } from "./kronos-fixtures.js";
 export const now = Math.floor(Date.now() / 60000) * 60000;
 export function candles(minutes = 15) {
   const values = Array.from({ length: minutes }, () => ({
@@ -56,37 +55,47 @@ export function setup(
   } = {},
 ) {
   const store = new Store(":memory:"),
-    j = new Jev();
+    rpc = new Solana();
+  rpc.inspectMint = async () =>
+    ({
+      decision: "ALLOW",
+      decimals: 6,
+      tokenProgram: "SPL_TOKEN",
+      extensions: [],
+      extensionRisk: "NONE",
+    }) as never;
   const p = provider(async (args) => {
-    if (args[0] === "market" && args[1] === "kline")
-      return options.missingHistory
-        ? { list: [] }
-        : options.structureFail
-          ? { list: [] }
-          : candles();
+    if (args[1] === "kline")
+      return options.missingHistory ? { list: [] } : candles(60);
     if (args[0] === "token" && args[1] === "info" && args.includes(MINT)) {
-      const r = info();
+      const raw = info();
       return {
-        ...r,
-        creation_timestamp: (now - 15 * 60000) / 1000,
-        price: options.noFlow ? { price: "1", volume_24h: "100000" } : r.price,
+        ...raw,
+        creation_timestamp: (now - 3600000) / 1000,
+        price: options.noFlow
+          ? { price: "1", volume_24h: "100000" }
+          : raw.price,
       };
     }
     if (options.badSecurity && args[1] === "security")
       return { ...securityRaw, renounced_mint: false };
   });
+  const kronos = fakeKronos();
   let calls = 0;
-  j.decide = async (state) => {
+  const entry = kronos.evaluateEntry.bind(kronos);
+  kronos.evaluateEntry = (i) => {
     calls++;
-    const input = JSON.stringify(state);
-    assert.equal(input.includes("historicalExperience"), false);
-    assert.equal(input.includes("rejectHistory"), false);
-    return jev(state);
+    return entry(i);
   };
   store.set("strategyV2", settings);
-  const engine = new Engine(store, { gmgn: p.gmgn, jev: j });
-  store.discover(recentCandidate());
-  return { store, engine, p, j, calls: () => calls };
+  const engine = new Engine(store, {
+    gmgn: p.gmgn,
+    rpc,
+    kronos,
+    demoQuotes: fixtureQuotes(),
+  });
+  store.discover({ ...recentCandidate(), createdAt: now - 3600000 });
+  return { store, engine, p, calls: () => calls };
 }
 
 export function mockExecutionCase(
@@ -95,8 +104,6 @@ export function mockExecutionCase(
     | "COMPATIBILITY"
     | "OWNERSHIP"
     | "CAPITAL"
-    | "JEV"
-    | "STRUCTURE"
     | "EXIT"
     | "SIMULATE"
     | "PRE_SIGN"
@@ -105,6 +112,7 @@ export function mockExecutionCase(
     strategy?: "STANDARD" | "KRONOS";
     kronos?: KronosDecisionStrategy;
     historyMinutes?: number;
+    externalTokens?: bigint;
   } = {},
 ) {
   const saved = {
@@ -120,10 +128,9 @@ export function mockExecutionCase(
     throw Error("NETWORK_FORBIDDEN_IN_MOCK_EXECUTION_TEST");
   };
   const store = new Store(":memory:"),
-    rpc = new Solana(),
-    j = new Jev();
+    rpc = new Solana();
   let sol = fail === "CAPITAL" ? 0n : 1000000000n,
-    tokens = fail === "OWNERSHIP" ? 1n : 0n,
+    tokens = options.externalTokens ?? 0n,
     principal = 0n,
     signed = 0,
     simulated = 0,
@@ -131,13 +138,7 @@ export function mockExecutionCase(
   const probes: bigint[] = [],
     order: string[] = [];
   const g = provider(async (args) => {
-    if (args[1] === "kline")
-      return fail === "STRUCTURE"
-        ? {
-            ...candles(),
-            list: candles().list.map((c) => ({ ...c, close: c.open })),
-          }
-        : candles(options.historyMinutes);
+    if (args[1] === "kline") return candles(options.historyMinutes ?? 60);
     if (args[1] === "security") {
       securityCalls++;
       return {
@@ -145,10 +146,6 @@ export function mockExecutionCase(
         renounced_freeze_account: !(fail === "SECURITY" && securityCalls > 1),
       };
     }
-  });
-  j.decide = async () => ({
-    ...jev(),
-    action: fail === "JEV" ? "SKIP" : "BUY",
   });
   rpc.balance = async () => sol;
   rpc.tokenBalance = async () => tokens;
@@ -180,7 +177,7 @@ export function mockExecutionCase(
     tokens: 1000000n,
     beforeSol: sol + principal + 5000n,
     afterSol: sol,
-    beforeTokens: 0n,
+    beforeTokens: tokens - 1000000n,
     afterTokens: tokens,
   });
   const execution: SolanaExecutionProvider = {
@@ -211,7 +208,7 @@ export function mockExecutionCase(
       persist("mock-one-shot-signature");
       if (fail !== "UNKNOWN") {
         sol -= principal + 5000n;
-        tokens = 1000000n;
+        tokens += 1000000n;
       }
       return "mock-one-shot-signature";
     },
@@ -224,18 +221,27 @@ export function mockExecutionCase(
   const e = new Engine(store, {
     gmgn: g.gmgn,
     rpc,
-    jev: j,
     execution,
-    kronos: options.kronos,
+    kronos: options.kronos ?? fakeKronos(),
   });
+  if (fail === "OWNERSHIP")
+    store.savePosition({
+      ...position(),
+      id: "owned-fixture",
+      mode: "live",
+      strategy: "KRONOS",
+      quantity: "1",
+      originalQuantity: "1",
+    });
   store.discover({
     ...recentCandidate(),
-    createdAt: now - (options.historyMinutes ?? 15) * 60000,
+    createdAt: now - (options.historyMinutes ?? 60) * 60000,
   });
   return {
     e,
     g,
     store,
+    execution,
     probes,
     order,
     stats: () => ({ signed, simulated }),

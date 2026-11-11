@@ -169,11 +169,15 @@ export class ControlledSession {
         .find((p) => p.id === run.positionId);
       if (position?.state === "CLOSED") {
         if (
+          position.quantity !== "0" ||
+          !e.signature ||
           !this.store.db
-            .prepare("SELECT sample_id FROM trade_outcomes WHERE sample_id=?")
-            .get(run.positionId!)
+            .prepare(
+              "SELECT signature FROM execution_fills WHERE execution_id=? AND signature=?",
+            )
+            .get(e.id, e.signature)
         )
-          throw new Blocked("CONTROLLED_LEARNING_OUTCOME_MISSING");
+          throw new Blocked("CONTROLLED_SETTLEMENT_EVIDENCE_MISSING");
         run.status = "COMPLETE";
         run.finishedAt = Date.now();
       }

@@ -1,30 +1,31 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Engine } from "../src/engine.js";
-import { Store } from "../src/store.js";
+import { test } from "node:test";
+import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
+import { CapitalFlowEngine } from "../src/capital-flow.js";
 import { CandidateRejected } from "../src/domain.js";
-import { Gmgn } from "../src/gmgn.js";
+import { Engine } from "../src/engine.js";
+import { evaluateExitSafety } from "../src/exit-safety.js";
 import {
   GmgnCoordinator,
   GmgnRateLimited,
   gmgnRequestKey,
   retryDelay,
 } from "../src/gmgn-coordinator.js";
-import { SniperStructure } from "../src/sniper-structure.js";
-import { STRUCTURE_EVIDENCE_VERSION } from "../src/structure-evidence.js";
-import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
-import { CapitalFlowEngine } from "../src/capital-flow.js";
+import { Gmgn } from "../src/gmgn.js";
 import { RiskEngine } from "../src/risk.js";
-import { evaluateExitSafety } from "../src/exit-safety.js";
+import { SniperStructure } from "../src/sniper-structure.js";
+import { Store } from "../src/store.js";
+import { STRUCTURE_EVIDENCE_VERSION } from "../src/structure-evidence.js";
 import {
-  settings,
   candidate,
+  info,
   MINT,
   position,
   securityRaw,
-  info,
+  settings,
   snapshot,
 } from "./fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
 
 test("equivalent flag order shares a request key, meaningful windows remain distinct and invalid retry guidance is ignored", () => {
   const a = ["token", "info", "--chain", "sol", "--address", MINT];
@@ -48,9 +49,9 @@ test("manual and existing critical protective SELL reach execution during GMGN c
       g = new Gmgn(async () => {
         throw new GmgnRateLimited(10000);
       }),
-      engine = new Engine(db, { gmgn: g });
+      engine = new Engine(db, { gmgn: g, kronos: fakeKronos() });
     try {
-      const p = { ...position(), mode: "paper" as const };
+      const p = { ...position(), mode: "demo" as const };
       if (kind === "critical")
         p.pendingExits = [
           {
@@ -86,7 +87,7 @@ test("manual and existing critical protective SELL reach execution during GMGN c
       assert.equal(intents[0]!.side, "SELL");
       assert.equal(intents[0]!.amount, kind === "manual" ? "500" : "1000");
       assert.equal(db.get("haltReason"), undefined);
-      assert.equal(db.positions("paper")[0]!.quantity, p.quantity);
+      assert.equal(db.positions("demo")[0]!.quantity, p.quantity);
     } finally {
       db.close();
     }

@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Store } from "../src/store.js";
+import { test } from "node:test";
 import { dashboardPositionCount } from "../src/dashboard-view.js";
-import { positionViews } from "../src/position-view.js";
 import type { Position } from "../src/domain.js";
+import { positionViews } from "../src/position-view.js";
+import { Store } from "../src/store.js";
 import { position } from "./fixtures.js";
 
 const attention: NonNullable<Position["attention"]> = {
@@ -92,7 +92,7 @@ for (const c of cases)
   test("light badge matches visible Positions: " + c.name, () => {
     const store = new Store(":memory:");
     try {
-      const p: Position = { ...position(), ...c.patch, mode: "paper" };
+      const p: Position = { ...position(), ...c.patch, mode: "demo" };
       store.savePosition(p);
       store.savePosition({ ...position(), id: "other-mode", mode: "live" });
       if (c.state) {
@@ -102,6 +102,7 @@ for (const c of cases)
             id: "fixture-intent",
             side: "BUY",
             mode: p.mode,
+            demoAccountId: store.demoAccountId(),
             positionId: p.id,
             amount: "1",
           },
@@ -119,12 +120,12 @@ for (const c of cases)
             JSON.stringify(payload),
           );
       }
-      assert.deepEqual(dashboardPositionCount(store, "paper"), {
+      assert.deepEqual(dashboardPositionCount(store, "demo"), {
         count: c.count,
       });
       assert.equal(
-        dashboardPositionCount(store, "paper").count,
-        positionViews(store.positions("paper"), store.executions()).filter(
+        dashboardPositionCount(store, "demo").count,
+        positionViews(store.positions("demo"), store.executions()).filter(
           (p) => p.relevant,
         ).length,
       );

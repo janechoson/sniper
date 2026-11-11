@@ -1,40 +1,46 @@
+import { createHash, randomBytes } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import {
-  readFileSync,
-  openSync,
-  writeFileSync,
-  closeSync,
-  unlinkSync,
-  mkdirSync,
-} from "node:fs";
-import { resolve, dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import {
+  AccountBalanceHistory,
+  accountPositionValue,
+} from "./account-balance-history.js";
 import { env } from "./config.js";
+import {
+  DASHBOARD_ASSETS,
+  DASHBOARD_ROUTES,
+  dashboardLogs,
+  dashboardPositionCount,
+  dashboardPositions,
+} from "./dashboard-view.js";
+import { demoAccountView } from "./demo-account-view.js";
+import { discoveryContext } from "./discovery.js";
+import { Blocked } from "./domain.js";
+import { Engine } from "./engine.js";
+import { kronosMigrationPreflight } from "./kronos-migration-preflight.js";
+import { ModeManager, migrationSafetyCodes } from "./mode-manager.js";
+import { activateNormalLive } from "./normal-live.js";
+import { positionViews } from "./position-view.js";
 import { entrySource } from "./sniper-structure.js";
 import { Store } from "./store.js";
-import { ControlledSession } from "./controlled-session.js";
-import { Engine } from "./engine.js";
-import { activateNormalLive } from "./normal-live.js";
-import { discoveryContext } from "./discovery.js";
-import { positionViews } from "./position-view.js";
-import { Blocked } from "./domain.js";
-import { json, log, safeError, sleep } from "./util.js";
 import { TOKEN_IMAGE_CSP } from "./token-metadata.js";
-import {
-  DASHBOARD_ROUTES,
-  DASHBOARD_ASSETS,
-  dashboardPositions,
-  dashboardPositionCount,
-  dashboardLogs,
-  dashboardWatch,
-  dashboardDeferred,
-} from "./dashboard-view.js";
+import { json, log, safeError, sleep } from "./util.js";
 export function acquireLock(path: string) {
   const lock = resolve(path + ".lock");
   mkdirSync(dirname(lock), { recursive: true });
@@ -66,38 +72,126 @@ export async function startServer(
     providers?: ConstructorParameters<typeof Engine>[1];
   } = {},
 ) {
+  if (options.controlledRunId)
+    throw new Blocked("CONTROLLED_START_REQUIRES_MODE_MANAGER_CONFIRMATION");
+  // Inspect authoritative recovery state before writable Store migrations or engine construction.
+  if (existsSync(env.DATABASE_PATH)) {
+    const readOnly = new DatabaseSync(env.DATABASE_PATH, { readOnly: true });
+    try {
+      readOnly.exec("PRAGMA query_only=ON; BEGIN");
+      const check = kronosMigrationPreflight(readOnly);
+      readOnly.exec("COMMIT");
+      const legacy = check.blockers.filter((b) =>
+        migrationSafetyCodes.has(b.code),
+      );
+      if (legacy.length)
+        throw new Blocked(
+          legacy.map((b) => b.code + ":" + (b.id ?? b.reason)).join(";"),
+        );
+    } finally {
+      readOnly.close();
+    }
+  }
   const release = acquireLock(env.DATABASE_PATH);
   const store = new Store(env.DATABASE_PATH),
-    engine = new Engine(store, {
-      ...options.providers,
-      controlled: options.controlledRunId
-        ? new ControlledSession(store, options.controlledRunId)
-        : undefined,
-    }),
     csrf = randomBytes(32).toString("hex");
-  try {
-    if (options.normalLive) await activateNormalLive(engine);
-  } catch (error) {
-    store.close();
-    release();
-    throw error;
-  }
+  let engine!: Engine;
+  let unsubscribeAttempts = () => {};
+  const manager = new ModeManager(
+    store,
+    () => {
+      unsubscribeAttempts();
+      engine = new Engine(store, options.providers);
+      unsubscribeAttempts = subscribeAttempts();
+      return engine;
+    },
+    activateNormalLive,
+    async () => {
+      await accountHistory.stop();
+    },
+  );
   const streams = new Set<ServerResponse>();
-  const unsubscribeAttempts = engine.attempts.subscribe(() => {
-    if (!streams.size) return;
-    const frame =
-      "event: overview\ndata: " + json(engine.overviewStatus()) + "\n\n";
-    for (const stream of streams) stream.write(frame);
-  });
+  const executionMarker = () => {
+    const pending = Number(
+      store.db
+        .prepare(
+          "SELECT count(*) n FROM executions WHERE json_extract(payload,'$.intent.mode')='live' AND state NOT IN ('CONFIRMED','FAILED')",
+        )
+        .get()!.n,
+    );
+    if (pending) throw Error("ACCOUNT_EXECUTION_PENDING");
+    return Number(
+      store.db
+        .prepare(
+          "SELECT coalesce(max(rowid),0) n FROM executions WHERE json_extract(payload,'$.intent.mode')='live'",
+        )
+        .get()!.n,
+    );
+  };
+  const positionMarker = () =>
+    store
+      .managedPositions(env.TRADING_MODE)
+      .filter((p) => !["CLOSED", "FAILED"].includes(p.state))
+      .map((p) => [p.id, p.state, p.quantity].join(":"))
+      .sort()
+      .join("|");
+  const accountHistory = new AccountBalanceHistory(
+    join(dirname(resolve(env.DATABASE_PATH)), "account-balance-history.json"),
+    createHash("sha256")
+      .update("live:" + (env.WALLET_PUBLIC_KEY ?? ""))
+      .digest("hex"),
+    "live",
+    async () => {
+      if (env.TRADING_MODE !== "live")
+        throw Error("LIVE_ACCOUNT_HISTORY_INACTIVE");
+      const started = Date.now(),
+        execution = executionMarker(),
+        positions = positionMarker();
+      const wallet = await engine.balance();
+      const at = Date.now(),
+        value = accountPositionValue(
+          store.managedPositions(env.TRADING_MODE),
+          at,
+        );
+      if (
+        Date.now() - started > 5000 ||
+        execution !== executionMarker() ||
+        positions !== positionMarker() ||
+        value.positionLamports === null
+      )
+        throw Error("ACCOUNT_OBSERVATION_INCOMPLETE");
+      return {
+        at,
+        walletLamports: wallet.toString(),
+        positionLamports: value.positionLamports,
+        totalLamports: (wallet + BigInt(value.positionLamports)).toString(),
+        positionCount: value.positionCount,
+      };
+    },
+  );
+  const subscribeAttempts = () =>
+    engine.attempts.subscribe(() => {
+      if (!streams.size) return;
+      const frame =
+        "event: overview\ndata: " + json(engine.overviewStatus()) + "\n\n";
+      for (const stream of streams) stream.write(frame);
+    });
   let cached: unknown;
   let cachedAt = 0;
   let statusPending: Promise<unknown> | undefined;
+  const scopeStamp = () =>
+    env.TRADING_MODE +
+    ":" +
+    (env.TRADING_MODE === "demo" ? store.demoAccountId() : "live");
   const fullStatus = async () => {
+    const stamp = scopeStamp();
     if (cached && Date.now() - cachedAt < 1000) return cached;
     if (!statusPending)
       statusPending = engine
         .status()
         .then((value) => {
+          if (stamp !== scopeStamp() || manager.isTransitioning)
+            throw new Blocked("MODE_CHANGED_RELOAD_REQUIRED");
           cached = value;
           cachedAt = Date.now();
           return value;
@@ -111,11 +205,14 @@ export async function startServer(
   let shellAt = 0;
   let shellPending: ReturnType<Engine["dashboardStatus"]> | undefined;
   const shellStatus = async () => {
+    const stamp = scopeStamp();
     if (shellCache && Date.now() - shellAt < 1000) return shellCache;
     if (!shellPending)
       shellPending = engine
         .dashboardStatus()
         .then((value) => {
+          if (stamp !== scopeStamp() || manager.isTransitioning)
+            throw new Blocked("MODE_CHANGED_RELOAD_REQUIRED");
           shellCache = value;
           shellAt = Date.now();
           return value;
@@ -156,6 +253,20 @@ export async function startServer(
       )
         return reply(res, 403, { error: "HOST_DENIED" });
       const url = new URL(req.url ?? "/", `http://127.0.0.1:${env.PORT}`);
+      if (
+        req.method === "POST" &&
+        url.pathname.startsWith("/api/") &&
+        url.pathname !== "/api/mode" &&
+        manager.isTransitioning
+      )
+        throw new Blocked("MODE_TRANSITION_IN_PROGRESS");
+      if (
+        req.method === "GET" &&
+        url.pathname.startsWith("/api/") &&
+        url.pathname !== "/api/mode" &&
+        manager.isTransitioning
+      )
+        return reply(res, 409, { error: "MODE_TRANSITION_IN_PROGRESS" });
       if (req.method === "POST") {
         if (
           req.headers.origin !== `http://${req.headers.host}` ||
@@ -177,11 +288,28 @@ export async function startServer(
         return reply(res, 200, dashboardPositionCount(store, env.TRADING_MODE));
       if (req.method === "GET" && url.pathname === "/api/overview")
         return reply(res, 200, engine.overviewStatus());
+      if (req.method === "GET" && url.pathname === "/api/mode")
+        return reply(res, 200, manager.status());
+      if (req.method === "GET" && url.pathname === "/api/demo-account") {
+        if (env.TRADING_MODE !== "demo")
+          throw new Blocked("DEMO_ACCOUNT_INACTIVE");
+        return reply(res, 200, demoAccountView(engine));
+      }
+      if (req.method === "GET" && url.pathname === "/api/account-balance") {
+        z.literal("24h").parse(url.searchParams.get("range") ?? "24h");
+        return reply(
+          res,
+          200,
+          env.TRADING_MODE === "demo"
+            ? demoAccountView(engine)
+            : accountHistory.view(),
+        );
+      }
       if (req.method === "GET" && url.pathname === "/api/settings")
         return reply(res, 200, engine.settings);
       if (req.method === "GET" && url.pathname === "/api/statistics") {
         const strategy = z
-          .enum(["ALL", "STANDARD", "KRONOS"])
+          .enum(["ALL", "KRONOS"])
           .parse(url.searchParams.get("strategy") ?? "ALL");
         const data = engine.analytics(
           strategy === "ALL" ? undefined : strategy,
@@ -201,10 +329,6 @@ export async function startServer(
           .parse(url.searchParams.get("limit") ?? 200);
         return reply(res, 200, dashboardLogs(engine, limit));
       }
-      if (req.method === "GET" && url.pathname === "/api/watchlist")
-        return reply(res, 200, dashboardWatch(engine));
-      if (req.method === "GET" && url.pathname === "/api/deferred")
-        return reply(res, 200, dashboardDeferred(engine));
       if (req.method === "GET" && url.pathname === "/api/attempt") {
         const id = z.string().min(1).max(100).parse(url.searchParams.get("id"));
         const attempt = store.attempt(id);
@@ -232,7 +356,7 @@ export async function startServer(
         return req.method === "GET"
           ? reply(res, 200, {
               integrated: true,
-              entryStrategy: engine.settings.entryStrategy,
+              strategy: "KRONOS",
               model: engine.kronos.status(),
             })
           : reply(res, 410, { error: "KRONOS_IS_INTEGRATED_USE_SETTINGS" });
@@ -263,7 +387,6 @@ export async function startServer(
             holders: store.latest("holder_snapshots", c.mint),
             security: store.latest("security_results", c.mint),
             creator: store.latest("creator_snapshots", c.mint),
-            jev: store.latest("jev_decisions", c.mint),
             risk: store.latest("risk_decisions", c.mint),
             history: store.latest("historical_experience", c.mint),
             exitFeasibility: store.latest("exit_feasibility", c.mint),
@@ -302,7 +425,7 @@ export async function startServer(
       if (req.method === "GET" && url.pathname === "/api/history") {
         const query = z
           .object({
-            strategy: z.enum(["STANDARD", "KRONOS"]).optional(),
+            strategy: z.enum(["KRONOS"]).optional(),
             state: z
               .enum([
                 "OPEN",
@@ -324,6 +447,7 @@ export async function startServer(
             store.history(env.TRADING_MODE, query),
             store.executions(),
             (mint) => store.token(mint),
+            { preserveOrder: true },
           ),
         );
       }
@@ -351,16 +475,35 @@ export async function startServer(
             ),
           })),
         );
-      if (req.method === "GET" && url.pathname === "/api/learning")
-        return reply(res, 200, engine.memory.report(env.TRADING_MODE));
-      if (req.method === "GET" && url.pathname === "/api/learning/trade")
-        return reply(
-          res,
-          200,
-          engine.memory.detail(
-            z.string().min(1).max(100).parse(url.searchParams.get("id")),
-          ),
-        );
+      if (req.method === "POST" && url.pathname === "/api/mode") {
+        const v = z
+          .object({
+            mode: z.enum(["DEMO", "LIVE"]),
+            confirmation: z.string().optional(),
+          })
+          .strict()
+          .parse(await body(req));
+        const result = await manager.switch(v.mode, v.confirmation);
+        if (env.TRADING_MODE === "live") await accountHistory.start();
+        cached = undefined;
+        shellCache = undefined;
+        return reply(res, 200, result);
+      }
+      if (req.method === "POST" && url.pathname === "/api/mode/stop") {
+        if (env.TRADING_MODE === "live" && manager.blockers().length)
+          throw new Blocked(manager.blockers().join(";"));
+        return reply(res, 200, await manager.stopSafely());
+      }
+      if (req.method === "POST" && url.pathname === "/api/demo/reset") {
+        const v = z
+          .object({ confirmation: z.string() })
+          .strict()
+          .parse(await body(req));
+        const result = await manager.resetDemo(v.confirmation);
+        cached = undefined;
+        shellCache = undefined;
+        return reply(res, 200, result);
+      }
       if (req.method === "POST" && url.pathname === "/api/kill") {
         const v = z
           .object({ enabled: z.boolean() })
@@ -401,7 +544,9 @@ export async function startServer(
         return reply(res, 200, { ok: true });
       }
       if (req.method === "POST" && url.pathname === "/api/settings") {
-        engine.updateSettings(await body(req));
+        const input = z.record(z.string(), z.unknown()).parse(await body(req));
+        // Permission has its own operator command; stale parameter forms must not re-enable BUY.
+        engine.updateSettings(input);
         cached = undefined;
         shellCache = undefined;
         return reply(res, 200, { ok: true });
@@ -430,17 +575,9 @@ export async function startServer(
         shellCache = undefined;
         return reply(res, 200, { ok: true });
       }
-      if (req.method === "POST" && url.pathname === "/api/watch/dismiss") {
-        const v = z
-          .object({ mint: z.string().min(32).max(44) })
-          .strict()
-          .parse(await body(req));
-        engine.dismissStructureWatch(v.mint);
-        cached = undefined;
-        shellCache = undefined;
-        return reply(res, 200, { ok: true });
-      }
       if (req.method === "POST" && url.pathname === "/api/scan") {
+        if (!manager.status().active)
+          throw new Blocked("ENGINE_SESSION_NOT_RUNNING");
         if (!engine.scanning) void engine.tick();
         return reply(res, 202, { queued: true });
       }
@@ -485,13 +622,32 @@ export async function startServer(
     release();
     throw error;
   });
-  await engine.start();
+  try {
+    await manager.startDefault();
+  } catch (error) {
+    await manager.stop();
+    await new Promise<void>((done) => server.close(() => done()));
+    store.close();
+    release();
+    throw error;
+  }
+  engine ??= new Engine(store, options.providers); // Stopped LIVE dashboard while awaiting explicit confirmation.
+  await accountHistory
+    .load()
+    .catch(() => accountHistory.unavailable("ACCOUNT_HISTORY_UNAVAILABLE"));
+  if (env.TRADING_MODE === "live" && manager.status().active)
+    await accountHistory.start().catch(() => {
+      accountHistory.unavailable("ACCOUNT_HISTORY_UNAVAILABLE");
+      log("account_history_unavailable");
+    });
   const timer = setInterval(() => {
     if (!streams.size || updating) return;
     updating = true;
+    const stamp = scopeStamp();
     void engine
       .status()
       .then((status) => {
+        if (stamp !== scopeStamp() || manager.isTransitioning) return;
         cached = status;
         cachedAt = Date.now();
         for (const stream of streams)
@@ -531,7 +687,8 @@ export async function startServer(
     stopping = true;
     clearInterval(timer);
     clearInterval(flowTimer);
-    await engine.stop();
+    await accountHistory.stop();
+    await manager.stop();
     while (updating) await sleep(50);
     for (const stream of streams) stream.end();
     await new Promise<void>((resolve) =>
@@ -544,7 +701,14 @@ export async function startServer(
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  return { server, engine, stop };
+  return {
+    server,
+    get engine() {
+      return engine;
+    },
+    manager,
+    stop,
+  };
 }
 if (
   process.argv[1] &&

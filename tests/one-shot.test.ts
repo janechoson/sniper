@@ -1,69 +1,33 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { Store } from "../src/store.js";
 import {
-  now,
   candles,
+  mockExecutionCase,
+  now,
   recentCandidate,
   setup,
-  mockExecutionCase,
 } from "./one-shot-fixtures.js";
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { Store } from "../src/store.js";
 
-import { Jev } from "../src/jev.js";
-import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
 import { CandidateAttempts } from "../src/candidate-attempt.js";
-import { PositionCollector } from "../src/position-collector.js";
-import {
-  parseMarketHistory,
-  attemptFlow,
-  oneShotStructure,
-} from "../src/market-history.js";
-import { GmgnCoordinator } from "../src/gmgn-coordinator.js";
-import { JevExitScheduler } from "../src/jev-exit-scheduler.js";
-import { candidate, position, info, settings, MINT } from "./fixtures.js";
-import { normalizeMarket } from "../src/gmgn.js";
+import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
 import { env } from "../src/config.js";
 import {
   CandidateRejected,
   ProviderFailure,
   type Execution,
 } from "../src/domain.js";
+import { GmgnCoordinator } from "../src/gmgn-coordinator.js";
+import { normalizeMarket } from "../src/gmgn.js";
+import {
+  attemptFlow,
+  oneShotStructure,
+  parseMarketHistory,
+} from "../src/market-history.js";
+import { PositionCollector } from "../src/position-collector.js";
+import { candidate, info, MINT, position, settings } from "./fixtures.js";
 
 import { Keypair } from "@solana/web3.js";
-import { typedJevFixture } from "./learning-fixtures.js";
-
-test("one-shot JEV wire input preserves candle timestamps and disables trade-memory questions", async () => {
-  const previous = env.TYPESAFE_API_KEY;
-  env.TYPESAFE_API_KEY = "mock-no-network";
-  const j = new Jev(),
-    history = parseMarketHistory(candles(), recentCandidate(), now);
-  let sent: any;
-  j.http.request = async (_url, init) => {
-    sent = JSON.parse(String(init?.body));
-    return typedJevFixture("BUY", "UNAVAILABLE", "NONE");
-  };
-  try {
-    await j.decide(
-      {
-        attemptId: "fresh",
-        marketHistory: history,
-        freshness: { marketAt: now },
-      },
-      true,
-    );
-    assert.equal(
-      sent.state.marketHistory.candles[0].at,
-      history.candles[0]!.at,
-    );
-    assert.equal(sent.state.historicalExperience, undefined);
-    assert.match(
-      sent.questions.historical_assessment.instructions,
-      /Always return UNAVAILABLE/,
-    );
-  } finally {
-    env.TYPESAFE_API_KEY = previous;
-  }
-});
 
 test("history requests one hour and records full older-token coverage without padding", () => {
   const c = { ...recentCandidate(), createdAt: now - 2 * 3600000 };
@@ -229,7 +193,7 @@ test("back-to-back appearances of the same mint are preserved while first is act
     store.close();
   }
 });
-test("security FAIL stops before history/JEV, logs precise stage, and clears temporary state", async () => {
+test("security FAIL stops before history/KRONOS, logs precise stage, and clears temporary state", async () => {
   const x = setup({ badSecurity: true });
   try {
     await assert.rejects(x.engine.analyze(MINT));
@@ -322,7 +286,7 @@ test("successful one-shot pipeline reaches paper BUY and existing manual partial
     await x.engine.analyze(MINT);
     assert.equal(x.engine.attempts.current!.result, "BOUGHT");
     assert.equal(x.calls(), 1);
-    const p = x.store.positions("paper")[0]!;
+    const p = x.store.positions("demo")[0]!;
     assert.equal(p.state, "OPEN");
     assert.equal(x.engine.attempts.current!.stages.SIMULATE, "SKIPPED");
     assert.equal(
@@ -333,12 +297,12 @@ test("successful one-shot pipeline reaches paper BUY and existing manual partial
     await x.engine.monitor();
     await x.engine.settleExitWork();
     assert.equal(
-      x.store.positions("paper")[0]!.quantity,
+      x.store.positions("demo")[0]!.quantity,
       (BigInt(p.quantity) / 2n).toString(),
     );
     x.engine.emergency(p.id);
     await x.engine.settleExitWork();
-    assert.equal(x.store.positions("paper")[0]!.state, "CLOSED");
+    assert.equal(x.store.positions("demo")[0]!.state, "CLOSED");
   } finally {
     await x.engine.stop();
     x.store.close();
@@ -348,15 +312,15 @@ test("a fully closed reconciled position does not become permanent authority aga
   const x = setup();
   try {
     await x.engine.analyze(MINT);
-    const id = x.store.positions("paper")[0]!.id;
+    const id = x.store.positions("demo")[0]!.id;
     x.engine.emergency(id);
     await x.engine.monitor();
     await x.engine.settleExitWork();
-    assert.equal(x.store.positions("paper")[0]!.state, "CLOSED");
+    assert.equal(x.store.positions("demo")[0]!.state, "CLOSED");
     await x.engine.analyze(MINT);
     assert.equal(x.engine.attempts.current!.result, "BOUGHT");
     assert.equal(
-      x.store.positions("paper").filter((p) => p.state === "OPEN").length,
+      x.store.positions("demo").filter((p) => p.state === "OPEN").length,
       1,
     );
   } finally {
@@ -367,7 +331,7 @@ test("a fully closed reconciled position does not become permanent authority aga
 test("existing OPEN position rejects before any provider request", async () => {
   const x = setup();
   try {
-    const p = { ...position(), mode: "paper" as const };
+    const p = { ...position(), mode: "demo" as const };
     x.store.savePosition(p);
     await assert.rejects(x.engine.analyze(MINT));
     assert.equal(
@@ -490,43 +454,6 @@ test("GMGN provider concurrency isolates a slow request while retaining start ra
   await a;
   await coordinator.stop();
 });
-test("JEV queue snapshots are immutable and analyst latency does not stop collection", async () => {
-  const j = new Jev();
-  let release!: () => void;
-  const block = new Promise<void>((r) => (release = r));
-  let observed = 0;
-  j.decideExit = async (state) => {
-    await block;
-    observed = (state as { price: number }).price;
-    return { action: "HOLD", sellBps: 0, confidence: 1, reason: "HOLD" };
-  };
-  const q = new JevExitScheduler(
-      j,
-      () => settings,
-      () => {},
-    ),
-    state = { price: 1 };
-  q.schedule({
-    positionId: "p",
-    mint: MINT,
-    quantity: "100",
-    value: "100",
-    state,
-    priority: 1,
-    queuedAt: Date.now(),
-  });
-  state.price = 2;
-  const c = new PositionCollector(() => 2);
-  let ticks = 0;
-  await c.collect("p", async () => {
-    ticks++;
-  });
-  assert.equal(ticks, 1);
-  release();
-  await q.idle();
-  assert.equal(observed, 1);
-  await q.stop();
-});
 
 // No network or actual signer is used. Exercise the real Engine -> Executor path
 // through fixture RPC, quote, simulation, pre-sign and reconciliation boundaries.
@@ -554,10 +481,8 @@ test("mock Jupiter pipeline probes exact 20/50/100%, simulates, checks pre-sign 
 for (const [failure, stage] of [
   ["SECURITY", "FINAL_ANALYSIS"],
   ["COMPATIBILITY", "COMPATIBILITY"],
-  ["OWNERSHIP", "OWNERSHIP_CAPITAL"],
+  ["OWNERSHIP", "CHEAP_FILTER"],
   ["CAPITAL", "COMMON_RISK"],
-  ["JEV", "JEV"],
-  ["STRUCTURE", "STRUCTURE"],
   ["EXIT", "EXIT_FEASIBILITY"],
   ["SIMULATE", "SIMULATE"],
   ["PRE_SIGN", "PRE_SIGN"],
@@ -588,92 +513,20 @@ test("signed UNKNOWN remains reconcile-only and a new appearance cannot sign a d
     await f.close();
   }
 });
-test("Engine collector refreshes B while A provider and JEV remain pending; stale analyst cannot sell", async () => {
-  const x = setup(),
-    slowMint = Keypair.generate().publicKey.toBase58(),
-    fastMint = Keypair.generate().publicKey.toBase58();
-  let releaseSlow!: () => void, releaseJev!: () => void;
-  const slow = new Promise<void>((r) => (releaseSlow = r)),
-    analysis = new Promise<void>((r) => (releaseJev = r));
-  const security = x.engine.gmgn.security.bind(x.engine.gmgn);
-  x.engine.gmgn.security = async (c, s, o) => {
-    if (c.mint === slowMint) await slow;
-    return security(c, s, o);
-  };
-  x.j.decideExit = async (state) => {
-    assert.equal(JSON.stringify(state).includes("historicalExperience"), false);
-    await analysis;
-    return {
-      action: "FULL_SELL",
-      sellBps: 10000,
-      confidence: 1,
-      reason: "MOCK_DISTRIBUTION",
-    };
-  };
-  x.store.savePosition({
-    ...position(),
-    id: "slow",
-    mint: slowMint,
-    mode: "paper",
-  });
-  x.store.savePosition({
-    ...position(),
-    id: "fast",
-    mint: fastMint,
-    mode: "paper",
-  });
-  const monitor = x.engine.monitor();
-  const until = async (predicate: () => boolean) => {
-    for (let i = 0; !predicate(); i++) {
-      if (i > 200) throw Error("COLLECTOR_BLOCKED");
-      await new Promise((r) => setTimeout(r, 5));
-    }
-  };
-  try {
-    await until(
-      () =>
-        !!x.store.positions("paper").find((p) => p.id === "fast")!.lastQuoteAt,
-    );
-    assert.equal(
-      x.store.positions("paper").find((p) => p.id === "slow")!.lastQuoteAt,
-      undefined,
-    );
-    const fast = x.store.positions("paper").find((p) => p.id === "fast")!;
-    fast.lastQuoteAt = 0;
-    x.store.savePosition(fast);
-    const second = x.engine.monitor();
-    await until(
-      () =>
-        (x.store.positions("paper").find((p) => p.id === "fast")!
-          .marketRevision ?? 0) >= 2,
-    );
-    const changed = x.store.positions("paper").find((p) => p.id === "fast")!;
-    changed.quantity = "999";
-    x.store.savePosition(changed);
-    releaseJev();
-    await until(() => x.engine.exitScheduler.status().completed > 0);
-    assert.equal(x.store.executions().length, 0);
-    assert.equal(
-      x.store
-        .jevExits()
-        .some((d) => d.positionId === "fast" && d.status === "SUPERSEDED"),
-      true,
-    );
-    releaseSlow();
-    await Promise.all([monitor, second]);
-  } finally {
-    releaseSlow();
-    releaseJev();
-    await monitor;
-    await x.engine.stop();
-    x.store.close();
-  }
-});
 
 test("a slow candidate API does not block Position collection during a scanner cycle", async () => {
   const f = setup(),
     mint = Keypair.generate().publicKey.toBase58();
-  f.store.savePosition({ ...position(), id: "owned", mint, mode: "paper" });
+  f.store.savePosition({
+    ...position(),
+    strategy: "KRONOS",
+    id: "owned",
+    mint,
+    mode: "demo",
+  });
+  const trending = f.engine.gmgn.trending.bind(f.engine.gmgn);
+  f.engine.gmgn.trending = async () =>
+    (await trending()).map((c) => ({ ...c, createdAt: now - 3600000 }));
   const original = f.engine.gmgn.info.bind(f.engine.gmgn);
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>((r) => (release = r)),
@@ -692,11 +545,15 @@ test("a slow candidate API does not block Position collection during a scanner c
     await f.engine.monitor();
     assert.equal(f.engine.attempts.current!.stages.CHEAP_FILTER, "CHECKING");
     assert(
-      f.store.positions("paper").find((p) => p.id === "owned")!.lastQuoteAt,
+      f.store.positions("demo").find((p) => p.id === "owned")!.lastQuoteAt,
     );
     release();
     await cycle;
-    assert.equal(f.engine.attempts.current!.result, "BOUGHT");
+    assert.equal(
+      f.engine.attempts.current!.result,
+      "BOUGHT",
+      f.engine.attempts.current?.reasonCode,
+    );
   } finally {
     release();
     await cycle;

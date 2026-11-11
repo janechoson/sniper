@@ -1,16 +1,17 @@
-import { test } from "node:test";
+import { PublicKey } from "@solana/web3.js";
 import assert from "node:assert/strict";
-import { Store } from "../src/store.js";
-import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
-import { DiscoveryCoordinator } from "../src/discovery.js";
-import { candidate, settings, provider } from "./fixtures.js";
-import { CandidateAttempts } from "../src/candidate-attempt.js";
-import { env } from "../src/config.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve } from "node:path";
-import { PublicKey } from "@solana/web3.js";
+import { dirname, join, resolve } from "node:path";
+import { test } from "node:test";
+import { CandidateAttempts } from "../src/candidate-attempt.js";
+import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
+import { env } from "../src/config.js";
+import { DiscoveryCoordinator } from "../src/discovery.js";
 import { Engine } from "../src/engine.js";
+import { Store } from "../src/store.js";
+import { candidate, provider, settings } from "./fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
 
 const batchTime = Date.now();
 const appearance = (mint: string, at = batchTime) => {
@@ -289,6 +290,7 @@ test("RECONCILING remains processing through restart until a real terminal outco
         intent: {
           id: "unresolved-intent",
           mode: env.TRADING_MODE,
+          demoAccountId: store.demoAccountId(),
           positionId: "fixture-position",
         },
       }),
@@ -376,7 +378,7 @@ test("real Engine cycles process all 100 in FIFO order with fresh security after
       ? { renounced_mint: false, renounced_freeze_account: true }
       : undefined,
   );
-  const e = new Engine(store, { gmgn: p.gmgn });
+  const e = new Engine(store, { gmgn: p.gmgn, kronos: fakeKronos() });
   const rows = Array.from({ length: 100 }, (_, i) =>
     new PublicKey(new Uint8Array(32).fill(i + 1)).toBase58(),
   )
@@ -454,7 +456,7 @@ test("a missing processing attempt is reported as recovery, never silently compl
 test("late comparison work holds discovery only until it settles; no wait is added to BUY execution", async () => {
   const store = new Store(":memory:"),
     p = provider(),
-    e = new Engine(store, { gmgn: p.gmgn });
+    e = new Engine(store, { gmgn: p.gmgn, kronos: fakeKronos() });
   let fetched = 0,
     release!: () => void;
   p.gmgn.trending = async () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { createServer, request, type Server } from "node:http";
 import { Readable } from "node:stream";
+import { test } from "node:test";
 import { createLanUiProxy } from "../scripts/lan-ui-proxy.js";
 
 // Use raw HTTP so adversarial Host values are actually sent on the wire.

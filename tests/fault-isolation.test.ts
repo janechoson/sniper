@@ -1,18 +1,54 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
+import { env } from "../src/config.js";
+import { ControlledSession } from "../src/controlled-session.js";
 import {
-  CandidateRejected,
   Blocked,
+  CandidateRejected,
   ProviderFailure,
   type FailureInfo,
 } from "../src/domain.js";
-import { failureInfo, ProviderFailures } from "../src/failures.js";
-import { Store } from "../src/store.js";
-import { CandidateLifecycle } from "../src/candidate-lifecycle.js";
 import { Engine } from "../src/engine.js";
+import { failureInfo, ProviderFailures } from "../src/failures.js";
 import { positionViews } from "../src/position-view.js";
-import { ControlledSession } from "../src/controlled-session.js";
-import { position, candidate, provider, settings, MINT } from "./fixtures.js";
+import { Store } from "../src/store.js";
+import { candidate, MINT, position, provider, settings } from "./fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
+
+test("system and transaction errors preserve manual and environment entry controls", () => {
+  const db = new Store(":memory:");
+  const enabled = env.NEW_ENTRIES_ENABLED;
+  try {
+    env.NEW_ENTRIES_ENABLED = true;
+    for (const scope of ["SYSTEM", "TRANSACTION"] as const) {
+      for (const manual of [true, false]) {
+        db.set("newEntriesEnabled", manual);
+        db.reportFailure("fixture failure", scope);
+        assert.equal(db.entriesEnabled(), manual);
+        assert.equal(db.get("newEntriesEnabled"), manual);
+        assert.equal(db.get("haltReason"), undefined);
+        assert.equal(db.get("haltScope"), undefined);
+        assert.equal(db.get<{ scope: string }>("lastFailure")?.scope, scope);
+      }
+    }
+    env.NEW_ENTRIES_ENABLED = false;
+    db.set("newEntriesEnabled", true);
+    db.reportFailure("fixture environment disabled", "SYSTEM");
+    assert.equal(db.entriesEnabled(), false);
+    assert.equal(
+      db.get<Record<string, number>>("faultMetrics")?.globalEntryPauses,
+      undefined,
+    );
+    assert.equal(
+      db.get<Record<string, number>>("faultMetrics")?.systemFailures,
+      5,
+    );
+  } finally {
+    env.NEW_ENTRIES_ENABLED = enabled;
+    db.close();
+  }
+});
 
 function fault(mint = MINT, now = Date.now()): FailureInfo {
   return failureInfo(
@@ -24,9 +60,8 @@ function fault(mint = MINT, now = Date.now()): FailureInfo {
   );
 }
 function candidates(count: number) {
-  const base = candidate(); // One response has one snapshot timestamp.
   return Array.from({ length: count }, (_, i) => ({
-    ...structuredClone(base),
+    ...candidate(),
     mint: i === 0 ? MINT : `fixture-${i}`,
     symbol: i === 0 ? "IMAGINE" : `C${i}`,
     listing: { liquidity: 1000000 - i * 10000, volume: 10000 },
@@ -37,20 +72,17 @@ test("candidate failure releases the queue slot immediately and permits the next
   const db = new Store(":memory:"),
     g = provider();
   db.set("strategyV2", { ...settings, candidatesPerCycle: 20 });
-  const e = new Engine(db, { gmgn: g.gmgn }),
+  const e = new Engine(db, { gmgn: g.gmgn, kronos: fakeKronos() }),
     seen: string[] = [];
   g.gmgn.trending = async () => candidates(11);
   e.analyze = async (mint) => {
     seen.push(mint);
     const row = e.candidates.get(mint)!;
-    db.atomic(() => {
-      e.candidates.setState(mint, "ANALYZING");
-      e.attempts.begin(db.token(mint)!, {
-        appearanceId: row.appearanceId!,
-        batchId: row.batchId!,
-      });
+    e.attempts.begin(db.token(mint)!, {
+      appearanceId: row.appearanceId!,
+      batchId: row.batchId!,
     });
-    e.attempts.end("REJECTED"); // Deterministic stub; no executor.
+    e.attempts.end("REJECTED");
     if (mint === MINT) throw new CandidateRejected("TOKEN_SAFETY_FAILED");
   };
   try {
@@ -68,10 +100,10 @@ test("owned IMAGINE safety error persists attention, remains in badge, does not 
   const db = new Store(":memory:"),
     gmgn = provider().gmgn;
   db.set("strategyV2", settings);
-  const engine = new Engine(db, { gmgn });
+  const engine = new Engine(db, { gmgn, kronos: fakeKronos() });
   const p = {
     ...position(),
-    mode: "paper" as const,
+    mode: "demo" as const,
     symbol: "IMAGINE",
     entryAt: 1,
     initialLiquidity: 1000000,
@@ -87,7 +119,7 @@ test("owned IMAGINE safety error persists attention, remains in badge, does not 
   try {
     await engine.monitor();
     await engine.settleExitWork();
-    const saved = db.positions("paper")[0]!;
+    const saved = db.positions("demo")[0]!;
     assert.equal(saved.state, "OPEN");
     assert.equal(saved.quantity, p.quantity);
     assert.equal(saved.attention?.status, "NEEDS_ATTENTION");
@@ -113,13 +145,16 @@ test("owned IMAGINE safety error persists attention, remains in badge, does not 
     db.close();
   }
 });
-test("real signer mismatch still globally pauses even during position monitoring", async () => {
+test("signer mismatch records position attention without disabling entries", async () => {
   const db = new Store(":memory:");
   db.set("strategyV2", settings);
-  const engine = new Engine(db, { gmgn: provider().gmgn });
+  const engine = new Engine(db, {
+    gmgn: provider().gmgn,
+    kronos: fakeKronos(),
+  });
   db.savePosition({
     ...position(),
-    mode: "paper",
+    mode: "demo",
     entryAt: 1,
     initialLiquidity: 1000000,
   });
@@ -129,8 +164,13 @@ test("real signer mismatch still globally pauses even during position monitoring
   try {
     await engine.monitor();
     await engine.settleExitWork();
-    assert.equal(db.entriesEnabled(), false);
-    assert.equal(db.get("haltScope"), "SYSTEM");
+    assert.equal(db.entriesEnabled(), true);
+    assert.equal(db.get("haltScope"), undefined);
+    assert.equal(db.get<{ scope: string }>("lastFailure")?.scope, "SYSTEM");
+    assert.equal(
+      db.positions("demo")[0]?.attention?.issue.code,
+      "SOLANA_SIGNER_WALLET_MISMATCH",
+    );
   } finally {
     db.close();
   }

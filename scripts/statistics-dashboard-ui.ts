@@ -65,9 +65,9 @@ try {
     discovered: 2321,
     analyzed: 100,
     rugRejected: 0,
-    jevCalls: 974,
-    jevBuy: 530,
-    jevSkip: 444,
+    kronosCalls: 974,
+    kronosBuy: 530,
+    kronosWait: 444,
     riskAllow: 0,
     riskReject: 7762,
     bought: 38,
@@ -171,7 +171,7 @@ try {
     await page.locator("#statsAccounting").innerText(),
     /Gross excludes fees/,
   );
-  assert.match(await page.locator("#statsJev").innerText(), /54.4%/);
+  assert.match(await page.locator("#statsKronos").innerText(), /54.4%/);
   assert.match(await page.locator("#statsRisk").innerText(), /7,762/);
   assert.match(await page.locator("#statsRisk").innerText(), /0.0%/);
   assert.equal(await page.locator(".stats-comparison-empty").count(), 1);
@@ -221,9 +221,9 @@ try {
   data.winRate = null;
   data.riskAllow = 0;
   data.riskReject = 0;
-  data.jevCalls = 0;
-  data.jevBuy = 0;
-  data.jevSkip = 0;
+  data.kronosCalls = 0;
+  data.kronosBuy = 0;
+  data.kronosWait = 0;
   data.bought = 0;
   data.strategyAccounting.feesComplete = false;
   data.strategyAccounting.feesPaidLamports = null;
@@ -246,7 +246,10 @@ try {
     0,
   );
   assert.equal(await page.locator("#statsRisk [role=progressbar]").count(), 0);
-  assert.equal(await page.locator("#statsJev .stats-distribution").count(), 0);
+  assert.equal(
+    await page.locator("#statsKronos .stats-distribution").count(),
+    0,
+  );
   assert.doesNotMatch(
     await page.locator("#terminalStatistics").innerText(),
     /NaN|Infinity/,
@@ -298,19 +301,16 @@ try {
   holdAll = true;
   await page.locator("#statisticsStrategy").selectOption("ALL");
   await page.waitForSelector(".stats-skeleton");
-  await page.locator("#statisticsStrategy").selectOption("STANDARD");
+  await page.locator("#statisticsStrategy").selectOption("KRONOS");
   await page.waitForFunction(() =>
     document
       .querySelector("#statisticsFeedback")
-      ?.textContent?.includes("STANDARD"),
+      ?.textContent?.includes("KRONOS"),
   );
   releases.shift()?.();
   await page.waitForTimeout(50);
   assert.equal(await kpi("detected").innerText(), "—");
-  assert.match(
-    await page.locator("#statisticsFeedback").innerText(),
-    /STANDARD/,
-  );
+  assert.match(await page.locator("#statisticsFeedback").innerText(), /KRONOS/);
   // Retry uses only the Statistics dependency and retains the same document.
   fail = true;
   await page.locator("#statisticsStrategy").selectOption("ALL");

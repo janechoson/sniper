@@ -1,8 +1,13 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
+import { Blocked } from "../src/domain.js";
+import type {
+  ExecutionQuote,
+  SolanaExecutionProvider,
+} from "../src/execution-provider.js";
 import {
   executeSmoke,
   newSmokeRecord,
@@ -10,19 +15,14 @@ import {
   type SmokeRecord,
 } from "../src/smoke-live.js";
 import {
-  smokeAmount,
   acquiredOnly,
-  SMOKE_MAX_LAMPORTS,
   SMOKE_MAINNET_GENESIS,
+  SMOKE_MAX_LAMPORTS,
   SMOKE_USDC,
+  smokeAmount,
 } from "../src/smoke-policy.js";
-import type {
-  ExecutionQuote,
-  SolanaExecutionProvider,
-} from "../src/execution-provider.js";
 import { Solana } from "../src/solana.js";
-import { WALLET, quote } from "./fixtures.js";
-import { Blocked } from "../src/domain.js";
+import { quote, WALLET } from "./fixtures.js";
 function harness() {
   const rpc = new Solana(),
     events: string[] = [],

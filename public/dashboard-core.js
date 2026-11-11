@@ -6,7 +6,7 @@ const el = (tag, text, cls) => {
         ? String(text)
         : window.BOTText.vi(String(text));
   if (cls) e.className = cls;
-  if (cls?.includes("strategy-badge") && ["STANDARD", "KRONOS"].includes(text))
+  if (cls?.includes("strategy-badge") && ["KRONOS"].includes(text))
     e.dataset.strategy = text;
   return e;
 };

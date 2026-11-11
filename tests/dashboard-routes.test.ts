@@ -1,13 +1,12 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, dirname, basename } from "node:path";
-import { startServer } from "../src/server.js";
-import { Engine } from "../src/engine.js";
-import { TradingMemory } from "../src/trading-memory.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { test } from "node:test";
 import { env } from "../src/config.js";
-import { provider, position } from "./fixtures.js";
+import { Engine } from "../src/engine.js";
+import { startServer } from "../src/server.js";
+import { position, provider } from "./fixtures.js";
 
 test("dashboard routes isolate read models and never eagerly aggregate other pages", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "dashboard-route-api-"));
@@ -21,12 +20,11 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
     port: env.PORT,
   };
   const status = t.mock.method(Engine.prototype, "status"),
-    analytics = t.mock.method(Engine.prototype, "analytics"),
-    memory = t.mock.method(TradingMemory.prototype, "report");
+    analytics = t.mock.method(Engine.prototype, "analytics");
   let app: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     Object.assign(env, {
-      TRADING_MODE: "paper",
+      TRADING_MODE: "demo",
       LIVE_TRADING_ACK: false,
       NEW_ENTRIES_ENABLED: false,
       SCANNER_ENABLED: false,
@@ -47,7 +45,7 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           ...position(),
           id: state + n,
           mint: state + "-mint-" + n,
-          mode: "paper",
+          mode: "demo",
           symbol: state + n,
           state,
           quantity: state === "CLOSED" ? "0" : "1000",
@@ -60,7 +58,6 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           "/",
           "/positions",
           "/history",
-          "/memory",
           "/settings",
           "/logs",
           "/thongke",
@@ -102,7 +99,6 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           assert.equal(key in data, false);
         assert.equal(status.mock.callCount(), 0);
         assert.equal(analytics.mock.callCount(), 0);
-        assert.equal(memory.mock.callCount(), 0);
       },
     );
     await t.test(
@@ -117,9 +113,12 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         ).json();
         assert.equal(page.positions.length, 12);
         assert.ok(page.positions.every((p: any) => p.state === "OPEN"));
-        assert.ok(Array.isArray(page.settings.takeProfits));
+        assert.equal(
+          page.settings,
+          undefined,
+          "Retired profit-reference controls are not part of the positions API",
+        );
         assert.equal(analytics.mock.callCount(), 0);
-        assert.equal(memory.mock.callCount(), 0);
       },
     );
     await t.test(
@@ -132,7 +131,6 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         assert.equal(data[0].state, "CLOSED");
         assert.equal(data[0].entryAt >= data[1].entryAt, true);
         assert.equal(analytics.mock.callCount(), 0);
-        assert.equal(memory.mock.callCount(), 0);
       },
     );
     await t.test(
@@ -142,7 +140,7 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         store.savePosition({
           ...position(),
           id: "unsigned-entry",
-          mode: "paper",
+          mode: "demo",
           state: "PENDING_ENTRY",
           quantity: "0",
         });
@@ -169,7 +167,7 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
       },
     );
     await t.test(
-      "Memory and statistics aggregation start only on their dedicated read endpoints",
+      "retired Memory endpoint is absent and statistics aggregate only on request",
       async () => {
         await fetch(base + "/api/settings");
         app!.engine.store.record("events", undefined, {
@@ -183,12 +181,10 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           ),
         );
         assert.equal(analytics.mock.callCount(), 0);
-        assert.equal(memory.mock.callCount(), 0);
-        assert.equal((await fetch(base + "/api/learning")).status, 200);
-        assert.equal(memory.mock.callCount(), 1);
+        assert.equal((await fetch(base + "/api/learning")).status, 404);
         assert.equal(analytics.mock.callCount(), 0);
         assert.equal(
-          (await fetch(base + "/api/statistics?strategy=STANDARD")).status,
+          (await fetch(base + "/api/statistics?strategy=KRONOS")).status,
           200,
         );
         assert.equal(analytics.mock.callCount(), 1);
@@ -205,7 +201,6 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           "No full-status background job without legacy SSE clients",
         );
         assert.equal(analytics.mock.callCount(), 1);
-        assert.equal(memory.mock.callCount(), 1);
       },
     );
     await t.test("CSRF and Host protections remain in force", async () => {
@@ -221,7 +216,10 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
       assert.equal(r.status, 403);
       assert.equal(app!.engine.settings.positionSizePercent, 1);
     });
-    assert.equal(g.calls.length, 0);
+    assert.ok(
+      g.calls.every((a) => a[0] === "token" && a[1] === "info"),
+      "Only startup read-only SOL price lookup is permitted",
+    );
     assert.equal(app.engine.store.executions().length, 0);
   } finally {
     await app?.stop();

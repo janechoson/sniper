@@ -1,56 +1,44 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { test } from "node:test";
+import type { CapitalFlowSummary } from "../src/capital-flow.js";
+import { env, settingsSchema } from "../src/config.js";
+import {
+  Blocked,
+  CandidateRejected,
+  ProviderFailure,
+  type Position,
+} from "../src/domain.js";
+import { Engine } from "../src/engine.js";
+import type { SolanaExecutionProvider } from "../src/execution-provider.js";
 import {
   evaluateExitSafety,
-  validProtection,
+  exitPriority,
   protectiveRetry,
   routeMateriallyChanged,
   securityRecoveryConfirmed,
-  exitPriority,
 } from "../src/exit-safety.js";
-import { JevExitScheduler } from "../src/jev-exit-scheduler.js";
-import { Jev, parseJevExit } from "../src/jev.js";
-import { env, settingsSchema } from "../src/config.js";
-import { Engine } from "../src/engine.js";
-import { Store } from "../src/store.js";
-import { Solana } from "../src/solana.js";
-import {
-  CandidateRejected,
-  Blocked,
-  ProviderFailure,
-  type Position,
-  type JevExitDecision,
-} from "../src/domain.js";
-import {
-  position,
-  provider,
-  info,
-  securityRaw,
-  MINT,
-  WALLET,
-  quote,
-  settings,
-  seedEntryAccounting,
-} from "./fixtures.js";
 import { normalizeMarket, normalizeSecurity } from "../src/gmgn.js";
-import { PositionHistoryMonitor } from "../src/position-history-monitor.js";
 import {
   parseMarketHistory,
   type MarketHistory,
 } from "../src/market-history.js";
-import type { CapitalFlowSummary } from "../src/capital-flow.js";
-import type { SolanaExecutionProvider } from "../src/execution-provider.js";
+import { PositionHistoryMonitor } from "../src/position-history-monitor.js";
 import { positionViews } from "../src/position-view.js";
+import { Solana } from "../src/solana.js";
+import { Store } from "../src/store.js";
+import {
+  MINT,
+  WALLET,
+  info,
+  position,
+  provider,
+  quote,
+  securityRaw,
+  seedEntryAccounting,
+  settings,
+} from "./fixtures.js";
+import { fakeKronos } from "./kronos-fixtures.js";
 const S = settingsSchema.parse({ ...settings, smartMoneyExitMode: "OFF" });
-const hold = {
-  action: "HOLD" as const,
-  sellBps: 0,
-  confidence: 0.9,
-  reason: "UNCHANGED",
-};
 function raw(price = "10", liquidity = 100, negative = true, at = Date.now()) {
   const x = info(MINT);
   return {
@@ -241,205 +229,6 @@ test("liquidity detection independent of price, FX, decimals and accounting; str
     0,
   );
 });
-const choice = (v: string) => ({
-  type: "choice",
-  choice: v,
-  confidence: 0.9,
-  probabilities: { [v]: 1 },
-});
-const response = () => ({
-  model: "jev-1.14.0",
-  answers: {
-    action: choice("HOLD"),
-    sell_fraction: choice("NONE"),
-    primary_reason: choice("UNCHANGED"),
-    data_sufficiency: { type: "noul", noul: 0.9 },
-  },
-});
-test("affirmative valid HOLD stays DECIDED_HOLD; insufficient response preserves raw analyst rather than HOLD", () => {
-  const r = response();
-  assert.equal(parseJevExit(r).decisionState, "DECIDED_HOLD");
-  r.answers.data_sufficiency.noul = 0.1;
-  const d = parseJevExit(r);
-  assert.equal(d.action, "NO_DECISION");
-  assert.equal(d.decisionState, "NO_DECISION_INSUFFICIENT_DATA");
-  assert.equal(d.analystResponse.answers.action.choice, "HOLD");
-});
-for (const [name, error, state] of [
-  [
-    "timeout",
-    new ProviderFailure("JEV_EXIT_TIMEOUT", "JEV_EXIT"),
-    "NO_DECISION_TIMEOUT",
-  ],
-  ["network", new Error("network failed"), "NO_DECISION_PROVIDER_FAILURE"],
-  [
-    "429",
-    new ProviderFailure("JEV_EXIT_HTTP_429", "JEV_EXIT"),
-    "NO_DECISION_PROVIDER_FAILURE",
-  ],
-  [
-    "500",
-    new ProviderFailure("JEV_EXIT_HTTP_500", "JEV_EXIT"),
-    "NO_DECISION_PROVIDER_FAILURE",
-  ],
-  [
-    "invalid JSON",
-    new ProviderFailure("JEV_EXIT_INVALID_RESPONSE", "JEV_EXIT"),
-    "NO_DECISION_INVALID_RESPONSE",
-  ],
-] as const)
-  test(
-    "analyst " + name + " is NO_DECISION, never affirmative HOLD",
-    async () => {
-      const results: JevExitDecision[] = [],
-        j = new Jev();
-      j.decideExit = async () => {
-        throw error;
-      };
-      const scheduler = new JevExitScheduler(
-        j,
-        () => S,
-        (d) => results.push(d),
-      );
-      scheduler.schedule({
-        positionId: "A",
-        mint: MINT,
-        quantity: "1",
-        value: "100",
-        state: {},
-        queuedAt: Date.now(),
-        priority: 0,
-      });
-      await scheduler.idle();
-      assert.equal(results[0]?.action, "NO_DECISION");
-      assert.equal(results[0]?.decisionState, state);
-      await scheduler.stop();
-    },
-  );
-test("invalid schema/action and low confidence have explicit non-HOLD states", async () => {
-  const j = new Jev(),
-    results: JevExitDecision[] = [],
-    scheduler = new JevExitScheduler(
-      j,
-      () => S,
-      (d) => results.push(d),
-    );
-  for (const kind of ["schema", "unknown", "low"]) {
-    j.decideExit = async () => {
-      if (kind === "schema") {
-        const r = response();
-        delete (r.answers.action as any).confidence;
-        return parseJevExit(r);
-      }
-      return {
-        action: kind === "unknown" ? "SELL_NOW" : "FULL_SELL",
-        sellBps: 10000,
-        confidence: kind === "low" ? 0.1 : 0.9,
-        reason: "ORDER_FLOW",
-      } as any;
-    };
-    scheduler.schedule({
-      positionId: kind,
-      mint: MINT,
-      quantity: "1",
-      value: "100",
-      state: { kind },
-      queuedAt: Date.now(),
-      priority: 0,
-    });
-    await scheduler.idle();
-  }
-  assert.deepEqual(
-    results.map((d) => d.decisionState),
-    [
-      "NO_DECISION_SCHEMA_FAILURE",
-      "NO_DECISION_SCHEMA_FAILURE",
-      "NO_DECISION_LOW_CONFIDENCE",
-    ],
-  );
-  assert(results.every((d) => d.action === "NO_DECISION"));
-  await scheduler.stop();
-});
-test("A active with B/C material events yields one coalesced latest C rerun, bounded per-position", async () => {
-  const j = new Jev(),
-    s = { ...S, jevExitConcurrency: 1 },
-    seen: number[] = [],
-    results: JevExitDecision[] = [];
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  j.decideExit = async (state) => {
-    const n = (state as any).n;
-    seen.push(n);
-    if (n === 1) await gate;
-    return hold;
-  };
-  const scheduler = new JevExitScheduler(
-    j,
-    () => s,
-    (d) => results.push(d),
-  );
-  const job = (n: number) => ({
-    positionId: "A",
-    mint: MINT,
-    quantity: "1",
-    value: "100",
-    state: { n },
-    materialKey: String(n),
-    queuedAt: Date.now(),
-    priority: 0,
-  });
-  try {
-    scheduler.schedule(job(1));
-    assert(scheduler.schedule(job(2)));
-    assert(scheduler.schedule(job(3)));
-    assert.equal(scheduler.status().dirty, 1);
-    release();
-    await scheduler.idle();
-    assert.deepEqual(seen, [1, 3]);
-    assert.equal(results.length, 2);
-  } finally {
-    release();
-    await scheduler.stop();
-  }
-});
-test("dirty state that returns to active material state cannot leave an obsolete collapse rerun", async () => {
-  const j = new Jev(),
-    seen: number[] = [];
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  j.decideExit = async (state) => {
-    seen.push((state as any).n);
-    await gate;
-    return hold;
-  };
-  const scheduler = new JevExitScheduler(
-    j,
-    () => ({ ...S, jevExitConcurrency: 1 }),
-    () => {},
-  );
-  const job = (n: number) => ({
-    positionId: "A",
-    mint: MINT,
-    quantity: "1",
-    value: "100",
-    state: { n },
-    materialKey: String(n),
-    queuedAt: Date.now(),
-    priority: 0,
-  });
-  try {
-    scheduler.schedule(job(1));
-    scheduler.schedule(job(2));
-    scheduler.schedule(job(1));
-    assert.equal(scheduler.status().dirty, 0);
-    release();
-    await scheduler.idle();
-    assert.deepEqual(seen, [1]);
-  } finally {
-    release();
-    await scheduler.stop();
-  }
-});
 test("bounded M1 monitor caps 100 queued Positions, one active, global 15s cadence and cache60s", async () => {
   const g = provider().gmgn;
   let calls = 0,
@@ -516,230 +305,6 @@ test("security recovery needs explicit disproof of the critical fact; omitted ru
       }),
   );
 });
-
-function harness(count = 1) {
-  const db = new Store(":memory:");
-  db.set("strategyV2", S);
-  let liquidity = 100,
-    price = "0.1",
-    auth = false,
-    critical = false;
-  const g = provider(async (args) => {
-    if (args[1] === "security") {
-      if (auth)
-        throw new ProviderFailure("GMGN_AUTHORIZATION_FAILED", "GMGN", false);
-      return { ...securityRaw, renounced_freeze_account: !critical };
-    }
-    if (args[1] === "info")
-      return {
-        ...raw(price, liquidity),
-        address: args[args.indexOf("--address") + 1],
-      };
-  }).gmgn;
-  const e = new Engine(db, { gmgn: g });
-  e.jev.decideExit = async () => hold;
-  (e as any).solPrice = "100";
-  for (let i = 0; i < count; i++) {
-    const p = {
-      ...position(),
-      id: "safety-" + i,
-      mint: i ? WALLET : MINT,
-      mode: "paper" as const,
-      initialLiquidity: 100,
-      quantity: "1000000",
-      originalQuantity: "1000000",
-    };
-    db.savePosition(p);
-    seedEntryAccounting(db, p);
-  }
-  return {
-    db,
-    e,
-    g,
-    p: () => db.positions("paper")[0]!,
-    set: (v: {
-      liquidity?: number;
-      price?: string;
-      auth?: boolean;
-      critical?: boolean;
-    }) => {
-      liquidity = v.liquidity ?? liquidity;
-      price = v.price ?? price;
-      auth = v.auth ?? auth;
-      critical = v.critical ?? critical;
-    },
-    close: async () => {
-      await e.stop();
-      db.close();
-    },
-  };
-}
-test("known collapsed liquidity survives missing token price or unavailable SOL valuation", async () => {
-  for (const kind of ["price", "FX"]) {
-    const h = harness();
-    try {
-      h.set({ liquidity: 10, price: kind === "price" ? "" : "0.1" });
-      if (kind === "FX")
-        h.e.solUsd = async () => {
-          throw new Error("fixture FX unavailable");
-        };
-      await h.e.monitor();
-      assert(
-        h
-          .p()
-          .pendingExits?.some(
-            (o) => o.protection?.kind === "LIQUIDITY_COLLAPSE",
-          ),
-      );
-    } finally {
-      await h.close();
-    }
-  }
-});
-test("failed analyst alone preserves still-valid unsigned strategic SELL and records failure separately", async () => {
-  const h = harness();
-  try {
-    h.e.jev.decideExit = async () => ({
-      ...hold,
-      action: "FULL_SELL",
-      sellBps: 10000,
-      reason: "ORDER_FLOW",
-    });
-    await h.e.monitor();
-    await h.e.exitScheduler.idle();
-    const p = h.p(),
-      old = p.jevExit!;
-    assert(p.pendingExits?.some((o) => o.kind === "STRATEGIC"));
-    const failed = {
-      ...old,
-      id: "failed",
-      action: "NO_DECISION",
-      decisionState: "NO_DECISION_TIMEOUT",
-      status: "FAILED",
-      error: "TIMEOUT",
-    };
-    (h.e as any).applyExitDecision(failed, { queuedAt: Date.now() });
-    assert.equal(h.p().jevExit?.id, old.id);
-    assert(h.p().pendingExits?.some((o) => o.decisionId === old.id));
-    assert.equal(h.p().lastAnalystAttempt?.action, "NO_DECISION");
-  } finally {
-    await h.close();
-  }
-});
-test("old HOLD after fresh structural confluence is superseded while protective authority remains", async () => {
-  const h = harness();
-  try {
-    await h.e.monitor();
-    await h.e.exitScheduler.idle();
-    const old = h.p().jevExit!;
-    const p = h.p();
-    p.flow = flow();
-    h.db.savePosition(p);
-    const m = normalizeMarket(raw("8.6", 100, true));
-    h.db.record("position_market", MINT, m);
-    (h.e as any).updateExitSafety(p.id, {
-      market: m,
-      replaceHistory: true,
-      history: history(),
-    });
-    (h.e as any).applyExitDecision(
-      { ...old, id: "old-hold", action: "HOLD" },
-      { queuedAt: old.createdAt },
-    );
-    assert.equal(h.db.jevExit("old-hold")?.status, "SUPERSEDED");
-    assert(h.p().pendingExits?.some((o) => o.kind === "PROTECTIVE"));
-  } finally {
-    await h.close();
-  }
-});
-test("liquidity recovered before pre-sign revokes transient protection; unavailable revalidation keeps recent proof only", async () => {
-  const h = harness();
-  try {
-    h.set({ liquidity: 10, price: "" });
-    await h.e.monitor();
-    const p = h.p(),
-      o = p.pendingExits![0]!;
-    assert(o.protection);
-    h.g.info = async () => {
-      throw new ProviderFailure("GMGN_AUTHORIZATION_FAILED", "GMGN", false);
-    };
-    await (h.e as any).revalidateProtection(p.id, o.id);
-    assert(validProtection(h.p().pendingExits?.[0]?.protection, h.p()));
-    h.g.info = async () => raw("", 100);
-    await assert.rejects((h.e as any).revalidateProtection(p.id, o.id));
-    assert.equal(h.p().pendingExits?.length, 0);
-  } finally {
-    await h.close();
-  }
-});
-test("expired recoverable predicate cannot execute during unavailable revalidation", async () => {
-  const h = harness();
-  try {
-    h.set({ liquidity: 10, price: "" });
-    await h.e.monitor();
-    const p = h.p(),
-      o = p.pendingExits![0]!;
-    o.protection!.expiresAt = Date.now() - 1;
-    h.db.savePosition(p);
-    h.g.info = async () => {
-      throw new ProviderFailure("GMGN_AUTHORIZATION_FAILED", "GMGN", false);
-    };
-    await assert.rejects((h.e as any).revalidateProtection(p.id, o.id));
-    assert(h.p().pendingExits?.length);
-  } finally {
-    await h.close();
-  }
-});
-for (const failedManual of [false, true])
-  test(`new critical protection bypasses 30min PRE_SELL attention (failed manual=${failedManual}), retaining bounded NO_ROUTE retry`, async () => {
-    const h = harness();
-    try {
-      const p = h.p();
-      p.attention = {
-        status: "NEEDS_ATTENTION",
-        issue: {
-          code: "X",
-          reasonCode: "X",
-          scope: "POSITION",
-          stage: "PRE_SELL",
-          retryable: true,
-          detectedAt: Date.now(),
-        },
-        lastChecked: Date.now(),
-        nextCheckAt: Date.now() + 1800000,
-        failureCount: 3,
-        protectiveExit: "BACKOFF",
-      };
-      h.db.savePosition(p);
-      if (failedManual)
-        h.db.saveManual({
-          id: "backed-off-manual",
-          mode: "paper",
-          positionId: p.id,
-          state: "FAILED_RETRYABLE",
-          sellBps: 5000,
-          createdAt: Date.now() - 1000,
-        });
-      h.set({ critical: true });
-      await h.e.monitor();
-      let calls = 0;
-      h.e.executor.execute = async () => {
-        calls++;
-        throw new CandidateRejected("NO_SELL_ROUTE");
-      };
-      await h.e.processExits();
-      assert.equal(calls, 1);
-      const retry = h
-        .p()
-        .pendingExits?.find((o) => o.kind === "PROTECTIVE")?.retry;
-      assert.equal(retry?.classification, "NO_ROUTE");
-      assert(retry!.nextAt - Date.now() <= 60000);
-      await h.e.processExits();
-      assert.equal(calls, 1);
-    } finally {
-      await h.close();
-    }
-  });
 test("route deterioration is decision-critical; small output noise and route alone are not protective", () => {
   const a = {
     quantity: "100",
@@ -785,71 +350,6 @@ test("protective retry classifies failures with bounded dedicated intervals, nev
     if (kind === "SIGNED_UNKNOWN")
       assert.equal(retry.nextAt, Number.MAX_SAFE_INTEGER);
     else assert(retry.nextAt - 1000 <= 60000);
-  }
-});
-test("legacy smart-money protective is revoked once; typed manual priority and protective state survive real temp DB reopen", () => {
-  const path = join(
-    mkdtempSync(join(tmpdir(), "sell-safety-restart-")),
-    "fixture.sqlite",
-  );
-  let db = new Store(path);
-  try {
-    const p = { ...position(), mode: "paper" as const };
-    p.pendingExits = [
-      {
-        id: "smart",
-        kind: "PROTECTIVE",
-        reason: "Smart-money exit",
-        sellBps: 10000,
-        triggeredAt: Date.now(),
-      },
-      {
-        id: "liquidity",
-        kind: "PROTECTIVE",
-        reason: "GMGN liquidity removal/collapse",
-        sellBps: 10000,
-        triggeredAt: Date.now(),
-      },
-      {
-        id: "strategy",
-        kind: "STRATEGIC",
-        reason: "ORDER_FLOW",
-        sellBps: 5000,
-        triggeredAt: Date.now(),
-      },
-    ];
-    db.savePosition(p);
-    db.saveManual({
-      id: "manual",
-      mode: "paper",
-      positionId: p.id,
-      state: "REQUESTED",
-      sellBps: 5000,
-      createdAt: Date.now(),
-    });
-    db.migrateSellSafetyV2(S.maxSnapshotAgeMs);
-    assert.equal(
-      db.positions("paper")[0]?.pendingExits?.some((o) => o.id === "smart"),
-      false,
-    );
-    db.close();
-    db = new Store(path);
-    const e = new Engine(db, { gmgn: provider().gmgn });
-    const restored = db.positions("paper")[0]!;
-    assert(
-      restored.pendingExits?.some(
-        (o) => o.protection?.kind === "LIQUIDITY_COLLAPSE",
-      ),
-    );
-    assert(!restored.pendingExits?.some((o) => o.kind === "STRATEGIC"));
-    assert.equal(db.activeManual("paper").length, 1);
-    assert.equal(e.exitScheduler.status().dirty, 0);
-    assert(
-      exitPriority(5000, undefined) <
-        exitPriority(undefined, restored.pendingExits?.[0]),
-    );
-  } finally {
-    db.close();
   }
 });
 
@@ -943,10 +443,11 @@ function liveHarness() {
     currentBlockHeight: 999999,
     blockhashValid: false,
   });
-  const e = new Engine(db, { gmgn: g, rpc, execution });
+  const e = new Engine(db, { gmgn: g, rpc, execution, kronos: fakeKronos() });
   const p = {
     ...position(),
     id: "live-safety",
+    strategy: "KRONOS" as const,
     mode: "live" as const,
     quantity: "1000",
     originalQuantity: "1000",
@@ -1101,97 +602,6 @@ test("receipt unavailable and still valid blockhash remain locked with explicit 
     assert.equal(h.calls.execute, 1);
   } finally {
     await h.close();
-  }
-});
-test("three Positions: A analyst pending does not block B protection or C observations", async () => {
-  const h = harness(3);
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  try {
-    h.e.jev.decideExit = async (state) => {
-      if ((state as any).currentPosition.id === "safety-0") await gate;
-      return hold;
-    };
-    await h.e.monitor();
-    assert(h.e.exitScheduler.status().active >= 1);
-    const b = h.db.positions("paper").find((p) => p.id === "safety-1")!;
-    (h.e as any).updateExitSafety(b.id, {
-      security: {
-        at: Date.now(),
-        findings: [{ level: "CRITICAL", code: "CONTROL", reason: "fixture" }],
-      },
-    });
-    h.g.security = async () => ({
-      raw: {},
-      at: Date.now(),
-      findings: [{ level: "CRITICAL", code: "CONTROL", reason: "fixture" }],
-      mintRenounced: { state: "KNOWN", value: true },
-      freezeRenounced: { state: "KNOWN", value: false },
-      rugRatio: { state: "UNKNOWN", reason: "fixture" },
-    });
-    let executed: string | undefined;
-    h.e.executor.execute = async (intent) => {
-      executed = intent.positionId;
-      throw new CandidateRejected("NO_SELL_ROUTE");
-    };
-    await h.e.processExits();
-    assert.equal(executed, b.id);
-    assert(
-      h.db.positions("paper").find((p) => p.id === "safety-2")?.lastQuoteAt,
-    );
-    assert(h.e.exitScheduler.status().active >= 1);
-  } finally {
-    release();
-    await h.close();
-  }
-});
-test("real JEV HTTP/parser path distinguishes errors and affirmative HOLD with mocked fetch only", async () => {
-  const savedFetch = globalThis.fetch,
-    savedKey = env.TYPESAFE_API_KEY;
-  env.TYPESAFE_API_KEY = "fixture-only";
-  try {
-    for (const kind of ["429", "500", "json", "timeout", "network", "hold"]) {
-      globalThis.fetch = async () => {
-        if (kind === "timeout")
-          throw new DOMException("fixture", "TimeoutError");
-        if (kind === "network") throw new TypeError("fixture network");
-        if (kind === "json") return new Response("not-json");
-        return new Response(JSON.stringify(response()), {
-          status: kind === "429" ? 429 : kind === "500" ? 500 : 200,
-        });
-      };
-      const j = new Jev(),
-        results: JevExitDecision[] = [],
-        scheduler = new JevExitScheduler(
-          j,
-          () => S,
-          (d) => results.push(d),
-        );
-      scheduler.schedule({
-        positionId: kind,
-        mint: MINT,
-        quantity: "1",
-        value: "100",
-        state: {},
-        queuedAt: Date.now(),
-        priority: 0,
-      });
-      await scheduler.idle();
-      await scheduler.stop();
-      assert.equal(
-        results[0]?.action,
-        kind === "hold" ? "HOLD" : "NO_DECISION",
-      );
-      if (kind === "timeout")
-        assert.equal(results[0]?.decisionState, "NO_DECISION_TIMEOUT");
-      if (kind === "network")
-        assert.equal(results[0]?.decisionState, "NO_DECISION_PROVIDER_FAILURE");
-      if (kind === "json")
-        assert.equal(results[0]?.decisionState, "NO_DECISION_INVALID_RESPONSE");
-    }
-  } finally {
-    globalThis.fetch = savedFetch;
-    env.TYPESAFE_API_KEY = savedKey;
   }
 });
 for (const code of ["GMGN_PLAN_UPGRADE_REQUIRED", "MISSING_GMGN_API_KEY"])

@@ -1,24 +1,18 @@
-import type { Engine } from "./engine.js";
+import type { AttemptStage, StageStatus } from "./candidate-attempt.js";
 import { env } from "./config.js";
-import { address, normalizeMarket, record, numberEvidence } from "./gmgn.js";
+import { CONTROLLED_BUY_CAP } from "./controlled-session.js";
 import {
   CandidateRejected,
-  type Snapshot,
-  type TokenExecutionReport,
-  type Strategy,
   type BuyOwnershipClaim,
+  type Snapshot,
+  type Strategy,
 } from "./domain.js";
-import { requireCompatibleToken } from "./token-program.js";
-import { cheapGuard, size } from "./risk.js";
+import type { Engine } from "./engine.js";
+import { address, normalizeMarket, numberEvidence, record } from "./gmgn.js";
+import { attemptFlow, parseMarketHistory } from "./market-history.js";
 import { positionSizeMatches } from "./position-sizing.js";
-import {
-  parseMarketHistory,
-  attemptFlow,
-  oneShotStructure,
-} from "./market-history.js";
-import type { AttemptStage, StageStatus } from "./candidate-attempt.js";
-import { CONTROLLED_BUY_CAP } from "./controlled-session.js";
-import { analyzeManipulationStructure } from "./manipulation-structure.js";
+import { cheapGuard, size } from "./risk.js";
+import { requireCompatibleToken } from "./token-program.js";
 import { safeError } from "./util.js";
 
 /** Per-attempt locals only. Authority remains RiskEngine and the existing Executor. */
@@ -35,7 +29,7 @@ export async function oneShotEntry(
   try {
     let candidate = e.store.token(mint)!;
     const attemptId = e.attempts.current!.attemptId;
-    e.attempts.summary("strategy", "FIRST_BUY_WINS");
+    e.attempts.summary("strategy", "KRONOS");
     const run = <T>(stage: AttemptStage, work: () => Promise<T> | T) =>
       e.attempts.run(stage, async () => {
         assertAuthority();
@@ -116,25 +110,14 @@ export async function oneShotEntry(
         reject("SECURITY_EVIDENCE_UNKNOWN");
       return sec;
     });
-    let tokenExecution: TokenExecutionReport | undefined;
-    if (env.TRADING_MODE === "live")
-      tokenExecution = await run("COMPATIBILITY", async () => {
-        const report = await e.rpc.inspectMint(mint);
-        requireCompatibleToken(report);
-        if (report.decimals !== market.decimals)
-          reject("TOKEN_DECIMALS_MISMATCH");
-        return report;
-      });
-    else
-      e.attempts.update(
-        "COMPATIBILITY",
-        "SKIPPED",
-        "Paper fill; on-chain compatibility is not verified",
-      );
-    e.attempts.summary(
-      "compatibility",
-      tokenExecution ?? { status: "SKIPPED_PAPER" },
-    );
+    let tokenExecution = await run("COMPATIBILITY", async () => {
+      const report = await e.rpc.inspectMint(mint);
+      requireCompatibleToken(report);
+      if (report.decimals !== market.decimals)
+        reject("TOKEN_DECIMALS_MISMATCH");
+      return report;
+    });
+    e.attempts.summary("compatibility", tokenExecution);
     const history = await run("HISTORY", async () => {
       let raw: unknown;
       try {
@@ -232,15 +215,9 @@ export async function oneShotEntry(
     type Winner = {
       snapshot: Snapshot;
       claim: BuyOwnershipClaim;
-      structureOptions: () => Parameters<typeof oneShotStructure>[3];
-      logStructure: (s: ReturnType<typeof oneShotStructure>) => void;
     };
-    let resolveWinner!: (winner: Winner | undefined) => void;
-    const firstClaim = new Promise<Winner | undefined>((resolve) => {
-      resolveWinner = resolve;
-    });
-    let completed = 0;
-    const failures = new Map<Strategy, unknown>();
+    let selected: Winner | undefined;
+    let failure: unknown;
     const evaluate = async (strategy: Strategy) => {
       let modelDecisionRecorded = false;
       const summary = (key: string, value: unknown) =>
@@ -274,192 +251,59 @@ export async function oneShotEntry(
         strategy,
       });
       try {
-        const manipulationStructure =
-          strategy === "STANDARD"
-            ? analyzeManipulationStructure(history)
-            : undefined;
-        if (manipulationStructure) {
-          summary("manipulationStructure", manipulationStructure);
-          e.store.pipelineEvent("MANIPULATION_STRUCTURE_EVALUATED", mint, {
-            attemptId: attemptId,
-            status: manipulationStructure.status,
-            ...manipulationStructure.evidence,
-            suspiciousSegments: manipulationStructure.suspiciousSegments,
-            reasons: manipulationStructure.reasons,
-            limitations: manipulationStructure.limitations,
-            policy: manipulationStructure.policy,
+        const kronos = await run("KRONOS", async () => {
+          e.store.pipelineEvent("KRONOS_EVALUATION_STARTED", mint, {
+            strategy,
+            attemptId: common.attemptId,
           });
-        }
-        const smartSnapshot =
-          strategy === "STANDARD"
-            ? await e.gmgn.smartMoneyFeed(0, {
-                priority: 4,
-                consumer: "candidate-smart-money",
-              })
-            : undefined;
-        const structureOptions = () => ({
-          mint,
-          smartMoney: smartSnapshot,
-          settings: e.settings,
+          try {
+            const d = await e.kronos.evaluateEntry({
+              candles: history.candles
+                .slice(-60)
+                .map(({ at, open, high, low, close }) => ({
+                  at,
+                  open,
+                  high,
+                  low,
+                  close,
+                })),
+            });
+            summary("kronos", d);
+            modelDecisionRecorded = true;
+            e.attempts.strategy(attemptId, strategy, {
+              decision: d.action === "BUY" ? "BUY" : "WAIT",
+              decisionId: d.decisionId,
+              decisionAt: d.decisionAt,
+              reason: d.reason,
+              decisionReason: d.reason,
+            });
+            e.attempts.logFor(
+              attemptId,
+              "KRONOS",
+              d.action === "BUY" ? "PASS" : "SKIPPED",
+              "KRONOS: " + d.action,
+            );
+            e.store.record("kronos_decisions", mint, {
+              ...d,
+              mode: env.TRADING_MODE,
+              attemptId: common.attemptId,
+            });
+            e.store.pipelineEvent("KRONOS_" + d.action, mint, {
+              strategy,
+              decisionId: d.decisionId,
+              decisionAt: d.decisionAt,
+            });
+            if (d.action !== "BUY") reject("KRONOS_WAIT");
+            return d;
+          } catch (error) {
+            if (!(error instanceof CandidateRejected))
+              e.store.pipelineEvent("KRONOS_INFERENCE_FAILED", mint, {
+                strategy,
+                attemptId: common.attemptId,
+              });
+            throw error;
+          }
         });
-        const logStructure = (
-          structure: ReturnType<typeof oneShotStructure>,
-        ) => {
-          summary("structure", structure);
-          e.store.pipelineEvent("STRUCTURE_EVIDENCE_V3", mint, {
-            attemptId: attemptId,
-            priceStatus: structure.priceStructure.status,
-            marketFlowStatus: structure.marketFlow.status,
-            smartMoneyStatus: structure.smartMoney.status,
-            supportLevel: structure.conclusion.supportLevel,
-            evidenceFrom: structure.priceStructure.evidenceFrom,
-            evidenceTo: structure.priceStructure.evidenceTo,
-            smartMoneyCoverageSeconds:
-              structure.smartMoney.coverage.coverageSeconds,
-            smartMoneyMatchedEvents:
-              structure.smartMoney.coverage.tokenMatchedCount,
-            reasons: structure.conclusion.reasons,
-            limitations: structure.conclusion.limitations,
-            evidence: structure,
-          });
-        };
-        const structure =
-          strategy === "STANDARD"
-            ? await run("STRUCTURE", () => {
-                const result = oneShotStructure(
-                  history,
-                  flow,
-                  market,
-                  structureOptions(),
-                );
-                logStructure(result);
-                if (
-                  !result.priceStructure.sequenceFresh ||
-                  !result.priceStructure.floorHolding ||
-                  !result.priceStructure.momentum
-                )
-                  reject(result.reason);
-                // Evidence first; JEV receives conflicts and unknowns. Execution eligibility
-                // is enforced by Risk after the advisory decision, not by participant BUYs.
-                return result;
-              })
-            : undefined;
-        const jev =
-          strategy === "STANDARD"
-            ? await run("JEV", async () => {
-                if (!e.store.entriesEnabled()) reject("NEW_ENTRIES_DISABLED");
-                const input = {
-                  attemptId: attemptId,
-                  token: {
-                    mint,
-                    symbol: candidate.symbol,
-                    name: candidate.name,
-                  },
-                  tokenAge: history.tokenAge,
-                  marketHistory: history,
-                  market,
-                  capitalFlow: flow,
-                  structureEvidence: structure,
-                  manipulationStructure,
-                  security: { ...security, raw: undefined },
-                  tokenExecution,
-                  freshness: {
-                    marketAt: market.at,
-                    securityAt: security.at,
-                    historyAt: history.fetchedAt,
-                  },
-                };
-                e.store.record("jev_inputs", mint, {
-                  attemptId: input.attemptId,
-                  state: input,
-                });
-                const answer = await e.jev.decide(input, true);
-                e.store.record("jev_decisions", mint, {
-                  ...answer,
-                  mode: env.TRADING_MODE,
-                });
-                summary("jev", answer);
-                modelDecisionRecorded = true;
-                e.attempts.strategy(attemptId, strategy, {
-                  decision: answer.action === "BUY" ? "BUY" : "REJECT",
-                  decisionId: answer.inputHash,
-                  decisionAt: answer.at,
-                  reason: answer.action,
-                  decisionReason: answer.action,
-                });
-                e.attempts.logFor(
-                  attemptId,
-                  "JEV",
-                  answer.action === "BUY" ? "PASS" : "SKIPPED",
-                  "STANDARD: " + answer.action,
-                );
-                e.store.pipelineEvent("STANDARD_" + answer.action, mint, {
-                  attemptId,
-                  strategy,
-                  decisionId: answer.inputHash,
-                  decisionAt: answer.at,
-                });
-                if (answer.action !== "BUY" || answer.insufficientData)
-                  reject("JEV_DID_NOT_APPROVE");
-                return answer;
-              })
-            : undefined;
-        const kronos =
-          strategy === "KRONOS"
-            ? await run("KRONOS", async () => {
-                e.store.pipelineEvent("KRONOS_EVALUATION_STARTED", mint, {
-                  strategy,
-                  attemptId: common.attemptId,
-                });
-                try {
-                  const d = await e.kronos.evaluateEntry({
-                    candles: history.candles
-                      .slice(-60)
-                      .map(({ at, open, high, low, close }) => ({
-                        at,
-                        open,
-                        high,
-                        low,
-                        close,
-                      })),
-                  });
-                  summary("kronos", d);
-                  modelDecisionRecorded = true;
-                  e.attempts.strategy(attemptId, strategy, {
-                    decision: d.action === "BUY" ? "BUY" : "WAIT",
-                    decisionId: d.decisionId,
-                    decisionAt: d.decisionAt,
-                    reason: d.reason,
-                    decisionReason: d.reason,
-                  });
-                  e.attempts.logFor(
-                    attemptId,
-                    "KRONOS",
-                    d.action === "BUY" ? "PASS" : "SKIPPED",
-                    "KRONOS: " + d.action,
-                  );
-                  e.store.record("kronos_decisions", mint, {
-                    ...d,
-                    mode: env.TRADING_MODE,
-                    attemptId: common.attemptId,
-                  });
-                  e.store.pipelineEvent("KRONOS_" + d.action, mint, {
-                    strategy,
-                    decisionId: d.decisionId,
-                    decisionAt: d.decisionAt,
-                  });
-                  if (d.action !== "BUY") reject("KRONOS_WAIT");
-                  return d;
-                } catch (error) {
-                  if (!(error instanceof CandidateRejected))
-                    e.store.pipelineEvent("KRONOS_INFERENCE_FAILED", mint, {
-                      strategy,
-                      attemptId: common.attemptId,
-                    });
-                  throw error;
-                }
-              })
-            : undefined;
         const snapshot: Snapshot = {
           strategy,
           kronos,
@@ -468,22 +312,18 @@ export async function oneShotEntry(
           entryDiscoverySource: "TRENDING",
           marketHistory: history,
           capitalFlow: flow,
-          oneShotStructure: structure,
-          manipulationStructure,
           candidate,
           market,
           security,
           intelligence,
-          jev,
           tokenExecution,
         };
 
         const acquire = () => {
           if (!e.store.buyOwnership(mint, env.TRADING_MODE, attemptId))
             assertAuthority();
-          const decisionId =
-            snapshot.kronos?.decisionId ?? snapshot.jev!.inputHash;
-          const decisionAt = snapshot.kronos?.decisionAt ?? snapshot.jev!.at;
+          const decisionId = snapshot.kronos!.decisionId;
+          const decisionAt = snapshot.kronos!.decisionAt;
           const result = e.store.claimMintForBuy(
             {
               mode: env.TRADING_MODE,
@@ -541,12 +381,7 @@ export async function oneShotEntry(
             owner: strategy,
             claimId: result.claim.id,
           });
-          resolveWinner({
-            snapshot,
-            claim: result.claim,
-            structureOptions,
-            logStructure,
-          });
+          selected = { snapshot, claim: result.claim };
         };
         if (e.store.buyOwnership(mint, env.TRADING_MODE, attemptId)) {
           e.attempts.strategy(attemptId, strategy, {
@@ -596,7 +431,7 @@ export async function oneShotEntry(
         summary("risk", risk);
         acquire();
       } catch (error) {
-        failures.set(strategy, error);
+        failure = error;
         const reason =
           error instanceof CandidateRejected
             ? String(error.details.reason ?? error.code)
@@ -604,10 +439,7 @@ export async function oneShotEntry(
         e.attempts.strategy(attemptId, strategy, {
           ...(!modelDecisionRecorded
             ? {
-                decision:
-                  strategy === "KRONOS"
-                    ? ("ERROR" as const)
-                    : ("REJECT" as const),
+                decision: "ERROR" as const,
               }
             : {}),
           execution: "NOT_EXECUTED",
@@ -633,28 +465,23 @@ export async function oneShotEntry(
             });
           }
         } finally {
-          if (++completed === 2) resolveWinner(undefined);
+          // Evaluation evidence is persisted before BUY execution proceeds.
         }
       }
     };
-    // Both start independently; only the SQL claim resolves firstClaim. No join before execution.
-    for (const strategy of ["STANDARD", "KRONOS"] as const)
-      e.trackEntryEvaluation(evaluate(strategy));
-    const winner = await firstClaim;
+    await evaluate("KRONOS");
+    const winner = selected;
     if (!winner)
       throw (
-        failures.get("STANDARD") ??
-        failures.get("KRONOS") ??
+        failure ??
         new CandidateRejected("TEMPORARY_RISK_CHANGE", {
           reason: "NO_VALID_BUY",
         })
       );
     owned = winner.claim;
-    const { snapshot, structureOptions, logStructure } = winner;
+    const { snapshot } = winner;
     const strategy = owned.strategy;
-    let structure = snapshot.oneShotStructure;
-    const kronos = snapshot.kronos,
-      jev = snapshot.jev;
+    const kronos = snapshot.kronos;
     e.attempts.update("RISK", "PASS");
     await run("FINAL_ANALYSIS", async () => {
       const freshInfo = await e.gmgn.info(mint, 0, {
@@ -668,17 +495,13 @@ export async function oneShotEntry(
         Math.abs(fresh.price.value / market.price.value - 1) * 100 >
           e.settings.maxDecisionPriceMovePercent
       )
-        reject(
-          strategy === "KRONOS"
-            ? "MATERIAL_MARKET_CHANGE_AFTER_KRONOS"
-            : "MATERIAL_MARKET_CHANGE_AFTER_JEV",
-        );
+        reject("MATERIAL_MARKET_CHANGE_AFTER_KRONOS");
       security = await e.gmgn.security(
         { ...candidate, listing: {} },
         e.settings,
         { priority: 3, consumer: "pre-buy" },
       );
-      if (env.TRADING_MODE === "live") {
+      if (env.TRADING_MODE === "live" || env.TRADING_MODE === "demo") {
         tokenExecution = await e.rpc.inspectMint(mint);
         requireCompatibleToken(tokenExecution);
         if (tokenExecution.decimals !== fresh.decimals)
@@ -693,11 +516,6 @@ export async function oneShotEntry(
       );
       if (flow.regime === "INSUFFICIENT_DATA")
         reject("FINAL_FLOW_INSUFFICIENT_DATA");
-      if (strategy === "STANDARD") {
-        structure = oneShotStructure(history, flow, fresh, structureOptions());
-        logStructure(structure);
-        if (!structure.passed) reject("FINAL_STRUCTURE_CHANGED");
-      }
       intelligence = await e.gmgn.intelligence(
         { ...candidate, listing: {} },
         freshInfo,
@@ -712,7 +530,6 @@ export async function oneShotEntry(
         capitalFlow: flow,
         intelligence,
         tokenExecution,
-        oneShotStructure: structure,
       });
       e.attempts.summary("market", market);
       e.attempts.summary("capitalFlow", flow);
@@ -725,11 +542,6 @@ export async function oneShotEntry(
     });
     const intent = await run("OWNERSHIP_CAPITAL", async () => {
       assertAuthority();
-      if (
-        env.TRADING_MODE === "live" &&
-        (await e.rpc.tokenBalance(env.WALLET_PUBLIC_KEY!, mint)) > 0n
-      )
-        reject("TOKEN_ALREADY_OWNED");
       if (protectiveBusy() || e.executor.isBusy)
         reject("PROTECTIVE_WORK_PRIORITY");
       const ctx = await context(undefined, owned?.id);
@@ -764,8 +576,7 @@ export async function oneShotEntry(
       if (
         Date.now() - snapshot.market.at > e.settings.maxSnapshotAgeMs ||
         Date.now() - snapshot.security.at > e.settings.maxSnapshotAgeMs ||
-        Date.now() - (kronos?.decisionAt ?? jev!.at) >
-          e.settings.maxSnapshotAgeMs
+        Date.now() - kronos!.decisionAt > e.settings.maxSnapshotAgeMs
       )
         reject("PRE_SIGN_EVIDENCE_STALE");
     };

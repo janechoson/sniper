@@ -1,23 +1,24 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { PublicKey, Keypair } from "@solana/web3.js";
 import {
+  AccountState,
+  DefaultAccountStateLayout,
   ExtensionType,
   getTypeLen,
-  DefaultAccountStateLayout,
-  AccountState,
-  TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { mintFixture, metadataFixture } from "./token-program-fixtures.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { test } from "node:test";
+import { CandidateRejected } from "../src/domain.js";
+import { RiskEngine } from "../src/risk.js";
 import {
   inspectMint,
   requireCompatibleToken,
   tokenAccountAddress,
 } from "../src/token-program.js";
-import { CandidateRejected } from "../src/domain.js";
-import { snapshot, settings, MINT, WALLET } from "./fixtures.js";
-import { RiskEngine } from "../src/risk.js";
+import { MINT, settings, snapshot, WALLET } from "./fixtures.js";
+import { metadataFixture, mintFixture } from "./token-program-fixtures.js";
 test("program owner determines legacy SPL and Token-2022 independently of mint length", () => {
   assert.equal(
     inspectMint(MINT, mintFixture(TOKEN_PROGRAM_ID)).tokenProgram,
@@ -137,7 +138,7 @@ test("malformed or duplicate extensions and uninitialized mint never pass parsin
     /INVALID_MINT_LAYOUT/,
   );
 });
-test("Token-2022 uses its own ATA derivation and Jev BUY cannot override rejected extension", () => {
+test("Token-2022 uses its own ATA derivation and KRONOS BUY cannot override rejected extension", () => {
   const wallet = new PublicKey(WALLET),
     mint = new PublicKey(MINT);
   assert.notEqual(
@@ -154,7 +155,7 @@ test("Token-2022 uses its own ATA derivation and Jev BUY cannot override rejecte
       },
     ]),
   );
-  assert.equal(snap.jev!.action, "BUY");
+  assert.equal(snap.kronos!.action, "BUY");
   assert.equal(
     new RiskEngine().evaluate(snap, settings, {
       balance: 1000000000n,
@@ -166,7 +167,6 @@ test("Token-2022 uses its own ATA derivation and Jev BUY cannot override rejecte
     false,
   );
 });
-import { createRequire } from "node:module";
 test("SPL dependency uses patched pure-JS bigint conversion for wide buffers", () => {
   const require = createRequire(import.meta.url),
     spl = createRequire(require.resolve("@solana/spl-token")),

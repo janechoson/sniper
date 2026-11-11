@@ -28,24 +28,7 @@
             aria-live="polite"
           ></span>
         </a>
-        <a data-view="watchlist" data-route="" href="/watchlist">
-          ◉ Theo dõi
-          <span
-            id="watchBadge"
-            class="position-badge watch-badge hidden"
-            aria-live="polite"
-          ></span>
-        </a>
-        <a data-view="deferred" data-route="" href="/deferred">
-          ◷ Tạm hoãn
-          <span
-            id="deferredBadge"
-            class="position-badge deferred-badge hidden"
-            aria-live="polite"
-          ></span>
-        </a>
         <a data-view="history" data-route="" href="/history">◷ Lịch sử</a>
-        <a data-view="learning" data-route="" href="/memory">Trading Memory</a>
         <a data-view="settings" data-route="" href="/settings">Cấu hình</a>
         <a data-view="logs" data-route="" href="/logs">Log</a
         ><a data-view="statistics" data-route="" href="/thongke">Thống kê</a>
@@ -81,6 +64,32 @@
       <div id="notice" role="status" class="notice">
         Đang kết nối với bộ máy giao dịch…
       </div>
+      <section
+        id="modeAccount"
+        class="panel mode-account"
+        aria-label="Trading account"
+      >
+        <div class="terminal-panel-head">
+          <h2 id="accountModeTitle">KRONOS · Đang kết nối</h2>
+          <div class="mode-selector" role="group" aria-label="Trading mode">
+            <button id="selectDemo" type="button">DEMO</button
+            ><button id="selectLive" type="button">LIVE</button>
+          </div>
+          <div>
+            <button id="stopMode" type="button">Dừng session</button>
+            <button id="resetDemo" type="button" hidden>Reset Demo</button>
+          </div>
+        </div>
+        <p id="modeState" role="status"></p>
+        <div id="accountMetrics" class="stats"></div>
+        <svg
+          id="accountChart"
+          viewBox="0 0 800 120"
+          role="img"
+          aria-label="Lịch sử số dư tài khoản trong 24 giờ"
+        ></svg>
+        <small id="accountAssumptions" class="muted"></small>
+      </section>
       <div id="routeOutlet" aria-live="off"></div>
       <template id="page-overview"
         ><section id="overview" class="view">
@@ -104,16 +113,6 @@
             <section class="terminal-panel current-token">
               <h2>Token hiện tại</h2>
               <div id="terminalToken"></div>
-            </section>
-            <section
-              class="terminal-panel current-evaluation strategy-card"
-              data-strategy="STANDARD"
-              aria-labelledby="standardEvaluationTitle"
-            >
-              <h2 id="standardEvaluationTitle">
-                Đánh giá hiện tại – <span>STANDARD</span>
-              </h2>
-              <div id="terminalStages"></div>
             </section>
             <section
               class="terminal-panel kronos-evaluation strategy-card"
@@ -202,8 +201,7 @@
             ></div>
             <div id="positionRows" class="position-grid"></div>
             <details class="position-details">
-              <summary>Chẩn đoán hàng đợi Jev và thoát lệnh</summary>
-              <p id="jevExitDiagnostics" class="muted">Chưa có dữ liệu</p>
+              <summary>Chẩn đoán hàng đợi KRONOS và thoát lệnh</summary>
             </details>
             <div id="positionEmpty" class="empty">
               Hiện không giữ token nào.<small
@@ -220,7 +218,6 @@
               <h2>Lịch sử giao dịch</h2>
               <select id="historyStrategy" aria-label="History strategy">
                 <option value="ALL">ALL</option>
-                <option value="STANDARD">STANDARD</option>
                 <option value="KRONOS">KRONOS</option>
               </select>
               <span class="muted">ĐÃ BÁN HẾT · LÃI/LỖ ĐÃ CHỐT</span>
@@ -238,25 +235,6 @@
           </article>
         </section></template
       >
-      <template id="page-learning"
-        ><section id="learning" class="view">
-          <article class="panel">
-            <div class="panel-title">
-              <h2>Bộ nhớ giao dịch</h2>
-              <span>QUAN SÁT · PHÂN TÍCH · ĐỀ XUẤT</span>
-            </div>
-            <p class="muted">
-              So sánh lịch sử chỉ mang tính tham khảo. Mẫu nhỏ không thay đổi
-              kiểm tra an toàn, quy mô lệnh hay tham số chiến lược. MFE/MAE dựa
-              trên các lần quan sát được ghi nhận.
-            </p>
-            <div id="learningStats" class="stats"></div>
-            <div id="learningPatterns"></div>
-            <div id="learningSuggestions"></div>
-            <h3>Giao dịch hoàn tất</h3>
-            <div id="learningTrades"></div>
-          </article></section
-      ></template>
       <template id="page-settings"
         ><section id="settings" class="view">
           <div class="settings-operator-controls">
@@ -442,7 +420,6 @@
                 aria-label="Statistics strategy"
               >
                 <option value="ALL">ALL</option>
-                <option value="STANDARD">STANDARD</option>
                 <option value="KRONOS">KRONOS</option>
               </select></label
             >
@@ -466,63 +443,10 @@
             ></span>
           </div></section
       ></template>
-      <template id="page-watchlist"
-        ><section id="watchlist" class="view">
-          <article class="panel">
-            <div class="panel-title">
-              <h2>THEO DÕI ĐIỂM VÀO <span id="structureWatchCount">0</span></h2>
-              <span class="muted"
-                >ĐÃ QUA THẨM ĐỊNH · CHỜ XÁC NHẬN ĐIỂM VÀO</span
-              >
-            </div>
-            <p class="muted">
-              Tối đa 10 phút · có thể xác nhận cấu trúc sớm · chưa phải lệnh
-              mua.
-            </p>
-            <div id="structureWatchRows" class="structure-watch-list"></div>
-            <div id="watchRows" class="watch-grid"></div>
-            <div id="watchEmpty" class="empty">Chưa có token đang theo dõi</div>
-          </article>
-        </section></template
-      >
-      <template id="page-deferred"
-        ><section id="deferred" class="view">
-          <article id="deferredPanel" class="panel">
-            <div class="panel-title">
-              <h2>Tạm hoãn / Chờ đánh giá</h2>
-              <span id="queueSummary" class="muted"></span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Token / địa chỉ mint</th>
-                    <th>Lý do</th>
-                    <th>Giai đoạn</th>
-                    <th>Số lần lỗi</th>
-                    <th>Kiểm tra gần nhất</th>
-                    <th>Kiểm tra lại lúc</th>
-                    <th>Thời gian còn lại</th>
-                    <th>Trạng thái</th>
-                  </tr>
-                </thead>
-                <tbody id="deferredRows"></tbody>
-              </table>
-            </div>
-            <div id="deferredEmpty" class="muted">
-              Không có ứng viên tạm hoãn.
-            </div>
-            <small
-              >Chỉ là ứng viên chờ đánh giá. Mỗi lần kiểm tra phải đánh giá lại;
-              đây không phải lệnh mua đang chờ.</small
-            >
-            <small id="faultMetrics"></small>
-          </article></section
-      ></template>
       <footer>
         <span id="scanner">Bộ quét đang chờ trạng thái</span
         ><span
-          >GMGN phát hiện → GMGN bảo mật → Jev → Rủi ro → Jupiter MUA /
+          >GMGN phát hiện → GMGN bảo mật → KRONOS → Rủi ro → Jupiter MUA /
           BÁN</span
         >
       </footer>

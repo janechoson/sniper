@@ -1,10 +1,7 @@
+import { discoveryContext } from "./discovery.js";
 import type { Engine } from "./engine.js";
 import { env } from "./config.js";
 import { positionViews } from "./position-view.js";
-import { hasEntryWatchEligibility } from "./sniper-structure.js";
-import { currentStructureEvidence } from "./structure-evidence.js";
-import { canBypassRecovery } from "./recovery-guard.js";
-import { discoveryContext } from "./discovery.js";
 import type { Store } from "./store.js";
 import type { Mode } from "./domain.js";
 
@@ -15,6 +12,7 @@ export function dashboardPositionCount(store: Pick<Store, "db">, mode: Mode) {
       `
     SELECT count(*) AS count FROM positions p
     WHERE p.mode = ? AND p.state NOT IN ('CLOSED','FAILED')
+      AND (?<>'demo' OR json_extract(p.payload,'$.demoAccountId')=?)
       AND json_extract(p.payload,'$.dismissal') IS NULL
       AND (
         CAST(json_extract(p.payload,'$.quantity') AS INTEGER) > 0
@@ -28,7 +26,13 @@ export function dashboardPositionCount(store: Pick<Store, "db">, mode: Mode) {
       )
   `,
     )
-    .get(mode)!;
+    .get(
+      mode,
+      mode,
+      store.db
+        .prepare("SELECT id FROM demo_accounts WHERE archived_at IS NULL")
+        .get()?.id ?? "",
+    )!;
   return { count: Number(row.count) };
 }
 
@@ -36,26 +40,22 @@ export const DASHBOARD_ROUTES = [
   "/",
   "/positions",
   "/history",
-  "/memory",
   "/settings",
   "/logs",
   "/thongke",
-  "/watchlist",
-  "/deferred",
 ] as const;
 export const DASHBOARD_ASSETS = [
   "/dashboard-router.js",
+  "/dashboard-mode.js",
   "/dashboard-core.js",
   "/dashboard-text.js",
   "/dashboard-overview.js",
   "/dashboard-positions.js",
   "/dashboard-position-tools.js",
   "/dashboard-history.js",
-  "/dashboard-memory.js",
   "/dashboard-settings.js",
   "/dashboard-logs.js",
   "/dashboard-statistics.js",
-  "/dashboard-watch.js",
 ];
 
 /** Page-specific, read-only projections; never calls the full status/Memory/statistics facade. */
@@ -80,12 +80,6 @@ export function dashboardPositions(engine: Engine) {
     }));
   return {
     positions,
-    settings: {
-      takeProfits: settings.takeProfits,
-      trailingActivationBps: settings.trailingActivationBps,
-      trailingStopBps: settings.trailingStopBps,
-    },
-    jevExit: engine.exitScheduler.status(),
   };
 }
 export function dashboardLogs(engine: Engine, limit: number) {
@@ -93,9 +87,15 @@ export function dashboardLogs(engine: Engine, limit: number) {
   const rows = (kind: string) =>
     store.db
       .prepare(
-        "SELECT id,mint,at,payload FROM records WHERE kind=? AND (json_extract(payload,'$.mode')=? OR json_extract(payload,'$.mode') IS NULL) ORDER BY id DESC LIMIT ?",
+        "SELECT id,mint,at,payload FROM records WHERE kind=? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?) ORDER BY id DESC LIMIT ?",
       )
-      .all(kind, env.TRADING_MODE, limit);
+      .all(
+        kind,
+        env.TRADING_MODE,
+        env.TRADING_MODE,
+        store.demoAccountId(),
+        limit,
+      );
   const events = rows("events")
     .map((r) => ({
       id: r.id,
@@ -126,68 +126,5 @@ export function dashboardLogs(engine: Engine, limit: number) {
     events,
     flow: { events: transitions },
     overview: { attempt: engine.attempts.current ?? null },
-  };
-}
-export function dashboardWatch(engine: Engine) {
-  const rows = engine.structure
-    .list()
-    .filter(hasEntryWatchEligibility)
-    .map((r) => ({
-      ...r,
-      symbol: engine.store.token(r.mint)?.symbol,
-      evidenceCurrent: currentStructureEvidence(r),
-      eligibleForEntryWatch: !engine.store.bought(r.mint, env.TRADING_MODE),
-      observations: undefined,
-      dataFreshMs: 10000,
-      recoveryGateMode: canBypassRecovery(r, engine.settings)
-        ? "TEMP_RECOVERY_BYPASS"
-        : r.status === "PASSED"
-          ? "REAL_RECOVERY"
-          : "LOCKED",
-      progress: {
-        selling: !currentStructureEvidence(r)
-          ? "PENDING"
-          : r.sellingSeen
-            ? "COMPLETE"
-            : r.sellingCount > 0
-              ? "FORMING"
-              : "PENDING",
-        absorption: !currentStructureEvidence(r)
-          ? "PENDING"
-          : r.absorptionDetected
-            ? "COMPLETE"
-            : r.absorptionCount > 0
-              ? "FORMING"
-              : "PENDING",
-        support: !currentStructureEvidence(r)
-          ? "PENDING"
-          : r.supportConfirmed
-            ? "COMPLETE"
-            : (r.supportCount ?? 0) > 0
-              ? "FORMING"
-              : "PENDING",
-        recovery: !currentStructureEvidence(r)
-          ? "PENDING"
-          : r.status === "PASSED"
-            ? "COMPLETE"
-            : r.recoveryCount > 0
-              ? "FORMING"
-              : "PENDING",
-      },
-    }));
-  return { structureWatch: rows };
-}
-export function dashboardDeferred(engine: Engine) {
-  const rows = engine.candidates.list();
-  return {
-    candidatePipeline: {
-      queue: rows.filter((r) =>
-        ["QUEUED", "ANALYZING", "QUALIFIED", "APPROVED"].includes(r.state),
-      ),
-      watch: rows.filter((r) => r.state === "WATCH"),
-      deferred: rows.filter((r) => r.state === "DEFERRED"),
-      capacity: engine.settings.candidateQueueSize,
-    },
-    faultMetrics: engine.store.get("faultMetrics") ?? {},
   };
 }

@@ -75,10 +75,10 @@ try {
         )
         .all(Number(started.id))
     : [];
-  const jevCounts = started
+  const kronosCounts = started
     ? db.db
         .prepare(
-          "SELECT json_extract(payload,'$.action') action,count(*) count FROM records WHERE kind='jev_decisions' AND id>? GROUP BY action",
+          "SELECT json_extract(payload,'$.action') action,count(*) count FROM records WHERE kind='kronos_decisions' AND id>? GROUP BY action",
         )
         .all(Number(started.id))
     : [];
@@ -114,7 +114,7 @@ try {
     positions: checked,
     normalLiveBuys: buys,
     decisionCounts,
-    jevCounts,
+    kronosCounts,
     confirmedIndependentBuyWhileImagineOpen:
       checked.some((p) => p.symbol === "IMAGINE" && p.state === "OPEN") &&
       buys.some(

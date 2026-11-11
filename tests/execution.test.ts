@@ -1,30 +1,35 @@
-import { test } from "node:test";
-import { randomUUID } from "node:crypto";
+import { Keypair } from "@solana/web3.js";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { test } from "node:test";
 import { env } from "../src/config.js";
-import { Store } from "../src/store.js";
-import { Executor } from "../src/executor.js";
-import { Solana } from "../src/solana.js";
-import { RiskEngine } from "../src/risk.js";
-import { Blocked, CandidateRejected } from "../src/domain.js";
 import {
+  CONTROLLED_BUY_CAP,
+  ControlledSession,
+} from "../src/controlled-session.js";
+import { Blocked, CandidateRejected } from "../src/domain.js";
+import { UNSIGNED_EXECUTION_TIMEOUT_MS } from "../src/execution-deadline.js";
+import {
+  base58,
+  localWallet,
   validateQuote,
   type ExecutionQuote,
   type SolanaExecutionProvider,
-  localWallet,
-  base58,
 } from "../src/execution-provider.js";
+import { Executor } from "../src/executor.js";
+import { SOL } from "../src/gmgn.js";
+import { RiskEngine } from "../src/risk.js";
+import { Solana } from "../src/solana.js";
+import { Store } from "../src/store.js";
 import {
-  settings,
-  snapshot,
-  provider,
   MINT,
   WALLET,
+  provider,
   quote,
+  settings,
+  snapshot,
 } from "./fixtures.js";
-import { SOL } from "../src/gmgn.js";
-import { Keypair } from "@solana/web3.js";
-import { UNSIGNED_EXECUTION_TIMEOUT_MS } from "../src/execution-deadline.js";
+import { bindFixtureClaim } from "./kronos-fixtures.js";
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -110,19 +115,45 @@ function harness() {
   };
   const executor = new Executor(store, gmgn.gmgn, rpc, execution),
     snap = snapshot(),
-    intent = new RiskEngine().approve(
-      snap,
-      settings,
-      {
-        balance: sol,
-        pending: 0n,
-        positions: 0,
-        duplicate: false,
-        entriesEnabled: true,
-      },
-      "live",
+    intent = bindFixtureClaim(
+      store,
+      new RiskEngine().approve(
+        snap,
+        settings,
+        {
+          balance: sol,
+          pending: 0n,
+          positions: 0,
+          duplicate: false,
+          entriesEnabled: true,
+        },
+        "live",
+      ),
     );
   store.record("snapshots", MINT, snap);
+  const sellIntent = executor.sellIntent.bind(executor);
+  executor.sellIntent = (p, amount, reason, s, index) => {
+    for (const old of store.activeManual(p.mode)) {
+      old.state = "CANCELLED";
+      store.saveManual(old);
+    }
+    const id = randomUUID();
+    store.saveManual({
+      id,
+      positionId: p.id,
+      mode: p.mode,
+      sellBps: Number((amount * 10000n) / BigInt(p.quantity)),
+      baseQuantity: p.quantity,
+      amount: String(amount),
+      createdAt: Date.now(),
+      state: "REQUESTED",
+    });
+    return {
+      ...sellIntent(p, amount, reason, s, index),
+      manualRequestId: id,
+      exitAuthority: "MANUAL",
+    };
+  };
   return {
     store,
     executor,
@@ -135,6 +166,10 @@ function harness() {
     },
     timeout: () => {
       timeout = true;
+    },
+    receive: (solAmount = 0n, tokenAmount = 0n) => {
+      sol += solAmount;
+      tokens += tokenAmount;
     },
     close() {
       env.TRADING_MODE = old.mode;
@@ -178,9 +213,7 @@ for (const reason of ["NO_ROUTE", "THIN", "CHANGED_BUY"] as const)
       assert.equal(h.store.executions()[0]?.state, "FAILED");
       assert.equal(
         Number(
-          h.store.db
-            .prepare("SELECT count(*) n FROM trade_learning_samples")
-            .get()!.n,
+          h.store.db.prepare("SELECT count(*) n FROM execution_fills").get()!.n,
         ),
         0,
       );
@@ -188,28 +221,6 @@ for (const reason of ["NO_ROUTE", "THIN", "CHANGED_BUY"] as const)
       h.close();
     }
   });
-test("a healthy partial exit gate preserves the signed BUY evidence in immutable Trading Memory", async () => {
-  const h = harness();
-  try {
-    let n = 0;
-    h.execution.quoteSell = async (_m, amount, _b, r) => {
-      const q = quote("SELL", amount, WALLET, r);
-      q.order.priceImpactPct = ++n === 3 ? 30 : 1;
-      return q;
-    };
-    const e = await h.executor.execute(h.intent, settings, "0", async () => {});
-    assert.equal(e.state, "CONFIRMED");
-    assert.equal(h.broadcasts(), 1);
-    assert.equal(e.exitFeasibility?.status, "LIMITED");
-    assert.equal(
-      h.executor.memory.sample(e.intent.positionId)?.exitFeasibility?.levels
-        .length,
-      3,
-    );
-  } finally {
-    h.close();
-  }
-});
 test("quote guards reject wrong wallet, mint, direction, amount, slippage, stale or mismatched route", () => {
   const valid = quote("BUY", 500_000n),
     expected = {
@@ -233,27 +244,6 @@ test("quote guards reject wrong wallet, mint, direction, amount, slippage, stale
     const q = structuredClone(valid);
     mutate(q);
     assert.throws(() => validateQuote(q, expected));
-  }
-});
-test("ordinary pre-BUY simulation rejection creates no full learning sample or LOSS", async () => {
-  const h = harness();
-  try {
-    h.execution.simulate = async () => {
-      throw new CandidateRejected("TOKEN_SAFETY_FAILED", {
-        reason: "SIMULATED_BALANCE_MISMATCH",
-      });
-    };
-    await assert.rejects(
-      () => h.executor.execute(h.intent, settings, "0", async () => {}),
-      /TOKEN_SAFETY_FAILED/,
-    );
-    assert.equal(h.broadcasts(), 0);
-    assert.equal(h.executor.memory.sample(h.intent.positionId), undefined);
-    assert.equal(h.executor.memory.report("live").completedTrades, 0);
-    assert.equal(h.store.bought(MINT, "live"), false);
-    assert.equal(h.store.pending().length, 0);
-  } finally {
-    h.close();
   }
 });
 test("unsigned SELL simulation diagnostics persist without another broadcast or closing the position", async () => {
@@ -322,7 +312,7 @@ test("confirmed receipt plus actual balances opens position, duplicate claim blo
     assert.equal(p.costLamports, "9805000");
     await assert.rejects(
       () => h.executor.execute(h.intent, settings, "0", async () => {}),
-      /Duplicate/,
+      /Duplicate|BUY_CLAIM_EXECUTION_ALREADY_CREATED/,
     );
     const sell = h.executor.sellIntent(
       p,
@@ -338,6 +328,53 @@ test("confirmed receipt plus actual balances opens position, duplicate claim blo
     h.close();
   }
 });
+for (const timing of ["before-buy", "before-sign", "after-submit"] as const)
+  test(`incoming tokens ${timing} never enter the bot BUY/SELL quantity`, async () => {
+    const h = harness();
+    try {
+      if (timing === "before-buy") h.receive(0n, 250n);
+      if (timing === "before-sign") {
+        const simulate = h.execution.simulate;
+        h.execution.simulate = async (...args) => {
+          await simulate(...args);
+          h.receive(1n, 250n);
+        };
+      }
+      if (timing === "after-submit") {
+        const execute = h.execution.execute;
+        h.execution.execute = async (...args) => {
+          const signature = await execute(...args);
+          h.receive(1n, 250n);
+          return signature;
+        };
+      }
+      const buy = await h.executor.execute(
+        h.intent,
+        settings,
+        "0",
+        async () => {},
+      );
+      assert.equal(buy.state, "CONFIRMED");
+      const p = h.store.positions()[0]!;
+      assert.equal(p.quantity, "1000000");
+      assert.equal(p.originalQuantity, "1000000");
+      assert.equal(h.store.positions().length, 1);
+      const sell = h.executor.sellIntent(
+        p,
+        BigInt(p.quantity),
+        "Close only bot-owned tokens",
+        settings,
+      );
+      await h.executor.execute(sell, settings, "0");
+      assert.equal(h.store.positions()[0]?.quantity, "0");
+      assert.equal(h.store.positions()[0]?.state, "CLOSED");
+      assert.equal(h.store.executions()[1]?.evidence?.tokenDelta, "-1000000");
+      assert.equal(h.broadcasts(), 2);
+      assert.equal(h.store.pending().length, 0);
+    } finally {
+      h.close();
+    }
+  });
 test("signature alone never opens; pending recovery never broadcasts a second BUY", async () => {
   const h = harness();
   try {
@@ -347,7 +384,7 @@ test("signature alone never opens; pending recovery never broadcasts a second BU
     assert.equal(h.store.positions()[0]!.state, "PENDING_ENTRY");
     await h.executor.recover(settings);
     assert.equal(h.broadcasts(), 1);
-    assert.equal(h.store.entriesEnabled(), false);
+    assert.equal(h.store.entriesEnabled(), true);
   } finally {
     h.close();
   }
@@ -393,9 +430,7 @@ test("repeated unsigned SELL simulation failures preserve one position/sample, p
     assert.equal(h.broadcasts(), 1);
     assert.equal(
       Number(
-        h.store.db
-          .prepare("SELECT count(*) n FROM trade_learning_samples")
-          .get()!.n,
+        h.store.db.prepare("SELECT count(*) n FROM execution_fills").get()!.n,
       ),
       1,
     );
@@ -456,10 +491,6 @@ test("local signer requires exact configured wallet and accepts a backend JSON/b
     env.WALLET_PUBLIC_KEY = old.wallet;
   }
 });
-import {
-  ControlledSession,
-  CONTROLLED_BUY_CAP,
-} from "../src/controlled-session.js";
 test("controlled run enforces hard cap, consumes one BUY durably and completes only after reconciled SELL plus memory", async () => {
   const h = harness();
   try {
@@ -497,7 +528,7 @@ test("controlled run enforces hard cap, consumes one BUY durably and completes o
     assert.equal(h.broadcasts(), 1);
     const p = h.store.positions("live")[0]!;
     await executor.execute(
-      executor.sellIntent(
+      h.executor.sellIntent(
         p,
         BigInt(p.quantity),
         "Manual controlled fixture exit",
@@ -510,7 +541,7 @@ test("controlled run enforces hard cap, consumes one BUY durably and completes o
     assert.equal(h.store.positions("live")[0]!.state, "CLOSED");
     assert.equal(
       h.store.db.prepare("SELECT count(*) n FROM trade_outcomes").get()!.n,
-      1,
+      0,
     );
     assert.equal(h.broadcasts(), 2);
   } finally {
@@ -595,14 +626,18 @@ for (const stall of ["quote", "probe", "simulate", "pre-sign"] as const)
           );
         if (stall === "quote") {
           h.execution.quoteBuy = originalBuy;
-          const fresh = {
+          const fresh = bindFixtureClaim(h.store, {
             ...h.intent,
             id: randomUUID(),
             positionId: randomUUID(),
             key: "fresh-after-timeout",
+            attemptId: randomUUID(),
+            ownershipClaimId: undefined,
+            decisionId: randomUUID(),
+            decisionAt: Date.now(),
             createdAt: Date.now(),
             expiresAt: Date.now() + settings.maxSnapshotAgeMs,
-          };
+          });
           assert.equal(
             (await h.executor.execute(fresh, settings, "0", async () => {}))
               .state,
@@ -693,7 +728,11 @@ test("signed pending survives 60s and follows UNKNOWN reconciliation policy", as
     gate.reject(new Blocked("JUPITER_TIMEOUT"));
     await work;
     assert.equal(h.store.pending()[0]!.state, "UNKNOWN");
-    assert.equal(h.store.get("haltScope"), "TRANSACTION");
+    assert.equal(
+      h.store.get<{ scope: string }>("lastFailure")?.scope,
+      "TRANSACTION",
+    );
+    assert.equal(h.store.entriesEnabled(), true);
   } finally {
     t.mock.timers.reset();
     h.close();

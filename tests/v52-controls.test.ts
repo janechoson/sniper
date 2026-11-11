@@ -1,41 +1,38 @@
-import { setup, mockExecutionCase } from "./one-shot-fixtures.js";
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { Store } from "../src/store.js";
-import { Engine } from "../src/engine.js";
-import { Jev } from "../src/jev.js";
-import { Executor } from "../src/executor.js";
-import { Solana } from "../src/solana.js";
-import { RiskEngine } from "../src/risk.js";
+import { test } from "node:test";
+import { type FlowObservation } from "../src/capital-flow.js";
 import { env, settingsSchema, STRUCTURE_WATCH_MAX_MS } from "../src/config.js";
-import { evolveStructure, SniperStructure } from "../src/sniper-structure.js";
-import { positionViews } from "../src/position-view.js";
 import {
   CandidateRejected,
   ProviderFailure,
   type Intent,
 } from "../src/domain.js";
-import { type FlowObservation } from "../src/capital-flow.js";
+import { Engine } from "../src/engine.js";
 import {
-  type SolanaExecutionProvider,
   type ExecutionQuote,
+  type SolanaExecutionProvider,
 } from "../src/execution-provider.js";
+import { Executor } from "../src/executor.js";
+import { RiskEngine } from "../src/risk.js";
+import { evolveStructure, SniperStructure } from "../src/sniper-structure.js";
+import { Solana } from "../src/solana.js";
+import { Store } from "../src/store.js";
 import {
   candidate,
-  settings,
-  provider,
-  position,
-  jev,
-  snapshot,
-  quote,
   MINT,
+  position,
+  provider,
+  quote,
+  settings,
+  snapshot,
   WALLET,
 } from "./fixtures.js";
-import { completedFixture } from "./learning-fixtures.js";
+import { bindFixtureClaim, fakeKronos } from "./kronos-fixtures.js";
+import { mockExecutionCase, setup } from "./one-shot-fixtures.js";
 
 const observation = (
   at: number,
@@ -60,28 +57,6 @@ const observation = (
   largeBuyUsd: null,
   largeSellUsd: null,
 });
-
-function trending(c = candidate()) {
-  const now = Date.now();
-  return {
-    ...c,
-    discovery: {
-      sources: ["SNIPER" as const, "TRENDING" as const],
-      firstSeenAt: now,
-      lastSeenAt: now,
-      trending: {
-        firstSeenAt: now,
-        lastSeenAt: now,
-        sequenceStartedAt: now,
-        consecutiveObservations: 1,
-        rank: 1,
-        basis: "fixture",
-        history: [],
-        movement: "STABLE" as const,
-      },
-    },
-  };
-}
 
 test("10m is a maximum: behavior confirms at 2m,5m,9:59 and unconfirmed expires at 10m", () => {
   assert.equal(settings.structureWatchTtlMs, STRUCTURE_WATCH_MAX_MS);
@@ -152,74 +127,11 @@ test("legacy candidate observer is inert: no 2m/5m/10m promotion or provider con
   }
 });
 
-test("PASS at9:59 ends Watch; fresh post-deadline qualification is allowed, stale/late/invalid defense is not", () => {
-  const snap = snapshot();
-  const now = Date.now(),
-    start = now - 620000;
-  let r = evolveStructure(undefined, MINT, observation(start), settings, start);
-  for (const [i, p] of [100, 96, 93, 93, 94, 95, 96, 97, 98].entries()) {
-    const at = start + 479000 + i * 15000;
-    r = evolveStructure(
-      r,
-      MINT,
-      observation(
-        at,
-        p,
-        i < 3 ? 200 - i * 40 : 120 + (i - 3) * 50,
-        i < 3 ? 100 + i * 30 : 160,
-      ),
-      settings,
-      at,
-    );
-  }
-  assert.equal(r.confirmedAt, start + 599000);
-  r = evolveStructure(r, MINT, observation(now, 98, 400, 160), settings, now);
-  assert.equal(r.status, "PASSED");
-  assert.equal(r.structureWatchExpiresAt, start + STRUCTURE_WATCH_MAX_MS);
-  const ctx = {
-    balance: 1000000000n,
-    pending: 0n,
-    positions: 0,
-    duplicate: false,
-    entriesEnabled: true,
-  };
-  snap.entryDiscoverySource = "SNIPER";
-  snap.sniperStructureAtEntry = r;
-  assert.equal(
-    new RiskEngine().evaluate(snap, settings, ctx, now).allowed,
-    true,
-  );
-  for (const bad of [
-    { ...r, quality: "STALE" as const },
-    { ...r, lastObservedAt: now - settings.structureMaxGapMs - 1 },
-    { ...r, confirmedAt: r.structureWatchExpiresAt },
-    { ...r, confirmedAt: now + 1 },
-  ]) {
-    snap.sniperStructureAtEntry = bad;
-    assert.equal(
-      new RiskEngine().evaluate(snap, settings, ctx, now).allowed,
-      false,
-    );
-  }
-  const weakened = evolveStructure(
-    r,
-    MINT,
-    observation(now + 20000, 90, 100, 200),
-    settings,
-    now + 20000,
-  );
-  assert.equal(weakened.status, "ACTIVE");
-  assert.equal(
-    evolveStructure(weakened, MINT, undefined, settings, now + 20001).status,
-    "EXPIRED",
-  );
-});
-
-test("in-flight monitor result cannot resume a removed Position; genuine auth failure still halts SYSTEM", async () => {
+test("in-flight monitor result cannot resume a removed Position; genuine auth failure records SYSTEM without changing canonical entry controls", async () => {
   for (const failure of [false, true]) {
     const db = new Store(":memory:"),
       g = provider(),
-      e = new Engine(db, { gmgn: g.gmgn });
+      e = new Engine(db, { gmgn: g.gmgn, kronos: fakeKronos() });
     let enter!: () => void,
       resolve!: (value: Awaited<ReturnType<typeof g.gmgn.security>>) => void,
       reject!: (error: unknown) => void;
@@ -227,7 +139,7 @@ test("in-flight monitor result cannot resume a removed Position; genuine auth fa
     const original = g.gmgn.security.bind(g.gmgn);
     const sec = await original(candidate(), settings);
     try {
-      const p = { ...position(), id: randomUUID(), mode: "paper" as const };
+      const p = { ...position(), id: randomUUID(), mode: "demo" as const };
       db.savePosition(p);
       g.gmgn.security = async () => {
         enter();
@@ -244,11 +156,11 @@ test("in-flight monitor result cannot resume a removed Position; genuine auth fa
       else resolve(sec);
       await monitor;
       assert.equal(g.calls.filter((a) => a[1] === "info").length, 0);
-      assert.equal(db.positions("paper")[0]!.quantity, p.quantity);
-      assert(db.positions("paper")[0]!.dismissal);
+      assert.equal(db.positions("demo")[0]!.quantity, p.quantity);
+      assert(db.positions("demo")[0]!.dismissal);
       if (failure)
         assert.match(
-          db.get<string>("haltReason")!,
+          db.get<{ reason: string }>("lastFailure")!.reason,
           /SYSTEM.*GMGN_AUTHORIZATION_FAILED/,
         );
       else assert.equal(db.get("haltReason"), undefined);
@@ -289,93 +201,26 @@ test("persisted legacy Watch deadline clamps from original T0; restart never gra
   }
 });
 
-test("position dismissal stops GMGN/Flow/Jev/exit probes, preserves quantity/history/learning and duplicate ownership", async () => {
-  const db = new Store(":memory:"),
-    g = provider(),
-    j = new Jev(),
-    e = new Engine(db, { gmgn: g.gmgn, jev: j });
-  let exits = 0,
-    executions = 0;
-  j.decideExit = async () => {
-    exits++;
-    return { action: "HOLD", sellBps: 0, confidence: 1, reason: "NO_EDGE" };
-  };
-  e.executor.execute = async () => {
-    executions++;
-    throw Error("Unexpected execution");
-  };
-  try {
-    const p = { ...position(), id: randomUUID(), mode: "paper" as const };
-    db.savePosition(p);
-    db.discover(candidate());
-    completedFixture(e.memory);
-    const memory = db.db.prepare("SELECT * FROM trade_learning_samples").all();
-    await e.monitor();
-    await e.exitScheduler.idle();
-    const reads = g.calls.length,
-      flow = e.capitalFlow.status().observations,
-      exitCalls = exits;
-    e.exitLiquidity.schedule(db.positions("paper").find((x) => x.id === p.id)!);
-    e.dismissPosition(p.id);
-    e.dismissPosition(p.id);
-    assert.equal(
-      db.positions("paper").find((x) => x.id === p.id)!.quantity,
-      p.quantity,
-    );
-    assert.equal(
-      db.positions("paper").find((x) => x.id === p.id)!.state,
-      "OPEN",
-    );
-    assert.equal(
-      positionViews(db.positions("paper"), db.executions()).find(
-        (x) => x.id === p.id,
-      )!.relevant,
-      false,
-    );
-    await e.monitor();
-    await e.processExits();
-    await e.exitLiquidity.pump();
-    assert.equal(g.calls.length, reads);
-    assert.equal(exits, exitCalls);
-    assert.equal(executions, 0);
-    assert.equal(e.capitalFlow.status().observations, flow);
-    assert.equal(e.exitLiquidity.status().queued, 0);
-    assert.deepEqual(
-      db.db.prepare("SELECT * FROM trade_learning_samples").all(),
-      memory,
-    );
-    assert(db.bought(MINT, "paper"));
-    for (const c of [candidate(), trending()]) {
-      db.discover(c);
-      assert(e.candidates.refill([c]).includes(MINT));
-    }
-    assert.throws(() => e.emergency(p.id), /not open/);
-  } finally {
-    await e.stop();
-    db.close();
-  }
-});
-
 test("dismissal persists across reopen and a stale monitor cannot erase it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bot-v52-")),
     path = join(dir, "bot.sqlite");
   let db = new Store(path);
-  const p = { ...position(), id: randomUUID(), mode: "paper" as const };
+  const p = { ...position(), id: randomUUID(), mode: "demo" as const };
   try {
     db.savePosition(p);
-    db.dismissPosition(p.id, "paper");
+    db.dismissPosition(p.id, "demo");
     db.savePosition({ ...p, lastQuoteAt: Date.now() });
     db.close();
     db = new Store(path);
     const g = provider(),
-      e = new Engine(db, { gmgn: g.gmgn });
+      e = new Engine(db, { gmgn: g.gmgn, kronos: fakeKronos() });
     try {
       await e.monitor();
       await e.processExits();
       assert.equal(g.calls.length, 0);
-      assert.equal(db.managedPositions("paper").length, 0);
-      assert.equal(db.positions("paper")[0]!.quantity, p.quantity);
-      assert(db.bought(MINT, "paper"));
+      assert.equal(db.managedPositions("demo").length, 0);
+      assert.equal(db.positions("demo")[0]!.quantity, p.quantity);
+      assert(db.bought(MINT, "demo"));
     } finally {
       await e.stop();
     }
@@ -388,7 +233,7 @@ test("dismissal persists across reopen and a stale monitor cannot erase it", asy
 test("pending unsigned or signed UNKNOWN prevents Position dismissal and preserves reconciliation responsibility", () => {
   const db = new Store(":memory:");
   try {
-    const p = { ...position(), id: randomUUID(), mode: "paper" as const };
+    const p = { ...position(), id: randomUUID(), mode: "demo" as const };
     db.savePosition(p);
     const i: Intent = {
       id: randomUUID(),
@@ -397,7 +242,7 @@ test("pending unsigned or signed UNKNOWN prevents Position dismissal and preserv
       mint: MINT,
       provider: "JUPITER",
       side: "SELL",
-      mode: "paper",
+      mode: "demo",
       amount: "500",
       createdAt: Date.now(),
       expiresAt: Date.now() + 10000,
@@ -405,13 +250,13 @@ test("pending unsigned or signed UNKNOWN prevents Position dismissal and preserv
       reason: "manual",
     };
     const ex = db.claim(i);
-    assert.throws(() => db.dismissPosition(p.id, "paper"), /PENDING/);
+    assert.throws(() => db.dismissPosition(p.id, "demo"), /PENDING/);
     ex.state = "UNKNOWN";
     ex.signature = "fixture-signed-unknown";
     db.execution(ex);
-    assert.throws(() => db.dismissPosition(p.id, "paper"), /PENDING/);
+    assert.throws(() => db.dismissPosition(p.id, "demo"), /PENDING/);
     assert.equal(db.pending()[0]!.signature, ex.signature);
-    assert(!db.positions("paper")[0]!.dismissal);
+    assert(!db.positions("demo")[0]!.dismissal);
   } finally {
     db.close();
   }
@@ -419,8 +264,8 @@ test("pending unsigned or signed UNKNOWN prevents Position dismissal and preserv
 
 test("revoking candidate authority during BUY quote prevents unsigned one-shot execution", async () => {
   const f = mockExecutionCase();
-  const quote = f.e.executor.provider.quoteBuy.bind(f.e.executor.provider);
-  f.e.executor.provider.quoteBuy = async (...args) => {
+  const quote = f.execution.quoteBuy.bind(f.execution);
+  f.execution.quoteBuy = async (...args) => {
     const q = await quote(...args);
     f.store.dismissCandidate(MINT, "live", true);
     return q;
@@ -431,32 +276,6 @@ test("revoking candidate authority during BUY quote prevents unsigned one-shot e
     assert.equal(f.e.candidates.list().length, 0);
   } finally {
     await f.close();
-  }
-});
-
-test("a delayed JEV BUY loses its attempt authority when the operator revokes it", async () => {
-  const f = setup();
-  let release!: (v: ReturnType<typeof jev>) => void, entered!: () => void;
-  const waiting = new Promise<void>((r) => (entered = r));
-  f.j.decide = async () => {
-    entered();
-    return new Promise((r) => (release = r));
-  };
-  let running: Promise<void> | undefined;
-  try {
-    running = f.engine.analyze(MINT);
-    await waiting;
-    f.store.dismissCandidate(MINT, "paper", true);
-    release(jev());
-    await assert.rejects(running);
-    assert.equal(f.store.executions().length, 0);
-    assert.equal(f.engine.attempts.current!.failedStage, "JEV");
-    assert.equal(f.engine.candidates.list().length, 0);
-  } finally {
-    release?.(jev());
-    await running?.catch(() => {});
-    await f.engine.stop();
-    f.store.close();
   }
 });
 
@@ -546,23 +365,22 @@ for (const phase of ["QUOTE", "MINT_RPC", "PRE_SIGN", "SUBMITTED"] as const)
     try {
       const ex = new Executor(db, g.gmgn, rpc, execution),
         snap = snapshot();
-      snap.entryAuthority = {
-        revision: 0,
-        path: "TRENDING",
-        policy: "TRENDING_FINAL_STRUCTURE_V1",
-      };
+
       db.record("snapshots", MINT, snap);
-      const i = new RiskEngine().approve(
-        snap,
-        settings,
-        {
-          balance: sol,
-          pending: 0n,
-          positions: 0,
-          duplicate: false,
-          entriesEnabled: true,
-        },
-        "live",
+      const i = bindFixtureClaim(
+        db,
+        new RiskEngine().approve(
+          snap,
+          settings,
+          {
+            balance: sol,
+            pending: 0n,
+            positions: 0,
+            duplicate: false,
+            entriesEnabled: true,
+          },
+          "live",
+        ),
       );
       const validate = async () =>
         db.assertEntryAuthority(MINT, "live", i.entryAuthority);

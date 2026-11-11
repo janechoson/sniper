@@ -5,7 +5,6 @@ const stages = {
   HISTORY: "MARKET HISTORY",
   CAPITAL_FLOW: "CAPITAL FLOW",
   COMMON_RISK: "COMMON RISK",
-  JEV: "JEV",
   RISK: "RISK",
   STRUCTURE: "STRUCTURE",
   FINAL_ANALYSIS: "FINAL ANALYSIS",
@@ -24,7 +23,6 @@ const reasons = {
     "Controlled markup pattern detected · Manipulation Structure",
   INSUFFICIENT_MARKET_HISTORY: "Chưa đủ lịch sử thị trường hợp lệ",
   HISTORY_SOURCE_UNAVAILABLE: "Nguồn lịch sử thị trường chưa khả dụng",
-  JEV_DID_NOT_APPROVE: "JEV chưa phê duyệt entry",
   INSUFFICIENT_DATA: "Chưa đủ dữ liệu để đánh giá",
   SECURITY_EVIDENCE_UNKNOWN: "Chưa xác định được bằng chứng bảo mật",
   OPEN_POSITION_DUPLICATE: "Token đã có vị thế đang mở",
@@ -49,7 +47,6 @@ const paths = {
   RISK: ["M8 2h8M8 22h8M6 2v5l6 5-6 5v5M18 2v5l-6 5 6 5v5"],
   STRUCTURE: ["M4 20V10h3v10M10 20V4h3v16M16 20v-8h3v8"],
   CANDIDATE: ["m12 2 10 5-10 5L2 7Z", "m2 12 10 5 10-5M2 17l10 5 10-5"],
-  JEV: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18", "M9 8v8M15 8v8M7 11h10M7 14h10"],
   TRADE: ["M2 3h3l3 12h10l3-9H6M9 20h.01M18 20h.01"],
   SYSTEM: [
     "M12 3v2M12 19v2M3 12h2M19 12h2M6 6l1 1M17 17l1 1M6 18l1-1M17 7l1-1",
@@ -61,11 +58,10 @@ const paths = {
 Object.assign(stages, {
   KRONOS: "KRONOS ANALYSIS",
   CONTROLLED_MARKUP: "CONTROLLED MARKUP",
-  JEV: "JEV BUY ANALYSIS",
 });
 const obj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 const str = (v) => (typeof v === "string" ? v : "");
-const knownStrategy = (v) => (["STANDARD", "KRONOS"].includes(v) ? v : "");
+const knownStrategy = (v) => (["KRONOS"].includes(v) ? v : "");
 const stamp = (v) =>
   typeof v === "number" && Number.isFinite(v) && v > 0
     ? v
@@ -95,7 +91,6 @@ const commonStages = new Set([
 function category(type, stage) {
   if (stage === "STRUCTURE" || /STRUCTURE|MARKUP/.test(type + " " + stage))
     return "STRUCTURE";
-  if (stage === "JEV" || /^JEV/.test(type)) return "JEV";
   if (stage === "SECURITY" || /SECURITY|RUG|HONEYPOT/.test(type))
     return "SECURITY";
   if (
@@ -157,7 +152,6 @@ function outcome(type, p, status) {
   if (state === "PASS" || /_PASS(?:ED)?$|_APPROVED$|_CONFIRMED$/.test(type))
     return "PASS";
   if (["BUY", "SELL", "WAIT", "HOLD"].includes(p.action)) return p.action;
-  if (type === "JEV_BUY") return "BUY";
   return "INFO";
 }
 /** Attribution uses explicit fields/context or the actual ATTEMPT_* reason format, not arbitrary UUIDs. */
@@ -183,7 +177,7 @@ export function normalizeLogEvent(raw, source = "event", context = {}) {
   const strategy =
     knownStrategy(p.strategy) ||
     knownStrategy(context.strategy) ||
-    knownStrategy(message.match(/^(STANDARD|KRONOS): /)?.[1]);
+    knownStrategy(message.match(/^(KRONOS): /)?.[1]);
   const owner =
     knownStrategy(p.owner) ||
     knownStrategy(context.owner) ||
@@ -195,10 +189,7 @@ export function normalizeLogEvent(raw, source = "event", context = {}) {
     pieces.length > 1 && Object.hasOwn(stages, pieces[1])
       ? pieces.slice(2).join(" · ")
       : message
-          .replace(
-            /^(?:STANDARD: |KRONOS: )?[A-Z_]+: (FAIL|PASS|CHECKING) · /,
-            "",
-          )
+          .replace(/^(?:KRONOS: )?[A-Z_]+: (FAIL|PASS|CHECKING) · /, "")
           .replace(/^Token OUT · /, "");
   let title = stage ? stages[stage] || stage : type.replaceAll("_", " ");
   if (type === "ATTEMPT_STARTED" || /^Bắt đầu Fresh Attempt/.test(message))
@@ -428,7 +419,6 @@ export async function mount(ctx) {
     "SECURITY",
     "RISK",
     "STRUCTURE",
-    "JEV",
     "TRADE",
     "SYSTEM",
   ];

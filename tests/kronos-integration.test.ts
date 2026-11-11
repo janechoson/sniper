@@ -1,45 +1,47 @@
-import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { test } from "node:test";
+import type { Intent, Position, Strategy } from "../src/domain.js";
 import { Engine } from "../src/engine.js";
-import { Store } from "../src/store.js";
-import { Jev } from "../src/jev.js";
-import { JevExitScheduler } from "../src/jev-exit-scheduler.js";
-import {
-  KronosStrategy,
-  type KronosDecision,
-  type KronosInference,
-} from "../src/kronos-strategy.js";
+import { evaluateExitSafety } from "../src/exit-safety.js";
+import { normalizeMarket } from "../src/gmgn.js";
 import {
   KRONOS,
   decideForecast,
   type Forecast,
   type LabCandle,
 } from "../src/kronos-domain.js";
-import { kronosWorkerEnvironment } from "../src/kronos-worker.js";
-import { RiskEngine, exitDecision } from "../src/risk.js";
-import { detectExits } from "../src/exit-lifecycle.js";
-import { assertStrategySell } from "../src/strategy-authority.js";
-import { positionViews } from "../src/position-view.js";
-import { evaluateExitSafety } from "../src/exit-safety.js";
-import { normalizeMarket } from "../src/gmgn.js";
-import { parseMarketHistory } from "../src/market-history.js";
-import type { Intent, Position, Strategy } from "../src/domain.js";
 import {
-  snapshot,
-  position,
-  settings,
-  provider,
-  info,
+  KronosStrategy,
+  type KronosInference,
+} from "../src/kronos-strategy.js";
+import { kronosWorkerEnvironment } from "../src/kronos-worker.js";
+import { parseMarketHistory } from "../src/market-history.js";
+import { positionViews } from "../src/position-view.js";
+import { RiskEngine } from "../src/risk.js";
+import { Store } from "../src/store.js";
+import { assertStrategySell } from "../src/strategy-authority.js";
+import {
   MINT,
+  info,
+  position,
+  provider,
+  settings,
+  snapshot,
 } from "./fixtures.js";
 import {
+  bindFixtureClaim,
+  fixtureQuotes,
+  fixtureRpc,
+  fundFixtureHolding,
+} from "./kronos-fixtures.js";
+import {
   candles,
-  recentCandidate,
   mockExecutionCase,
+  recentCandidate,
 } from "./one-shot-fixtures.js";
 
 function bars(): LabCandle[] {
@@ -109,34 +111,6 @@ function strategy(ends = [1.01, 1.02, 1.03]) {
     },
   };
 }
-function decision(action: KronosDecision["action"]): KronosDecision {
-  const rows = bars(),
-    f = forecast(
-      rows,
-      Date.now(),
-      action === "SELL" ? [0.9, 0.91, 0.92] : [1.01, 1.02, 1.03],
-    );
-  return {
-    strategy: "KRONOS",
-    action,
-    decisionId: randomUUID(),
-    decisionAt: f.decisionAt,
-    reason: action,
-    evidence: {
-      model: f.model.id,
-      revision: f.model.revision,
-      tokenizerRevision: f.tokenizer.revision,
-      inputFrom: f.inputFrom,
-      inputTo: f.inputTo,
-      candleCount: 40,
-      horizon: 5,
-      samples: 3,
-      terminalPrices: f.paths.map((p) => p.at(-1)!),
-      terminalRangePct: [-10, -8],
-      lastObservedClose: 1,
-    },
-  };
-}
 function sell(p: Position): Intent {
   return {
     id: randomUUID(),
@@ -152,31 +126,6 @@ function sell(p: Position): Intent {
     reason: "fixture",
     snapshotHash: "fixture",
     strategy: p.strategy ?? "STANDARD",
-  };
-}
-function authorized(p: Position) {
-  p.kronosDecision = {
-    ...decision("SELL"),
-    quantity: p.quantity,
-    inputTo: Date.now(),
-  };
-  const op = {
-    id: randomUUID(),
-    kind: "STRATEGIC" as const,
-    strategy: "KRONOS" as const,
-    decisionSource: "KRONOS" as const,
-    decisionId: p.kronosDecision.decisionId,
-    reason: "KRONOS_SELL",
-    sellBps: 10000,
-    triggeredAt: Date.now(),
-  };
-  p.pendingExits = [op];
-  return {
-    ...sell(p),
-    exitAuthority: "KRONOS" as const,
-    decisionSource: "KRONOS" as const,
-    decisionId: p.kronosDecision.decisionId,
-    exitOpportunityId: op.id,
   };
 }
 
@@ -326,7 +275,7 @@ test("inference is serial and queued position jobs precede queued entries", asyn
   m.stop();
 });
 
-test("concurrent Kronos winner uses shared gates without mixing Standard evidence", async () => {
+test("KRONOS uses shared gates without legacy model evidence", async () => {
   const secretNames = [
     "SOLANA_PRIVATE_KEY",
     "KRONOS_PRIVATE_KEY",
@@ -349,12 +298,6 @@ test("concurrent Kronos winner uses shared gates without mixing Standard evidenc
       kronos: k.model,
       historyMinutes: 60,
     });
-  f.e.jev.decide = async () => {
-    throw Error("STANDARD_FIXTURE_UNAVAILABLE");
-  };
-  const memory = mock.method(f.e.memory, "retrieve", () => {
-    throw Error("MEMORY_MUST_NOT_RUN");
-  });
   try {
     await f.e.analyze(MINT);
     await f.e.settleEntryEvaluations();
@@ -370,13 +313,8 @@ test("concurrent Kronos winner uses shared gates without mixing Standard evidenc
     assert.equal(winningSnapshot.jev, undefined);
     assert.equal(winningSnapshot.oneShotStructure, undefined);
     assert.equal(winningSnapshot.manipulationStructure, undefined);
-    assert.equal(
-      f.store.count("jev_inputs"),
-      1,
-      "Independent STANDARD branch only",
-    );
+    assert.equal(f.store.count("jev_inputs"), 0, "No legacy inference branch");
     assert.equal(f.store.count("jev_decisions"), 0);
-    assert.equal(memory.mock.callCount(), 0);
     const p = f.store.positions("live")[0]!,
       e = f.store.executions()[0]!;
     assert.equal(p.strategy, "KRONOS");
@@ -406,27 +344,10 @@ test("concurrent Kronos winner uses shared gates without mixing Standard evidenc
       assert.equal(serialized.includes(process.env[name]!), false);
     assert.deepEqual(f.stats(), { signed: 1, simulated: 1 });
   } finally {
-    memory.mock.restore();
     await f.close();
     for (const [name, value] of savedSecrets)
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
-  }
-});
-
-test("Standard still requires Structure/JEV; insufficient Kronos history cannot claim", async () => {
-  const k = strategy(),
-    f = mockExecutionCase(undefined, { kronos: k.model });
-  try {
-    await f.e.analyze(MINT);
-    await f.e.settleEntryEvaluations();
-    assert.equal(f.e.attempts.current!.result, "BOUGHT");
-    assert.equal(k.calls(), 0);
-    assert.equal(f.e.attempts.current!.stages.STRUCTURE, "PASS");
-    assert.equal(f.e.attempts.current!.stages.JEV, "PASS");
-    assert.equal(f.store.positions("live")[0]!.strategy, "STANDARD");
-  } finally {
-    await f.close();
   }
 });
 
@@ -454,14 +375,21 @@ test("revoking candidate authority during concurrent evaluation prevents both un
 
 test("Kronos global safety retains only critical security and liquidity collapse; forged manual/protection cannot claim", async () => {
   const store = new Store(":memory:"),
-    e = new Engine(store, { gmgn: provider().gmgn, kronos: strategy().model });
+    e = new Engine(store, {
+      rpc: fixtureRpc(),
+      demoQuotes: fixtureQuotes(),
+      gmgn: provider().gmgn,
+      kronos: strategy().model,
+    });
   const p = {
     ...position(),
-    mode: "paper" as const,
+    mode: "demo" as const,
     strategy: "KRONOS" as const,
     initialLiquidity: 100000,
+    quantity: "1000000",
+    originalQuantity: "1000000",
   };
-  store.savePosition(p);
+  fundFixtureHolding(store, p);
   try {
     const security = snapshot().security;
     security.findings.push({
@@ -523,12 +451,13 @@ test("Kronos global safety retains only critical security and liquidity collapse
       /SAFETY/,
     );
     (e as any).solPrice = "100";
+    (e as any).solPriceAt = Date.now();
     store.record("position_market", p.mint, normalizeMarket(info()));
     e.emergency(p.id, 5000);
     await e.processExits();
     assert.equal(store.executions().length, 1);
     assert.equal(store.executions()[0]!.intent.exitAuthority, "MANUAL");
-    assert.equal(store.positions("paper")[0]!.quantity, "500");
+    assert.equal(store.positions("demo")[0]!.quantity, "500000");
   } finally {
     await e.stop();
     store.close();
@@ -556,7 +485,7 @@ for (const failure of [
       assert.equal(f.stats().signed, 0);
       assert.equal(
         f.store.positions("live").some((p) => p.state === "OPEN"),
-        false,
+        failure === "OWNERSHIP",
       );
     } finally {
       await f.close();
@@ -564,7 +493,7 @@ for (const failure of [
   });
 
 for (const mode of ["WAIT", "FAIL"])
-  test(`KRONOS ${mode} plus independent STANDARD reject creates no intent`, async () => {
+  test(`KRONOS ${mode} creates no intent on its own non-BUY outcome`, async () => {
     const k = strategy([0.9, 0.91, 0.92]);
     k.fail(mode === "FAIL");
     const f = mockExecutionCase(undefined, {
@@ -572,12 +501,11 @@ for (const mode of ["WAIT", "FAIL"])
       kronos: k.model,
       historyMinutes: 60,
     });
-    f.e.jev.decide = async () => ({ ...snapshot().jev!, action: "SKIP" });
     try {
       await assert.rejects(f.e.analyze(MINT));
       assert.equal(f.store.executions().length, 0);
       assert.equal(f.stats().signed, 0);
-      assert.equal(f.store.count("jev_inputs"), 1);
+      assert.equal(f.store.count("jev_inputs"), 0);
       assert.equal(k.calls(), 1);
     } finally {
       await f.close();
@@ -594,7 +522,12 @@ test("common Risk denies concentration, missing authority, stale evidence, disab
       entriesEnabled: true,
     };
   const s = { ...settings, entryStrategy: "FIRST_BUY_WINS" as const },
-    base = { ...snapshot(), strategy: "KRONOS" as const, jev: undefined };
+    base = {
+      ...snapshot(),
+      strategy: "KRONOS" as const,
+      jev: undefined,
+      kronos: undefined,
+    };
   assert.equal(risk.evaluate(base, s, ctx, Date.now(), "COMMON").allowed, true);
   for (const mutate of [
     (x: typeof base) => {
@@ -636,114 +569,24 @@ test("common Risk denies concentration, missing authority, stale evidence, disab
   );
 });
 
-test("JEV cannot queue, apply or execute partial/full sells for KRONOS; full remaining quantity is mandatory", async () => {
-  const store = new Store(":memory:"),
-    g = provider(),
-    j = new Jev(),
-    k = strategy(),
-    e = new Engine(store, { gmgn: g.gmgn, jev: j, kronos: k.model });
-  const p = {
-    ...position(),
-    mode: "paper" as const,
-    strategy: "KRONOS" as const,
-    quantity: "123456",
-    originalQuantity: "999999",
-  };
-  store.savePosition(p);
-  let calls = 0;
-  j.decideExit = async () => {
-    calls++;
-    throw Error("FORBIDDEN");
-  };
-  const scheduler = new JevExitScheduler(
-    j,
-    () => settings,
-    () => {
-      calls++;
-    },
-  );
-  try {
-    assert.equal(
-      scheduler.schedule({
-        strategy: "KRONOS",
-        positionId: p.id,
-        mint: p.mint,
-        quantity: p.quantity,
-        value: "1",
-        state: {},
-        priority: 1,
-        queuedAt: Date.now(),
-      }),
-      false,
-    );
-    (e as any).scheduleExitAnalysis(
-      p,
-      normalizeMarket(info()),
-      snapshot().security,
-      {},
-    );
-    (e as any).applyExitDecision(
-      { id: "forged", positionId: p.id, action: "SELL", sellBps: 10000 },
-      { positionId: p.id },
-    );
-    assert.equal(store.jevExits().length, 0);
-    assert.equal(calls, 0);
-    for (const bps of [2500, 10000]) {
-      const i = {
-        ...sell(p),
-        exitAuthority: "JEV" as const,
-        decisionSource: "JEV" as const,
-        amount: ((BigInt(p.quantity) * BigInt(bps)) / 10000n).toString(),
-      };
-      assert.throws(() => store.claim(i), /FRESH_FULL_KRONOS_SELL_REQUIRED/);
-      await assert.rejects(
-        e.executor.execute(i, settings, "100"),
-        /FRESH_FULL_KRONOS_SELL_REQUIRED/,
-      );
-    }
-    assert.equal(exitDecision(p, 999999999999n, settings, {}), undefined);
-    assert.equal(
-      detectExits(p, 999999999999n, settings, {}).detected.length,
-      0,
-    );
-    const i = authorized(p);
-    store.savePosition(p);
-    assert.throws(
-      () => assertStrategySell({ ...i, amount: "123455" }, p),
-      /FRESH_FULL/,
-    );
-    assert.doesNotThrow(() => assertStrategySell(i, p));
-    assert.throws(
-      () => assertStrategySell({ ...i, mint: "wrong-mint" }, p),
-      /OWNER_MISMATCH/,
-    );
-    const standard = { ...p, strategy: "STANDARD" as const };
-    assert.throws(
-      () => assertStrategySell({ ...i, strategy: "STANDARD" }, standard),
-      /KRONOS_CANNOT_SELL_STANDARD/,
-    );
-    assert.equal(store.claim(i).intent.amount, "123456");
-    assert.equal(store.executions().length, 1);
-  } finally {
-    await scheduler.stop();
-    await e.stop();
-    store.close();
-  }
-});
-
-test("KRONOS bearish decision closes actual remaining quantity through common PAPER Executor and accounting", async () => {
+test("KRONOS bearish decision closes actual remaining quantity through common DEMO Executor and accounting", async () => {
   const store = new Store(":memory:"),
     g = provider(),
     k = strategy([0.9, 0.91, 0.92]),
-    e = new Engine(store, { gmgn: g.gmgn, kronos: k.model });
+    e = new Engine(store, {
+      rpc: fixtureRpc(),
+      demoQuotes: fixtureQuotes(),
+      gmgn: g.gmgn,
+      kronos: k.model,
+    });
   const p = {
     ...position(),
-    mode: "paper" as const,
+    mode: "demo" as const,
     strategy: "KRONOS" as const,
     quantity: "123456",
     originalQuantity: "999999",
   };
-  store.savePosition(p);
+  fundFixtureHolding(store, p);
   store.record("position_market", p.mint, normalizeMarket(info()));
   const h = parseMarketHistory(candles(60), {
     ...recentCandidate(),
@@ -752,17 +595,18 @@ test("KRONOS bearish decision closes actual remaining quantity through common PA
   try {
     (e as any).scheduleKronosPosition(p, h);
     await Promise.all((e as any).kronosJobs.values());
-    const current = store.positions("paper")[0]!;
+    const current = store.positions("demo")[0]!;
     assert.equal(current.kronosDecision?.action, "SELL");
     (e as any).solPrice = "100";
+    (e as any).solPriceAt = Date.now();
     await e.processExits();
     const result = store.executions()[0]!;
-    assert.ok(result, JSON.stringify(store.positions("paper")[0]!.attention));
+    assert.ok(result, JSON.stringify(store.positions("demo")[0]!.attention));
     assert.equal(result.state, "CONFIRMED");
     assert.equal(result.intent.amount, "123456");
-    assert.equal(store.positions("paper")[0]!.state, "CLOSED");
-    assert.equal(store.history("paper", { strategy: "KRONOS" }).length, 1);
-    assert.equal(store.history("paper", { strategy: "STANDARD" }).length, 0);
+    assert.equal(store.positions("demo")[0]!.state, "CLOSED");
+    assert.equal(store.history("demo", { strategy: "KRONOS" }).length, 1);
+    assert.equal(store.history("demo", { strategy: "STANDARD" }).length, 0);
   } finally {
     await e.stop();
     store.close();
@@ -771,22 +615,26 @@ test("KRONOS bearish decision closes actual remaining quantity through common PA
 
 test("strategy statistics count only their owner and preserve unknown gross/net/fees", async () => {
   const store = new Store(":memory:"),
-    e = new Engine(store, { gmgn: provider().gmgn, kronos: strategy().model });
+    e = new Engine(store, {
+      rpc: fixtureRpc(),
+      demoQuotes: fixtureQuotes(),
+      gmgn: provider().gmgn,
+      kronos: strategy().model,
+    });
   try {
     for (const owner of ["STANDARD", "KRONOS"] as const)
       for (let n = 0; n < (owner === "STANDARD" ? 2 : 3); n++)
         store.savePosition({
           ...position(),
-          mode: "paper",
+          mode: "demo",
           strategy: owner,
           state: "CLOSED",
           quantity: "0",
         });
-    const standard = e.analytics("STANDARD").strategyAccounting,
-      kronos = e.analytics("KRONOS").strategyAccounting;
-    assert.equal(standard.closed, 2);
+    const kronos = e.analytics("KRONOS").strategyAccounting;
+    assert.equal(e.analytics().strategyAccounting.closed, 5);
     assert.equal(kronos.closed, 3);
-    for (const s of [standard, kronos]) {
+    for (const s of [kronos]) {
       assert.equal(s.grossPnlLamports, null);
       assert.equal(s.netPnlLamports, null);
       assert.equal(s.feesPaidLamports, null);
@@ -800,7 +648,7 @@ test("strategy statistics count only their owner and preserve unknown gross/net/
   }
 });
 
-for (const owner of ["STANDARD", "KRONOS"] as Strategy[])
+for (const owner of ["KRONOS"] as Strategy[])
   for (const state of ["SUBMITTED", "UNKNOWN", "OPEN"] as const)
     test(`${owner} ${state} owns mint and blocks the other strategy`, () => {
       const store = new Store(":memory:"),
@@ -815,12 +663,12 @@ for (const owner of ["STANDARD", "KRONOS"] as Strategy[])
         };
       try {
         const base = {
-            ...risk.approve(snap, settings, ctx, "paper"),
+            ...risk.approve(snap, settings, ctx, "demo"),
             strategy: owner,
           },
-          execution = store.claim(base);
+          execution = store.claim(bindFixtureClaim(store, base));
         if (state === "OPEN") {
-          const p = store.positions("paper")[0]!;
+          const p = store.positions("demo")[0]!;
           p.state = "OPEN";
           p.quantity = p.originalQuantity = "1000";
           store.savePosition(p);
@@ -835,12 +683,14 @@ for (const owner of ["STANDARD", "KRONOS"] as Strategy[])
           id: randomUUID(),
           key: randomUUID(),
           positionId: randomUUID(),
-          strategy:
-            owner === "KRONOS" ? ("STANDARD" as const) : ("KRONOS" as const),
+          strategy: "KRONOS" as const,
         };
-        assert.throws(() => store.claim(other), /Duplicate BUY|Unresolved/);
-        assert.equal(store.positions("paper").length, 1);
-        assert.equal(store.positions("paper")[0]!.strategy, owner);
+        assert.throws(
+          () => store.claim(other),
+          /Duplicate BUY|Unresolved|BUY_OWNERSHIP/,
+        );
+        assert.equal(store.positions("demo").length, 1);
+        assert.equal(store.positions("demo")[0]!.strategy, owner);
       } finally {
         store.close();
       }
@@ -854,40 +704,50 @@ test("restart preserves strategy owner; model failure leaves OPEN without JEV an
     e: Engine | undefined;
   const p = {
     ...position(),
-    mode: "paper" as const,
+    mode: "demo" as const,
     strategy: "KRONOS" as const,
   };
   try {
     store.savePosition(p);
     store.close();
     store = new Store(path);
-    e = new Engine(store, { gmgn: provider().gmgn, kronos: k.model });
-    assert.equal(store.positions("paper")[0]!.strategy, "KRONOS");
+    e = new Engine(store, {
+      rpc: fixtureRpc(),
+      demoQuotes: fixtureQuotes(),
+      gmgn: provider().gmgn,
+      kronos: k.model,
+    });
+    assert.equal(store.positions("demo")[0]!.strategy, "KRONOS");
     const h = parseMarketHistory(candles(60), {
       ...recentCandidate(),
       createdAt: Date.now() - 2 * 3600000,
     });
     k.fail(true);
-    (e as any).scheduleKronosPosition(store.positions("paper")[0], h);
+    (e as any).scheduleKronosPosition(store.positions("demo")[0], h);
     await Promise.all((e as any).kronosJobs.values());
-    assert.equal(store.positions("paper")[0]!.state, "OPEN");
+    assert.equal(store.positions("demo")[0]!.state, "OPEN");
     assert.equal(store.executions().length, 0);
-    assert.equal(store.jevExits().length, 0);
+    assert.equal(
+      Number(
+        store.db.prepare("SELECT count(*) n FROM jev_exit_decisions").get()!.n,
+      ),
+      0,
+    );
     k.fail(false);
     (e as any).kronosAttempts.clear();
-    (e as any).scheduleKronosPosition(store.positions("paper")[0], h);
+    (e as any).scheduleKronosPosition(store.positions("demo")[0], h);
     await Promise.all((e as any).kronosJobs.values());
-    assert.equal(store.positions("paper")[0]!.kronosDecision?.action, "SELL");
+    assert.equal(store.positions("demo")[0]!.kronosDecision?.action, "SELL");
     assert.throws(
       () =>
         store.savePosition({
-          ...store.positions("paper")[0]!,
+          ...store.positions("demo")[0]!,
           strategy: "STANDARD",
         }),
       /STRATEGY/,
     );
     assert.equal(
-      positionViews(store.positions("paper"), [])[0]!.strategicExitAuthority,
+      positionViews(store.positions("demo"), [])[0]!.strategicExitAuthority,
       "KRONOS",
     );
   } finally {
@@ -905,7 +765,7 @@ test("history strategy filter precedes pagination and legacy rows default to STA
       const p = {
         ...position(),
         id: String(n),
-        mode: "paper" as const,
+        mode: "demo" as const,
         state: "CLOSED" as const,
         quantity: "0",
         entryAt: n,
@@ -915,12 +775,12 @@ test("history strategy filter precedes pagination and legacy rows default to STA
     }
     assert.deepEqual(
       store
-        .history("paper", { strategy: "KRONOS", limit: 2, offset: 1 })
+        .history("demo", { strategy: "KRONOS", limit: 2, offset: 1 })
         .map((p) => p.id),
       ["3", "1"],
     );
     const legacy = position();
-    legacy.mode = "paper";
+    legacy.mode = "demo";
     legacy.state = "CLOSED";
     store.savePosition(legacy);
     store.db
@@ -930,7 +790,7 @@ test("history strategy filter precedes pagination and legacy rows default to STA
       .run(legacy.id);
     assert.equal(
       store
-        .history("paper", { strategy: "STANDARD" })
+        .history("demo", { strategy: "STANDARD" })
         .some((p) => p.id === legacy.id),
       true,
     );

@@ -1,36 +1,36 @@
-import { test, mock } from "node:test";
+import { Connection, VersionedTransaction } from "@solana/web3.js";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VersionedTransaction, Connection } from "@solana/web3.js";
-import { Executor } from "../src/executor.js";
+import { mock, test } from "node:test";
 import { Engine } from "../src/engine.js";
 import { JupiterExecutionProvider } from "../src/execution-provider.js";
-import { KronosLab, type LabInference } from "../src/kronos-lab.js";
-import { KronosStore } from "../src/kronos-store.js";
-import { KronosMarket, type LabMarket } from "../src/kronos-market.js";
+import { Executor } from "../src/executor.js";
+import { normalizeMarket } from "../src/gmgn.js";
 import {
-  KRONOS,
-  validateCandles,
   decideForecast,
-  paperFill,
+  KRONOS,
   markPrice,
+  paperFill,
+  validateCandles,
   validPrice,
   type Forecast,
   type LabCandle,
   type LabTrial,
 } from "../src/kronos-domain.js";
+import { KronosLab, type LabInference } from "../src/kronos-lab.js";
+import { KronosMarket, type LabMarket } from "../src/kronos-market.js";
+import { KronosStore } from "../src/kronos-store.js";
 import { kronosWorkerEnvironment } from "../src/kronos-worker.js";
-import { candidate, info, securityRaw, settings, MINT } from "./fixtures.js";
-import { mintFixture } from "./token-program-fixtures.js";
-import { TOKEN_PROGRAM_ID } from "../src/token-program.js";
 import {
-  parseMarketHistory,
   attemptFlow,
   oneShotStructure,
+  parseMarketHistory,
 } from "../src/market-history.js";
-import { normalizeMarket } from "../src/gmgn.js";
+import { TOKEN_PROGRAM_ID } from "../src/token-program.js";
+import { candidate, info, MINT, securityRaw, settings } from "./fixtures.js";
+import { mintFixture } from "./token-program-fixtures.js";
 function bars(tail = Math.floor(Date.now() / 60000) * 60000): LabCandle[] {
   return Array.from({ length: 40 }, (_, i) => ({
     at: tail - (40 - i) * 60000,

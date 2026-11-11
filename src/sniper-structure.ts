@@ -170,7 +170,7 @@ export class SniperStructure {
     );
     const flowRow = this.store.db
       .prepare("SELECT payload FROM candidate_flow_states WHERE mint=?")
-      .get(c.mint);
+      .get(this.store.candidateFlowKey(c.mint));
     let context: FlowObservation[] = [];
     if (flowRow) {
       try {

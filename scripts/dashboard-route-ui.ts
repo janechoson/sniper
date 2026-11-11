@@ -1,20 +1,18 @@
 /** Isolated route/request lifecycle verification. No production clients, credentials or retained artifacts. */
+import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { chromium } from "@playwright/test";
-import { startServer } from "../src/server.js";
-import { Engine } from "../src/engine.js";
-import { TradingMemory } from "../src/trading-memory.js";
+import { basename, dirname, join, resolve } from "node:path";
 import { env } from "../src/config.js";
-import { provider, position } from "../tests/fixtures.js";
+import { Engine } from "../src/engine.js";
+import { startServer } from "../src/server.js";
+import { position, provider } from "../tests/fixtures.js";
 
 const dir = mkdtempSync(join(tmpdir(), "dashboard-routes-ui-"));
 const heavy = { status: 0, statistics: 0, memory: 0 };
 const status = Engine.prototype.status,
-  statistics = Engine.prototype.analytics,
-  memory = TradingMemory.prototype.report;
+  statistics = Engine.prototype.analytics;
 Engine.prototype.status = async function () {
   heavy.status++;
   return status.call(this);
@@ -23,10 +21,7 @@ Engine.prototype.analytics = function (...args) {
   heavy.statistics++;
   return statistics.apply(this, args);
 };
-TradingMemory.prototype.report = function (...args) {
-  heavy.memory++;
-  return memory.apply(this, args);
-};
+
 let app: Awaited<ReturnType<typeof startServer>> | undefined, browser;
 const matrix: Record<string, string[]> = {};
 const counts: Record<string, Record<string, number>> = {};
@@ -86,8 +81,6 @@ try {
     "/settings": "/api/settings",
     "/logs": "/api/logs",
     "/thongke": "/api/statistics",
-    "/watchlist": "/api/watchlist",
-    "/deferred": "/api/deferred",
   };
   for (const [route, endpoint] of Object.entries(pages)) {
     const page = await browser.newPage({
@@ -337,7 +330,6 @@ try {
   await app?.stop();
   Engine.prototype.status = status;
   Engine.prototype.analytics = statistics;
-  TradingMemory.prototype.report = memory;
   assert.equal(dirname(resolve(dir)), resolve(tmpdir()));
   assert.ok(basename(dir).startsWith("dashboard-routes-ui-"));
   rmSync(dir, {

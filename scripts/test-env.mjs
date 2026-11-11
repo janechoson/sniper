@@ -32,7 +32,7 @@ globalThis.fetch = (url, options) => {
   return fixtureFetch(url, options);
 };
 Object.assign(process.env, {
-  TRADING_MODE: "paper",
+  TRADING_MODE: "demo",
   LIVE_TRADING_ACK: "false",
   TEMP_BYPASS_RECOVERY_GUARD: "false",
   LIVE_SMOKE_TEST_ACK: "false",

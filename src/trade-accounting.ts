@@ -254,7 +254,7 @@ export function makeFillAccounting(
         ? (-sol - BigInt(e.intent.amount) - fee - rent).toString()
         : null,
     feeScope:
-      e.intent.mode === "paper"
+      e.intent.mode !== "live"
         ? "SIMULATED_NETWORK_TOTAL"
         : "IDENTIFIED_NETWORK_TOTAL",
     priorityFeeLamports: null,
@@ -267,9 +267,11 @@ export function makeFillAccounting(
     priceSol,
     priceUsd,
     provenance:
-      e.intent.mode === "paper"
-        ? "PAPER_RECONCILED_FILL"
-        : "RECONCILED_EXACT_IN_AND_TRANSACTION_BALANCES",
+      e.intent.mode === "demo"
+        ? "DEMO_QUOTE_ESTIMATED_FILL"
+        : e.intent.mode === "paper"
+          ? "PAPER_RECONCILED_FILL"
+          : "RECONCILED_EXACT_IN_AND_TRANSACTION_BALANCES",
   };
 }
 
@@ -364,7 +366,7 @@ export function tradeAccounting(p: Position, executions: Execution[]) {
           ? solUsd(BigInt(e.failedFeeLamports), e.fx ?? null)
           : null),
       source:
-        e.intent.mode === "paper"
+        e.intent.mode !== "live"
           ? "SIMULATED_NETWORK_TOTAL"
           : "RECEIPT_NETWORK_TOTAL_INCLUDES_PRIORITY",
       fx: e.fx ?? e.accounting?.fx ?? null,

@@ -1,27 +1,29 @@
-import { readFileSync } from "node:fs";
-import { UNSIGNED_EXECUTION_TIMEOUT_MS } from "./execution-deadline.js";
 import {
+  ComputeBudgetProgram,
   Keypair,
   PublicKey,
-  VersionedTransaction,
-  TransactionMessage,
-  SystemProgram,
   SystemInstruction,
-  ComputeBudgetProgram,
+  SystemProgram,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { env } from "./config.js";
+import { Blocked, CandidateRejected } from "./domain.js";
+import { validateQuote, type ExecutionQuote } from "./execution-quote.js";
+import { SOL } from "./gmgn.js";
+import { JupiterQuotes } from "./jupiter-quotes.js";
+import { Solana } from "./solana.js";
 import {
   inspectMint,
-  requireCompatibleToken,
-  tokenAccountAddress,
   inspectTokenAccount,
+  requireCompatibleToken,
   TOKEN_2022_PROGRAM_ID,
+  tokenAccountAddress,
 } from "./token-program.js";
-import { Blocked, CandidateRejected, ProviderFailure } from "./domain.js";
-import { SOL } from "./gmgn.js";
-import { Solana } from "./solana.js";
-import { Http, deepFreeze, sleep, type Health } from "./util.js";
+import { sleep, type Health } from "./util.js";
+export { validateQuote, type ExecutionQuote } from "./execution-quote.js";
 
 const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 export function base58(bytes: Uint8Array): string {
@@ -76,64 +78,6 @@ export function localWallet(): Keypair {
     throw new Blocked("INVALID_SOLANA_SIGNING_KEY");
   }
 }
-const atomic = z.string().regex(/^[1-9]\d*$/);
-const orderSchema = z.object({
-  priceImpactPct: z.preprocess((v) => {
-    if ((typeof v !== "number" && typeof v !== "string") || v === "")
-      return undefined;
-    const n = Number(v);
-    return Number.isFinite(n) && n >= 0 ? n : undefined;
-  }, z.coerce.number().finite().nonnegative().optional()),
-  inputMint: z.string(),
-  outputMint: z.string(),
-  inAmount: atomic,
-  outAmount: atomic,
-  otherAmountThreshold: atomic,
-  swapMode: z.literal("ExactIn"),
-  slippageBps: z.number().int().min(0).max(10000),
-  taker: z
-    .string()
-    .nullish()
-    .transform((v) => v ?? ""),
-  router: z.literal("metis"),
-  transaction: z
-    .string()
-    .nullish()
-    .transform((v) => v ?? ""),
-  requestId: z.string().default(""),
-  signatureFeeLamports: z.number().int().nonnegative().safe().default(0),
-  prioritizationFeeLamports: z.number().int().nonnegative().safe().default(0),
-  rentFeeLamports: z.number().int().nonnegative().safe().default(0),
-  signatureFeePayer: z
-    .string()
-    .nullish()
-    .transform((v) => v ?? ""),
-  lastValidBlockHeight: z.string().optional(),
-  expireAt: z.string().optional(),
-  routePlan: z
-    .array(
-      z.object({
-        swapInfo: z.object({
-          label: z.string(),
-          inputMint: z.string(),
-          outputMint: z.string(),
-        }),
-      }),
-    )
-    .min(1),
-});
-export interface ExecutionQuote {
-  provider: "JUPITER";
-  chain: "solana";
-  wallet: string;
-  mint: string;
-  side: "BUY" | "SELL";
-  routeOnly?: boolean;
-  amount: string;
-  at: number;
-  maxSlippageBps: number;
-  order: z.infer<typeof orderSchema>;
-}
 export interface SolanaExecutionProvider {
   readonly health: Health;
   getWalletBalance(): Promise<bigint>;
@@ -156,68 +100,6 @@ export interface SolanaExecutionProvider {
   ): Promise<string>;
   confirm(signature: string): Promise<"CONFIRMED" | "FAILED" | "UNKNOWN">;
 }
-export function validateQuote(
-  q: ExecutionQuote,
-  expected: {
-    mint: string;
-    side: "BUY" | "SELL";
-    amount: bigint;
-    wallet: string;
-    slippageBps: number;
-    routeOnly?: boolean;
-  },
-  now = Date.now(),
-) {
-  const o = orderSchema.parse(q.order);
-  const buy = expected.side === "BUY";
-  if (
-    q.chain !== "solana" ||
-    q.provider !== "JUPITER" ||
-    q.wallet !== expected.wallet ||
-    !!q.routeOnly !== !!expected.routeOnly ||
-    (!expected.routeOnly &&
-      (o.taker !== expected.wallet ||
-        o.signatureFeePayer !== expected.wallet ||
-        !o.transaction ||
-        !o.requestId))
-  )
-    throw new Blocked("QUOTE_CHAIN_OR_WALLET_MISMATCH");
-  if (
-    q.mint !== expected.mint ||
-    q.side !== expected.side ||
-    o.inputMint !== (buy ? SOL : expected.mint) ||
-    o.outputMint !== (buy ? expected.mint : SOL) ||
-    expected.mint === SOL
-  )
-    throw new Blocked("QUOTE_MINT_OR_DIRECTION_MISMATCH");
-  if (
-    q.amount !== expected.amount.toString() ||
-    o.inAmount !== q.amount ||
-    expected.amount <= 0n
-  )
-    throw new Blocked("QUOTE_AMOUNT_MISMATCH");
-  if (
-    o.slippageBps > expected.slippageBps ||
-    q.maxSlippageBps !== expected.slippageBps ||
-    BigInt(o.otherAmountThreshold) > BigInt(o.outAmount) ||
-    BigInt(o.otherAmountThreshold) <
-      (BigInt(o.outAmount) * BigInt(10000 - expected.slippageBps)) / 10000n
-  )
-    throw new Blocked("QUOTE_SLIPPAGE_MISMATCH");
-  if (
-    now - q.at > 20000 ||
-    q.at > now + 1000 ||
-    (o.expireAt &&
-      (!Number.isFinite(Date.parse(o.expireAt)) ||
-        Date.parse(o.expireAt) <= now))
-  )
-    throw new CandidateRejected("QUOTE_STALE");
-  if (
-    !o.routePlan.some((r) => r.swapInfo.inputMint === o.inputMint) ||
-    !o.routePlan.some((r) => r.swapInfo.outputMint === o.outputMint)
-  )
-    throw new Blocked("QUOTE_ROUTE_MISMATCH");
-}
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ATA = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
@@ -226,14 +108,15 @@ function associated(wallet: PublicKey, mint: PublicKey, program = TOKEN) {
 }
 
 /** Jupiter builds/lands; signing stays here. RPC is used only for wallet checks/simulation/confirmation. */
-export class JupiterExecutionProvider implements SolanaExecutionProvider {
-  readonly http = new Http("JUPITER", 2200, UNSIGNED_EXECUTION_TIMEOUT_MS);
-  get health() {
-    return this.http.health;
-  }
+export class JupiterExecutionProvider
+  extends JupiterQuotes
+  implements SolanaExecutionProvider
+{
   private readonly checked = new WeakSet<ExecutionQuote>();
   private readonly consumed = new WeakSet<ExecutionQuote>();
-  constructor(readonly rpc: Solana) {}
+  constructor(readonly rpc: Solana) {
+    super(env.WALLET_PUBLIC_KEY);
+  }
   getWalletBalance() {
     return this.rpc.balance(env.WALLET_PUBLIC_KEY);
   }
@@ -247,101 +130,6 @@ export class JupiterExecutionProvider implements SolanaExecutionProvider {
     routeOnly = false,
   ) {
     return this.quote(mint, amount, slippageBps, "SELL", routeOnly);
-  }
-  private headers(): Record<string, string> {
-    return env.JUPITER_API_KEY ? { "x-api-key": env.JUPITER_API_KEY } : {};
-  }
-  private async quote(
-    mint: string,
-    amount: bigint,
-    slippageBps: number,
-    side: "BUY" | "SELL",
-    routeOnly = false,
-  ): Promise<ExecutionQuote> {
-    new PublicKey(mint);
-    new PublicKey(env.WALLET_PUBLIC_KEY);
-    if (amount <= 0n) throw new Blocked("INVALID_SWAP_AMOUNT");
-    const params = new URLSearchParams({
-      inputMint: side === "BUY" ? SOL : mint,
-      outputMint: side === "BUY" ? mint : SOL,
-      amount: amount.toString(),
-      taker: env.WALLET_PUBLIC_KEY,
-      swapMode: "ExactIn",
-      slippageBps: String(slippageBps),
-      excludeRouters: "jupiterz,dflow,okx",
-      maxSupportedTransactionVersion: "0",
-      priorityFeeLamports: "100000",
-      broadcastFeeType: "maxCap",
-    });
-    if (routeOnly) params.delete("taker");
-    let raw: unknown;
-    try {
-      raw = await this.http.request(
-        "https://api.jup.ag/swap/v2/order?" + params,
-        { headers: this.headers() },
-      );
-    } catch (error) {
-      if (
-        error instanceof Blocked &&
-        ["JUPITER_HTTP_400", "JUPITER_HTTP_404", "JUPITER_HTTP_422"].includes(
-          error.code,
-        )
-      )
-        throw new CandidateRejected(
-          side === "BUY" ? "NO_BUY_ROUTE" : "NO_SELL_ROUTE",
-          { mint, side },
-        );
-      throw error;
-    }
-    const error = z
-      .object({
-        errorCode: z.number().optional(),
-        router: z.string().optional(),
-      })
-      .passthrough()
-      .safeParse(raw);
-    if (error.success && error.data.errorCode) {
-      if (error.data.errorCode === 3 && error.data.router === "metis")
-        throw new CandidateRejected("CONTROLLED_PRINCIPAL_CAP", {
-          mint,
-          amount: amount.toString(),
-          reason: "Route minimum/gasless requirement; amount never increased",
-        });
-      throw new ProviderFailure(
-        "JUPITER_BUILD_ERROR_" + error.data.errorCode,
-        "JUPITER",
-      );
-    }
-    const parsed = orderSchema.safeParse(raw);
-    if (!parsed.success) {
-      if (raw && typeof raw === "object" && "error" in raw)
-        throw new CandidateRejected(
-          side === "BUY" ? "NO_BUY_ROUTE" : "NO_SELL_ROUTE",
-          { mint, side },
-        );
-      throw new ProviderFailure("JUPITER_INVALID_RESPONSE", "JUPITER");
-    }
-    const q: ExecutionQuote = deepFreeze({
-      provider: "JUPITER",
-      chain: "solana",
-      wallet: env.WALLET_PUBLIC_KEY,
-      mint,
-      side,
-      routeOnly,
-      amount: amount.toString(),
-      maxSlippageBps: slippageBps,
-      at: Date.now(),
-      order: parsed.data,
-    });
-    validateQuote(q, {
-      mint,
-      side,
-      amount,
-      wallet: env.WALLET_PUBLIC_KEY,
-      slippageBps,
-      routeOnly,
-    });
-    return q;
   }
   private validate(q: ExecutionQuote) {
     validateQuote(q, {

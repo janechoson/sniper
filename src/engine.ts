@@ -1,86 +1,76 @@
-import { PositionCollector } from "./position-collector.js";
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { CandidateAttempts } from "./candidate-attempt.js";
-import { oneShotEntry } from "./one-shot-entry.js";
-import { tradeAccounting } from "./trade-accounting.js";
+import { CandidateLifecycle } from "./candidate-lifecycle.js";
+import { CapitalFlowEngine } from "./capital-flow.js";
 import {
-  evaluateExitSafety,
-  exitEvidenceKey,
-  exitPriority,
-  validProtection,
-  protectiveRetry,
-  routeMateriallyChanged,
-  securityRecoveryConfirmed,
-} from "./exit-safety.js";
-import { PositionHistoryMonitor } from "./position-history-monitor.js";
-import type { MarketHistory } from "./market-history.js";
-import { parseMarketHistory } from "./market-history.js";
-import { smartMoneySupport, unavailableSmartMoney } from "./smart-money.js";
-import {
-  env,
   defaultSettings,
+  env,
   settingsSchema,
   type Settings,
 } from "./config.js";
+import type { ControlledSession } from "./controlled-session.js";
+import { captureDemoBalance } from "./demo-account-view.js";
+import { DemoLedger } from "./demo-ledger.js";
+import { DiscoveryCoordinator } from "./discovery.js";
+import type {
+  ExitOpportunity,
+  ManualExitRequest,
+  Market,
+  Security,
+} from "./domain.js";
 import {
   Blocked,
   CandidateRejected,
   ProviderFailure,
   type FailureInfo,
   type FailureStage,
-  type RiskResult,
   type Position,
+  type RiskResult,
 } from "./domain.js";
-import { Store } from "./store.js";
-import { Gmgn, normalizeMarket, numberEvidence, record, SOL } from "./gmgn.js";
-import type { ControlledSession } from "./controlled-session.js";
-import { TradingMemory } from "./trading-memory.js";
-import { Jev } from "./jev.js";
-import { Solana } from "./solana.js";
 import type { SolanaExecutionProvider } from "./execution-provider.js";
 import { Executor } from "./executor.js";
+import { ExitLiquidityMonitor } from "./exit-feasibility.js";
 import {
-  RiskEngine,
-  decision,
-  size,
-  paperValue,
-  protectiveExitDecision,
-} from "./risk.js";
-import { sleep, safeError } from "./util.js";
-import { canBypassRecovery } from "./recovery-guard.js";
-import { CandidateLifecycle } from "./candidate-lifecycle.js";
-import { failureInfo, ProviderFailures } from "./failures.js";
-import { positionViews } from "./position-view.js";
+  evaluateExitSafety,
+  exitPriority,
+  protectiveRetry,
+  securityRecoveryConfirmed,
+  validProtection,
+} from "./exit-safety.js";
+import { ProviderFailures, failureInfo } from "./failures.js";
 import { flowView } from "./flow-view.js";
-import { randomUUID } from "node:crypto";
-import { CapitalFlowEngine } from "./capital-flow.js";
-import {
-  SniperStructure,
-  entrySource,
-  hasEntryWatchEligibility,
-} from "./sniper-structure.js";
-import { runtimeInfo } from "./runtime-info.js";
-import { currentStructureEvidence } from "./structure-evidence.js";
-import { DiscoveryCoordinator, discoveryContext } from "./discovery.js";
-import {
-  ExitLiquidityMonitor,
-  exitLiquidityContext,
-} from "./exit-feasibility.js";
-import type {
-  ManualExitRequest,
-  ExitOpportunity,
-  JevExitDecision,
-  Market,
-  Security,
-} from "./domain.js";
-import { JevExitScheduler, type ExitJob } from "./jev-exit-scheduler.js";
+import { Gmgn, SOL, normalizeMarket } from "./gmgn.js";
+import type { QuoteSource } from "./jupiter-quotes.js";
 import {
   KronosStrategy,
   type KronosDecisionStrategy,
 } from "./kronos-strategy.js";
 import { KronosWorker } from "./kronos-worker.js";
+import type { MarketHistory } from "./market-history.js";
+import { parseMarketHistory } from "./market-history.js";
+import { oneShotEntry } from "./one-shot-entry.js";
+import { PositionCollector } from "./position-collector.js";
+import { PositionHistoryMonitor } from "./position-history-monitor.js";
+import { positionViews } from "./position-view.js";
+import {
+  RiskEngine,
+  decision,
+  paperValue,
+  protectiveExitDecision,
+  size,
+} from "./risk.js";
+import { runtimeInfo } from "./runtime-info.js";
+import {
+  SniperStructure,
+  hasEntryWatchEligibility,
+} from "./sniper-structure.js";
+import { Solana } from "./solana.js";
+import { Store } from "./store.js";
 import { assertStrategySell } from "./strategy-authority.js";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { tradeAccounting } from "./trade-accounting.js";
+import { safeError, sleep } from "./util.js";
 export class Engine {
   readonly kronos: KronosDecisionStrategy;
   private kronosJobs = new Map<string, Promise<void>>();
@@ -101,21 +91,19 @@ export class Engine {
   }
   readonly gmgn: Gmgn;
   readonly rpc: Solana;
-  readonly jev: Jev;
   readonly risk = new RiskEngine();
-  readonly memory: TradingMemory;
   readonly executor: Executor;
   readonly candidates: CandidateLifecycle;
   readonly attempts: CandidateAttempts;
   readonly collector = new PositionCollector(
     () => this.settings.positionCollectorConcurrency,
   );
-  readonly exitScheduler: JevExitScheduler;
   readonly positionHistory: PositionHistoryMonitor;
   readonly capitalFlow: CapitalFlowEngine;
   readonly discovery: DiscoveryCoordinator;
   readonly exitLiquidity: ExitLiquidityMonitor;
   private discoveryTimer?: NodeJS.Timeout;
+  private demoBalanceTimer?: NodeJS.Timeout;
   private analysisStarts: Array<{
     at: number;
     source: string;
@@ -163,8 +151,8 @@ export class Engine {
     providers?: {
       gmgn?: Gmgn;
       rpc?: Solana;
-      jev?: Jev;
       execution?: SolanaExecutionProvider;
+      demoQuotes?: QuoteSource;
       controlled?: ControlledSession;
       kronos?: KronosDecisionStrategy;
     },
@@ -184,15 +172,14 @@ export class Engine {
       );
     this.gmgn = providers?.gmgn ?? new Gmgn();
     this.rpc = providers?.rpc ?? new Solana();
-    this.jev = providers?.jev ?? new Jev();
-    this.memory = new TradingMemory(store);
     this.executor = new Executor(
       store,
       this.gmgn,
       this.rpc,
       providers?.execution,
-      this.memory,
+      undefined,
       providers?.controlled,
+      providers?.demoQuotes,
     );
     this.settings = settingsSchema.parse(
       store.get("strategyV2") ?? defaultSettings(),
@@ -225,8 +212,13 @@ export class Engine {
         const current = this.store.positions(p.mode).find((x) => x.id === p.id),
           market = this.store.latest<Market>("position_market", p.mint),
           security = this.store.latest<Security>("position_security", p.mint);
-        if (current && market && security)
-          this.scheduleExitAnalysis(current, market, security, {});
+        if (current && market && security) {
+          const history = this.store.latest<MarketHistory>(
+            "position_history",
+            current.mint,
+          );
+          if (history) this.scheduleKronosPosition(current, history);
+        }
       },
     );
     this.flowStartId = Number(
@@ -239,7 +231,6 @@ export class Engine {
     };
     this.store.migrateManualRequests();
     this.store.migrateExitOpportunities();
-    this.store.migrateJevExitPolicy();
     this.store.migrateSellSafetyV2(this.settings.maxSnapshotAgeMs);
     // Unsigned decisions are observations, never executable restart orders.
     for (const p of this.store.managedPositions(env.TRADING_MODE)) {
@@ -253,33 +244,8 @@ export class Engine {
         p.pendingExits?.filter((x) => x.kind === "STRATEGIC") ?? [];
       if (!strategic.length) continue;
       p.pendingExits = p.pendingExits!.filter((x) => x.kind !== "STRATEGIC");
-      if (p.jevExit) {
-        p.jevExit.status = "CANCELLED";
-        this.store.saveJevExit(p.jevExit);
-      }
       this.store.savePosition(p);
     }
-    this.exitScheduler = new JevExitScheduler(
-      this.jev,
-      () => this.settings,
-      (d, job) => {
-        try {
-          this.applyExitDecision(d, job);
-        } catch {
-          this.store.halt("Jev exit decision persistence failed", "SYSTEM");
-        }
-      },
-      (job) =>
-        this.store
-          .managedPositions(env.TRADING_MODE)
-          .some(
-            (p) =>
-              p.id === job.positionId &&
-              p.strategy !== "KRONOS" &&
-              p.state === "OPEN" &&
-              p.quantity === job.quantity,
-          ),
-    );
     this.positionHistory = new PositionHistoryMonitor(
       this.gmgn,
       (p, h, error) => {
@@ -287,13 +253,9 @@ export class Engine {
           this.store.pipelineEvent("POSITION_STRUCTURE_UNAVAILABLE", p.mint, {
             positionId: p.id,
           });
-        if (p.strategy !== "KRONOS")
-          this.updateExitSafety(p.id, { history: h, replaceHistory: true });
         const current = this.store
-            .managedPositions(p.mode)
-            .find((x) => x.id === p.id),
-          m = this.store.latest<Market>("position_market", p.mint),
-          sec = this.store.latest<Security>("position_security", p.mint);
+          .managedPositions(p.mode)
+          .find((x) => x.id === p.id);
         if (current?.strategy === "KRONOS") {
           if (h) {
             this.store.record("position_history", p.mint, h);
@@ -301,7 +263,6 @@ export class Engine {
           }
           return;
         }
-        if (current && m && sec) this.scheduleExitAnalysis(current, m, sec, {});
       },
       (p) =>
         this.store
@@ -328,19 +289,11 @@ export class Engine {
         throw new Blocked("MISSING_WALLET_PUBLIC_KEY");
       return this.rpc.balance(env.WALLET_PUBLIC_KEY);
     }
-    let cash = this.store.get<string>("paperCash");
-    if (cash === undefined) {
-      let initial: bigint;
-      let source = "SIMULATED";
-      if (env.WALLET_PUBLIC_KEY) {
-        initial = await this.rpc.balance(env.WALLET_PUBLIC_KEY);
-        source = "PAPER_INITIALIZED_FROM_REAL_BALANCE";
-      } else initial = BigInt(Math.floor(env.PAPER_INITIAL_SOL * 1e9));
-      cash = initial.toString();
-      this.store.set("paperCash", cash);
-      this.store.set("paperBalanceSource", source);
-    }
-    return BigInt(cash);
+    if (env.TRADING_MODE !== "demo")
+      throw new Blocked("LEGACY_PAPER_SESSION_DISABLED");
+    const ledger = new DemoLedger(this.store.db);
+    ledger.initialize();
+    return ledger.balance();
   }
   async start() {
     this.stopping = false;
@@ -357,17 +310,30 @@ export class Engine {
             ),
         )
     )
-      this.store.halt(
+      this.store.reportFailure(
         "Legacy open positions require review before Jupiter migration",
       );
     if (env.TRADING_MODE === "live" && env.WALLET_PUBLIC_KEY) {
       try {
         await this.monitor();
       } catch {
-        this.store.halt("Wallet/open-position recovery is unavailable");
+        this.store.reportFailure(
+          "Wallet/open-position recovery is unavailable",
+        );
       }
     }
     this.running = true;
+    if (env.TRADING_MODE === "demo") {
+      captureDemoBalance(this);
+      this.demoBalanceTimer = setInterval(() => {
+        try {
+          captureDemoBalance(this);
+        } catch {
+          this.store.event("DEMO_VALUATION_UNAVAILABLE");
+        }
+      }, 60000);
+    }
+
     this.exitTimer = setInterval(() => {
       void this.processExits();
       if (env.TRADING_MODE === "live") void this.exitLiquidity.pump();
@@ -394,10 +360,10 @@ export class Engine {
     if (this.timer) clearTimeout(this.timer);
     if (this.exitTimer) clearInterval(this.exitTimer);
     if (this.discoveryTimer) clearInterval(this.discoveryTimer);
+    if (this.demoBalanceTimer) clearInterval(this.demoBalanceTimer);
     await this.discovery.stop();
     await this.exitLiquidity.stop();
     await this.positionHistory.stop();
-    await this.exitScheduler.stop();
     await Promise.all(this.kronosJobs.values());
     await this.gmgn.coordinator.stop();
     await this.settleEntryEvaluations();
@@ -414,7 +380,6 @@ export class Engine {
   }
   dismissPosition(id: string) {
     const p = this.store.dismissPosition(id, env.TRADING_MODE);
-    this.exitScheduler.remove(id);
     this.exitLiquidity.prune(
       this.store.managedPositions(env.TRADING_MODE).map((p) => p.id),
     );
@@ -520,20 +485,10 @@ export class Engine {
       this.structure.invalidate(mint, r.reason);
     if (updateLifecycle) this.candidates.decision(mint, r);
     this.store.db
-      .prepare("UPDATE tokens SET processed=1 WHERE mint=?")
-      .run(mint);
+      .prepare("UPDATE mode_tokens SET processed=1 WHERE mode=? AND mint=?")
+      .run(env.TRADING_MODE, mint);
     this.store.record("risk_decisions", mint, { ...r, mode: env.TRADING_MODE });
     this.store.record("decisions", mint, { ...r, mode: env.TRADING_MODE });
-    const learning = this.store.latest<Record<string, unknown>>(
-      "learning_decision_log",
-      mint,
-    );
-    if (learning)
-      this.store.record("learning_decision_audit", mint, {
-        ...learning,
-        riskOutcome: r.outcome,
-        riskReason: r.reason,
-      });
     this.store.event(
       r.allowed
         ? "RISK_ALLOW"
@@ -644,10 +599,17 @@ export class Engine {
     }
     if (info.scope === "SYSTEM" || info.scope === "TRANSACTION") {
       this.store.record("scoped_failures", mint, info);
-      this.store.halt(`${info.scope} failure: ${info.code}`, info.scope);
+      this.store.reportFailure(
+        `${info.scope} failure: ${info.code}`,
+        info.scope,
+      );
       this.lastError = info.code;
       if (position) this.positionIssue(position, info);
-      return false;
+      if (!position && mint && !submitted) {
+        this.candidates.fail(info);
+        this.saveDecision(mint, decision("SKIP_MARKET", info.code), false);
+      }
+      return true;
     }
     if (position) this.positionIssue(position, info);
     else if (!mint) {
@@ -782,10 +744,13 @@ export class Engine {
   private analyzing = new Set<string>();
   private watchObserving = false;
   private watchAttempts = new Map<string, number>();
-  private watchRefresh = { success: 0, deferred: 0, feedReused: 0 };
   /** Legacy API retained; candidate watches never collect or retry. */
   async observeStructureWatches() {}
   async analyze(mint: string) {
+    if (this.settings.tokenBlacklist.includes(mint)) {
+      this.candidates.finish(mint);
+      return;
+    }
     if (this.analyzing.has(mint) || this.attempts.current?.result === "RUNNING")
       return;
     const candidate = this.store.token(mint);
@@ -984,12 +949,6 @@ export class Engine {
                 Number(previousFlow !== saved.flow.signalKey);
               saved.flowUpdatedAt = saved.flow.at;
               saved.securityUpdatedAt = sec.at;
-              if (saved.strategy !== "KRONOS")
-                saved.runner = this.memory.runner.observe(
-                  saved,
-                  market,
-                  saved.flow,
-                );
               this.store.savePosition(saved);
               this.updateExitSafety(saved.id, { market, security: sec });
               Object.assign(
@@ -998,13 +957,6 @@ export class Engine {
               );
               if (env.TRADING_MODE === "live")
                 this.exitLiquidity.schedule(saved);
-              if (saved.strategy !== "KRONOS")
-                this.memory.observe(saved, market, sec, value, {
-                  holderCount: numberEvidence(record(info).holder_count),
-                  smartMoney: numberEvidence(
-                    record(record(info).wallet_tags_stat).smart_wallets,
-                  ),
-                });
               const protective = protectiveExitDecision(
                 saved,
                 value,
@@ -1018,11 +970,11 @@ export class Engine {
                 },
               );
               if (protective) this.rememberProtection(saved, protective.reason);
-              // Jev remains independently observable even while a higher authority owns execution.
-              this.scheduleExitAnalysis(saved, market, sec, info);
-              // Optional enrichment never delays price/flow/security collection.
-              if (saved.strategy !== "KRONOS")
-                this.collectPositionSmartMoney(saved);
+              const history = this.store.latest<MarketHistory>(
+                "position_history",
+                saved.mint,
+              );
+              if (history) this.scheduleKronosPosition(saved, history);
             } catch (error) {
               const current = this.store
                 .positions(p.mode)
@@ -1036,27 +988,6 @@ export class Engine {
           }),
         );
       await Promise.all(collection);
-      for (const item of this.memory.counterfactualDue(env.TRADING_MODE)) {
-        this.store.set("learningPostAttempt:" + item.id, Date.now());
-        try {
-          this.memory.observeAfterExit(
-            item.id,
-            normalizeMarket(
-              await this.gmgn.info(item.outcome.mint, 30000, {
-                priority: 5,
-                consumer: "post-exit-observation",
-                staleMs: 45000,
-              }),
-            ),
-          );
-        } catch {
-          this.store.event(
-            "LEARNING_OBSERVATION_UNAVAILABLE",
-            item.outcome.mint,
-            "Optional post-exit GMGN observation unavailable",
-          );
-        }
-      }
     } finally {
       this.monitoring--;
       if (this.running) void this.processExits();
@@ -1361,459 +1292,6 @@ export class Engine {
     })().finally(() => this.kronosJobs.delete(p.id));
     this.kronosJobs.set(p.id, job);
   }
-  private scheduleExitAnalysis(
-    p: Position,
-    market: Market,
-    security: Security,
-    info: unknown,
-  ) {
-    if (p.strategy === "KRONOS") {
-      const history = this.store.latest<MarketHistory>(
-        "position_history",
-        p.mint,
-      );
-      if (history) this.scheduleKronosPosition(p, history);
-      return;
-    }
-    if (
-      p.dismissal ||
-      !this.store.positionManaged(p.id, p.mode) ||
-      !p.lastValueLamports
-    )
-      return;
-    const previous = p.jevExit,
-      at = Date.now(),
-      last = this.exitScheduled.get(p.id) ?? previous?.createdAt ?? 0;
-    const accounting = tradeAccounting(p, this.store.executions());
-    const pnl = accounting.grossPnlPct ?? 0; // Scheduling priority only; JEV receives explicit nullable accounting.
-    const retracement =
-      100 *
-      (1 -
-        Number(p.lastValueLamports) /
-          Math.max(1, Number(p.grossHighWaterLamports ?? p.lastValueLamports)));
-    const liquidity =
-      market.liquidity.state === "KNOWN" ? market.liquidity.value : null;
-    const volume = market.volume.state === "KNOWN" ? market.volume.value : null;
-    const buyPressure =
-      market.buys.state === "KNOWN" &&
-      market.sells.state === "KNOWN" &&
-      market.buys.value + market.sells.value > 0
-        ? market.buys.value / (market.buys.value + market.sells.value)
-        : null;
-    const changed =
-      previous &&
-      (routeMateriallyChanged(
-        previous.exitLiquidityEvidence,
-        p.exitLiquidity,
-        this.settings,
-      ) ||
-        previous.evidenceKey !== exitEvidenceKey(p, this.settings) ||
-        previous.quantity !== p.quantity ||
-        previous.observed?.exitLiquidityStatus !== p.exitLiquidity?.status ||
-        previous.observed?.trendingRank !==
-          this.store.token(p.mint)?.discovery?.trending?.rank ||
-        previous.positionRevision !== (p.decisionRevision ?? 0) ||
-        previous.flowSignalKey !== p.flow?.signalKey ||
-        Math.abs(pnl - (previous.observed?.pnlPercent ?? pnl)) >=
-          this.settings.jevExitMaterialPnlPoints ||
-        Math.abs(
-          retracement - (previous.observed?.retracementPercent ?? retracement),
-        ) >= this.settings.jevExitMaterialPnlPoints ||
-        (liquidity !== null &&
-          previous.observed?.liquidityUsd &&
-          Math.abs(liquidity / previous.observed.liquidityUsd - 1) >= 0.25) ||
-        (volume !== null &&
-          previous.observed?.volume24h &&
-          Math.abs(volume / previous.observed.volume24h - 1) >= 0.5) ||
-        (buyPressure !== null &&
-          previous.observed?.buyPressure !== null &&
-          previous.observed?.buyPressure !== undefined &&
-          Math.abs(buyPressure - previous.observed.buyPressure) >= 0.2));
-    if (
-      !this.exitScheduler.isActive(p.id) &&
-      (at - last < this.settings.jevExitMinIntervalMs ||
-        (!changed && at - last < this.settings.jevExitRecheckMs))
-    )
-      return;
-    const state = {
-      discovery: discoveryContext(
-        this.store.token(p.mint),
-        at,
-        this.settings.trendingFreshMs,
-        this.discovery.feeds.TRENDING,
-      ),
-      exitLiquidity: exitLiquidityContext(p, this.settings, at),
-      gmgnQuality: record(info)._gmgnSnapshot,
-      gmgnProvider: this.gmgn.coordinator.status().state,
-      currentPosition: {
-        positionId: p.id,
-        positionRevision: p.positionRevision,
-        marketRevision: p.marketRevision,
-        flowRevision: p.flowRevision,
-        quantityRevision: p.quantityRevision,
-        updatedAt: p.updatedAt,
-        marketUpdatedAt: p.marketUpdatedAt,
-        flowUpdatedAt: p.flowUpdatedAt,
-        securityUpdatedAt: p.securityUpdatedAt,
-        mint: p.mint,
-        symbol: p.symbol,
-        entryAt: p.entryAt,
-        ageMs: at - p.entryAt,
-        originalQuantity: p.originalQuantity,
-        remainingQuantity: p.quantity,
-        walletDebitLamports: p.costLamports,
-        remainingWalletDebitBasisLamports: p.remainingCostLamports,
-        entryPrincipalLamports: accounting.principalLamports,
-        remainingPrincipalLamports: accounting.remainingPrincipalLamports,
-        currentValueLamports: p.lastValueLamports,
-        realizedPnlLamports: accounting.grossRealizedPnlLamports,
-        unrealizedPnlLamports: accounting.grossUnrealizedPnlLamports,
-        totalPnlLamports: accounting.grossPnlLamports,
-        grossPnlSol:
-          accounting.grossPnlLamports === null
-            ? null
-            : Number(accounting.grossPnlLamports) / 1e9,
-        grossPnlPct: accounting.grossPnlPct,
-        feesPaidSol:
-          accounting.feesPaidLamports === null
-            ? null
-            : Number(accounting.feesPaidLamports) / 1e9,
-        feesPaidUsd: accounting.feesPaidUsd,
-        netPnlSol:
-          accounting.netPnlLamports === null
-            ? null
-            : Number(accounting.netPnlLamports) / 1e9,
-        netPnlPct: accounting.netPnlPct,
-        accounting,
-        mfePercent: p.grossMfePercent ?? null,
-        maePercent: p.grossMaePercent ?? null,
-        highWaterLamports: p.grossHighWaterLamports ?? null,
-        remainingExposureBps:
-          BigInt(p.originalQuantity) > 0n
-            ? Number((BigInt(p.quantity) * 10000n) / BigInt(p.originalQuantity))
-            : null,
-        previousPartialExits: p.runner?.partialExits,
-        executionHealth: p.attention,
-        previousDecision: p.jevExit
-          ? {
-              action: p.jevExit.action,
-              sellBps: p.jevExit.sellBps,
-              reason: p.jevExit.reason,
-              at: p.jevExit.createdAt,
-            }
-          : null,
-        pnlPercent: accounting.grossPnlPct,
-        retracementPercent: retracement,
-        // Compatibility for scoped fixture providers, never portfolio-wide authority.
-        id: p.id,
-        quantity: p.quantity,
-      },
-      currentToken: {
-        market,
-        security: { ...security, raw: undefined },
-        holderCount: numberEvidence(record(info).holder_count),
-        smartWalletCount: numberEvidence(
-          record(record(info).wallet_tags_stat).smart_wallets,
-        ),
-      },
-      capitalFlow: p.flow,
-      exitSafety: p.exitSafety,
-      smartMoneySupport:
-        this.settings.smartMoneyExitMode !== "OFF" &&
-        p.smartMoneySupport &&
-        p.smartMoneySupport.freshness === "FRESH" &&
-        p.smartMoneySupport.observedAt !== null &&
-        p.smartMoneySupport.observedAt <= at &&
-        at - p.smartMoneySupport.observedAt <= this.settings.maxSnapshotAgeMs
-          ? p.smartMoneySupport
-          : smartMoneySupport(unavailableSmartMoney(), p.mint, {
-              from: null,
-              to: at,
-              maxAgeMs: this.settings.maxSnapshotAgeMs,
-            }),
-      portfolioContext: {
-        openPositions: this.store
-          .positions(p.mode)
-          .filter((x) => x.state === "OPEN").length,
-        positionCountIsNotAnExitReason: true,
-      },
-      policy: {
-        stopLoss: false,
-        timeExit: false,
-        mandatoryTakeProfit: false,
-        profitCeiling: false,
-        predictExactTop: false,
-        referenceUnits: "percent",
-        missingDataIsNotZero: true,
-        takeProfitReferences: this.settings.takeProfits,
-        trailingReference: {
-          activationPercent: this.settings.trailingActivationBps / 100,
-          distancePercent: this.settings.trailingStopBps / 100,
-        },
-        safetyOverrides: true,
-      },
-    };
-    if (
-      this.exitScheduler.schedule({
-        strategy: p.strategy ?? "STANDARD",
-        positionId: p.id,
-        evidenceKey: exitEvidenceKey(p, this.settings),
-        exitLiquidityEvidence: p.exitLiquidity,
-        materialKey: JSON.stringify([
-          p.exitLiquidity?.levels.map((l) => l.minimumSolOut),
-          p.quantity,
-          p.decisionRevision,
-          p.flow?.signalKey,
-          exitEvidenceKey(p, this.settings),
-          Math.floor(pnl / this.settings.jevExitMaterialPnlPoints),
-          Math.floor(retracement / this.settings.jevExitMaterialPnlPoints),
-        ]),
-        revision: p.decisionRevision ?? 0,
-        flow: p.flow,
-        inputAt: at,
-        priceUsd:
-          market.price.state === "KNOWN" ? market.price.value : undefined,
-        mint: p.mint,
-        quantity: p.quantity,
-        value: p.lastValueLamports,
-        state,
-        priority:
-          Math.min(500, Math.abs(pnl)) +
-          retracement +
-          (previous?.flowSignalKey !== p.flow?.signalKey ? 100 : 0),
-        queuedAt: at,
-        observed: {
-          smartMoneyObservedAt: state.smartMoneySupport.observedAt,
-          smartMoneyStatus: state.smartMoneySupport.status,
-          exitLiquidityStatus: p.exitLiquidity?.status,
-          trendingRank: this.store.token(p.mint)?.discovery?.trending?.rank,
-          pnlPercent: pnl,
-          grossPnlKnown: accounting.grossPnlPct !== null,
-          mfePercent: p.mfePercent ?? 0,
-          retracementPercent: retracement,
-          liquidityUsd: liquidity,
-          volume24h: volume,
-          buyPressure,
-        },
-      })
-    )
-      this.exitScheduled.set(p.id, at);
-  }
-  private collectPositionSmartMoney(p: Position) {
-    if (
-      this.stopping ||
-      this.settings.smartMoneyExitMode === "OFF" ||
-      this.smartMoneyJobs.has(p.id)
-    )
-      return;
-    const work = (async () => {
-      const snapshot = await this.gmgn.smartMoneyFeed(
-        Math.min(30000, this.settings.maxSnapshotAgeMs),
-      );
-      if (this.stopping) return;
-      const current = this.store
-        .managedPositions(p.mode)
-        .find((x) => x.id === p.id);
-      if (
-        !current ||
-        current.state !== "OPEN" ||
-        current.mint !== p.mint ||
-        current.quantity !== p.quantity
-      )
-        return;
-      const now = Date.now();
-      const evidence = smartMoneySupport(snapshot, p.mint, {
-        from: Math.max(p.entryAt, now - this.settings.structureMaxGapMs),
-        to: now,
-        maxAgeMs: this.settings.maxSnapshotAgeMs,
-      });
-      const identity = (value: Position["smartMoneySupport"]) =>
-        JSON.stringify(
-          value ? [value.status, value.events, value.buys, value.sells] : null,
-        );
-      if (identity(current.smartMoneySupport) !== identity(evidence))
-        current.decisionRevision = (current.decisionRevision ?? 0) + 1;
-      current.smartMoneySupport = evidence;
-      this.store.savePosition(current);
-      const market = this.store.latest<Market>("position_market", current.mint);
-      const security = this.store.latest<Security>(
-        "position_security",
-        current.mint,
-      );
-      if (market && security)
-        this.scheduleExitAnalysis(current, market, security, {});
-    })()
-      .catch(() => {
-        /* Optional evidence cannot stop price collection. */
-      })
-      .finally(() => this.smartMoneyJobs.delete(p.id));
-    this.smartMoneyJobs.set(p.id, work);
-  }
-  private exitEvidenceChanged(d: JevExitDecision) {
-    const latest = this.store.latest<Market>("position_market", d.mint);
-    const security = this.store.latest<Security>("position_security", d.mint);
-    return (
-      routeMateriallyChanged(
-        d.exitLiquidityEvidence,
-        this.store
-          .positions(env.TRADING_MODE)
-          .find((p) => p.id === d.positionId)?.exitLiquidity,
-        this.settings,
-      ) ||
-      (d.evidenceKey !== undefined &&
-        (() => {
-          const p = this.store
-            .positions(env.TRADING_MODE)
-            .find((p) => p.id === d.positionId);
-          return !p || exitEvidenceKey(p, this.settings) !== d.evidenceKey;
-        })()) ||
-      (d.action !== "HOLD" &&
-        ["BUY_SUPPORT", "SELL_PRESSURE", "MIXED"].includes(
-          d.observed?.smartMoneyStatus ?? "",
-        ) &&
-        (d.observed?.smartMoneyObservedAt == null ||
-          d.observed.smartMoneyObservedAt > Date.now() ||
-          Date.now() - d.observed.smartMoneyObservedAt >
-            this.settings.maxSnapshotAgeMs)) ||
-      (latest?.price.state === "KNOWN" &&
-        d.inputPriceUsd !== undefined &&
-        d.inputPriceUsd > 0 &&
-        latest.at >= (d.inputAt ?? d.createdAt) &&
-        Math.abs(latest.price.value / d.inputPriceUsd - 1) * 100 >
-          this.settings.maxDecisionPriceMovePercent) ||
-      (security &&
-        security.at >= (d.inputAt ?? d.createdAt) &&
-        security.findings.some((f) => f.level === "CRITICAL"))
-    );
-  }
-  private applyExitDecision(d: JevExitDecision, job: ExitJob) {
-    const p = this.store
-      .positions(env.TRADING_MODE)
-      .find((x) => x.id === d.positionId);
-    if (p?.strategy === "KRONOS") return;
-    // An analyst failure is an observation, never a revocation of valid authority.
-    if (d.action === "NO_DECISION") {
-      this.store.saveJevExit(d);
-      if (p && !p.dismissal) {
-        p.lastAnalystAttempt = d;
-        this.store.savePosition(p);
-      }
-      this.store.pipelineEvent("JEV_NO_DECISION", d.mint, {
-        positionId: d.positionId,
-        state: d.decisionState,
-        reason: d.reason,
-        error: d.error,
-      });
-      return;
-    }
-    const signed = this.store
-      .pending()
-      .some((e) => e.intent.positionId === d.positionId && e.signature);
-    if (
-      !p ||
-      p.dismissal ||
-      p.state !== "OPEN" ||
-      p.mint !== d.mint ||
-      p.quantity !== d.quantity ||
-      (p.decisionRevision ?? 0) !== (d.positionRevision ?? 0) ||
-      (d.flowSignalKey !== undefined &&
-        p.flow?.signalKey !== d.flowSignalKey) ||
-      signed ||
-      this.exitEvidenceChanged(d) ||
-      (d.inputAt ?? job.queuedAt) > Date.now() ||
-      Date.now() - (d.inputAt ?? job.queuedAt) >
-        this.settings.jevExitDecisionMaxAgeMs ||
-      !p.lastQuoteAt ||
-      Date.now() - p.lastQuoteAt > this.settings.jevExitDecisionMaxAgeMs ||
-      Math.abs(
-        Number(p.lastValueLamports) /
-          Math.max(1, Number(d.inputValueLamports)) -
-          1,
-      ) *
-        100 >
-        this.settings.maxDecisionPriceMovePercent
-    ) {
-      d.status = "SUPERSEDED";
-      d.decisionState = "SUPERSEDED";
-      this.store.pipelineEvent("JEV_SUPERSEDED", d.mint, {
-        positionId: d.positionId,
-      });
-      this.exitMetrics.staleRejected++;
-      this.store.saveJevExit(d);
-      return;
-    }
-    this.store.atomic(() => {
-      if (d.action === "HOLD") this.exitMetrics.hold++;
-      else if (d.action === "FULL_SELL") this.exitMetrics.fullSell++;
-      else this.exitMetrics.partialSell++;
-      const meaningful =
-        !p.jevExit ||
-        p.jevExit.action !== d.action ||
-        p.jevExit.sellBps !== d.sellBps ||
-        p.jevExit.reason !== d.reason ||
-        p.jevExit.flowSignalKey !== d.flowSignalKey ||
-        Math.abs(p.jevExit.confidence - d.confidence) >= 0.15 ||
-        Math.abs(
-          (p.jevExit.observed?.pnlPercent ?? 0) - (d.observed?.pnlPercent ?? 0),
-        ) >= this.settings.jevExitMaterialPnlPoints;
-      const last = p.lastStrategicExit;
-      if (
-        d.action !== "HOLD" &&
-        last &&
-        (Date.now() - last.at < this.settings.jevExitTradeCooldownMs ||
-          (d.flowSignalKey !== undefined &&
-            d.flowSignalKey === last.flowSignalKey &&
-            d.observed?.grossPnlKnown !== false &&
-            last.grossPnlKnown !== false &&
-            Math.abs((d.observed?.pnlPercent ?? 0) - (last.pnlPercent ?? 0)) <
-              this.settings.jevExitMaterialPnlPoints))
-      ) {
-        d.status = "CANCELLED";
-        d.error = "STRATEGIC_COOLDOWN_OR_UNCHANGED_EVIDENCE";
-        this.exitMetrics.duplicateExitPrevented++;
-      }
-      for (const old of p.pendingExits?.filter((x) => x.kind === "STRATEGIC") ??
-        []) {
-        const decision = this.store.jevExit(old.decisionId!);
-        if (decision) {
-          decision.status = "SUPERSEDED";
-          this.store.saveJevExit(decision);
-        }
-      }
-      p.pendingExits = (p.pendingExits ?? []).filter(
-        (x) => x.kind !== "STRATEGIC",
-      );
-      if (d.action !== "HOLD" && !d.error) {
-        d.status = "QUEUED";
-        p.pendingExits.push({
-          id: randomUUID(),
-          kind: "STRATEGIC",
-          reason: d.reason,
-          sellBps: d.sellBps,
-          triggeredAt: Date.now(),
-          decisionId: d.id,
-        });
-      }
-      p.jevExit = d;
-      p.lastAnalystAttempt = d;
-      this.store.savePosition(p);
-      this.store.saveJevExit(d);
-      this.memory.runner.decision(d, p);
-      if (meaningful)
-        this.store.record("jev_exit_context", p.mint, {
-          policyVersion: "CAPITAL_FLOW_V1",
-          decision: d,
-          input: job.state,
-        });
-      if (meaningful)
-        this.store.event(
-          "JEV_DECIDED_" + d.action,
-          p.mint,
-          d.reason + (d.error ? "; not authorized: " + d.error : ""),
-        );
-    });
-    if (this.running) void this.processExits();
-  }
   async processExits() {
     if (this.executionLoop || this.executor.isBusy || this.stopping) return;
     this.executionLoop = true;
@@ -1874,9 +1352,8 @@ export class Engine {
               p.pendingExits?.find(
                 (x) =>
                   x.kind === "STRATEGIC" &&
-                  (p.strategy === "KRONOS"
-                    ? x.decisionSource === "KRONOS"
-                    : x.decisionSource !== "KRONOS"),
+                  p.strategy === "KRONOS" &&
+                  x.decisionSource === "KRONOS",
               );
             if (!manual && !opportunity) return [];
             const rank = exitPriority(manual?.sellBps, opportunity);
@@ -1951,35 +1428,6 @@ export class Engine {
               current.pendingExits?.find((x) => x.id === opportunity?.id);
             if (!opportunity) continue;
           }
-          if (
-            !manual &&
-            opportunity?.kind === "STRATEGIC" &&
-            p.strategy !== "KRONOS"
-          ) {
-            if (
-              !p.jevExit ||
-              p.jevExit.id !== opportunity.decisionId ||
-              p.jevExit.quantity !== p.quantity ||
-              Date.now() - (p.jevExit.inputAt ?? p.jevExit.createdAt) >
-                this.settings.jevExitDecisionMaxAgeMs
-            ) {
-              const current = this.store
-                .positions(p.mode)
-                .find((x) => x.id === p.id)!;
-              current.pendingExits = current.pendingExits?.filter(
-                (x) => x.id !== opportunity!.id,
-              );
-              if (
-                current.jevExit &&
-                current.jevExit.id === opportunity.decisionId
-              ) {
-                current.jevExit.status = "CANCELLED";
-                this.store.saveJevExit(current.jevExit);
-              }
-              this.store.savePosition(current);
-              continue;
-            }
-          }
           if (this.executor.isBusy) break;
           const current = this.store
             .positions(p.mode)
@@ -1991,9 +1439,7 @@ export class Engine {
                 ? opportunity.protection?.kind === "SECURITY_CRITICAL"
                   ? "SECURITY"
                   : "PROTECTIVE"
-                : current.strategy === "KRONOS"
-                  ? "KRONOS"
-                  : "JEV",
+                : "KRONOS",
             reason: manual ? "Manual emergency exit" : opportunity!.reason,
             sellBps: manual?.sellBps ?? opportunity!.sellBps,
             at: Date.now(),
@@ -2003,8 +1449,6 @@ export class Engine {
           this.store.record("exit_authority", p.mint, {
             positionId: p.id,
             strategy: current.strategy ?? "STANDARD",
-            latestJev:
-              current.strategy === "KRONOS" ? undefined : current.jevExit,
             latestKronos: current.kronosDecision,
             final: current.finalExitAction,
           });
@@ -2059,7 +1503,7 @@ export class Engine {
         }
       }
     } catch {
-      this.store.halt(
+      this.store.reportFailure(
         "Pending Solana transaction cannot be reconciled",
         "TRANSACTION",
       );
@@ -2068,7 +1512,6 @@ export class Engine {
     }
   }
   async settleExitWork() {
-    await this.exitScheduler.idle();
     await this.processExits();
     while (this.executionLoop) await sleep(5);
   }
@@ -2119,17 +1562,13 @@ export class Engine {
       ),
       manualRequestId: manual?.id,
       exitOpportunityId: opportunity?.id,
-      jevExitDecisionId:
-        p.strategy === "KRONOS" ? undefined : opportunity?.decisionId,
       decisionSource: manual
         ? ("MANUAL" as const)
         : opportunity?.kind === "PROTECTIVE"
           ? opportunity.protection?.kind === "SECURITY_CRITICAL"
             ? ("SECURITY" as const)
             : ("PROTECTIVE" as const)
-          : p.strategy === "KRONOS"
-            ? ("KRONOS" as const)
-            : ("JEV" as const),
+          : ("KRONOS" as const),
       decisionId: manual?.id ?? opportunity?.decisionId,
       decisionAt: opportunity?.triggeredAt ?? manual?.createdAt,
       exitAuthority:
@@ -2140,9 +1579,7 @@ export class Engine {
             ? opportunity.protection?.kind === "SECURITY_CRITICAL"
               ? "SECURITY"
               : "PROTECTIVE"
-            : p.strategy === "KRONOS"
-              ? "KRONOS"
-              : "JEV"),
+            : "KRONOS"),
     };
     const checkExitAuthority = () => {
       const current = this.store.positions(p.mode).find((x) => x.id === p.id);
@@ -2187,35 +1624,6 @@ export class Engine {
           });
       }
       if (
-        current.strategy !== "KRONOS" &&
-        opportunity?.kind === "STRATEGIC" &&
-        (!current.jevExit ||
-          this.exitEvidenceChanged(current.jevExit) ||
-          (current.jevExit.flowSignalKey !== undefined &&
-            current.flow?.signalKey !== current.jevExit.flowSignalKey) ||
-          current.jevExit.id !== opportunity.decisionId ||
-          (current.decisionRevision ?? 0) !==
-            (current.jevExit.positionRevision ?? 0) ||
-          current.jevExit.quantity !== current.quantity ||
-          Date.now() - (current.jevExit.inputAt ?? current.jevExit.createdAt) >
-            this.settings.jevExitDecisionMaxAgeMs ||
-          !current.lastQuoteAt ||
-          Date.now() - current.lastQuoteAt >
-            this.settings.jevExitDecisionMaxAgeMs ||
-          Math.abs(
-            Number(current.lastValueLamports) /
-              Math.max(1, Number(current.jevExit.inputValueLamports)) -
-              1,
-          ) *
-            100 >
-            this.settings.maxDecisionPriceMovePercent ||
-          this.manual.some((r) => r.positionId === p.id))
-      )
-        throw new CandidateRejected("TEMPORARY_RISK_CHANGE", {
-          mint: p.mint,
-          reason: "JEV_EXIT_SUPERSEDED_OR_STALE",
-        });
-      if (
         opportunity?.kind === "STRATEGIC" &&
         current.pendingExits?.some((x) => x.kind === "PROTECTIVE")
       )
@@ -2227,7 +1635,7 @@ export class Engine {
     const result = await this.executor.execute(
       intent,
       this.settings,
-      p.mode === "paper" ? this.solPrice! : "0",
+      p.mode === "demo" ? this.solPrice! : "0",
       async () => {
         if (opportunity?.kind === "PROTECTIVE")
           await this.revalidateProtection(p.id, opportunity.id);
@@ -2246,7 +1654,7 @@ export class Engine {
         reason: "ON_CHAIN_SELL_FAILED",
       });
   }
-  analytics(strategy?: "STANDARD" | "KRONOS") {
+  analytics(strategy?: "KRONOS") {
     const positions = this.store
         .positions(env.TRADING_MODE)
         .filter((p) => !strategy || (p.strategy ?? "STANDARD") === strategy),
@@ -2266,25 +1674,16 @@ export class Engine {
       .recent("decisions", 100000)
       .map((r) => r.payload as RiskResult & { mode: string })
       .filter((r) => r.mode === env.TRADING_MODE);
-    const jev = this.store
-      .recent("jev_decisions", 100000)
-      .map((r) => r.payload as { mode: string; action: string })
-      .filter((r) => r.mode === env.TRADING_MODE);
+    const kronosDecisions = this.store.recent("kronos_decisions", 100000);
     return {
-      discovered: Number(
-        this.store.db.prepare("SELECT count(*) n FROM tokens").get()?.n ?? 0,
-      ),
-      analyzed: Number(
-        this.store.db
-          .prepare(
-            "SELECT count(DISTINCT mint) n FROM records WHERE kind='security_results'",
-          )
-          .get()?.n ?? 0,
-      ),
+      discovered: this.store.tokenCount(),
+      kronosCalls: kronosDecisions.length,
+      kronosBuy: kronosDecisions.filter((r) => r.payload.action === "BUY")
+        .length,
+      kronosWait: kronosDecisions.filter((r) => r.payload.action === "WAIT")
+        .length,
+      analyzed: this.store.count("security_results", 0, true),
       rugRejected: decisions.filter((d) => d.outcome === "SKIP_RUG").length,
-      jevCalls: jev.length,
-      jevBuy: jev.filter((j) => j.action === "BUY").length,
-      jevSkip: jev.filter((j) => j.action === "SKIP").length,
       riskAllow: decisions.filter((d) => d.allowed).length,
       riskReject: decisions.filter((d) => !d.allowed).length,
       bought: positions.filter(
@@ -2402,7 +1801,7 @@ export class Engine {
       token: a ? this.store.token(a.mint) : null,
     };
   }
-  /** Small dashboard shell projection. No statistics, Memory report, flow or history scans. */
+  /** Small dashboard shell projection. No statistics, flow or history scans. */
   async dashboardStatus() {
     let balance: bigint | undefined;
     try {
@@ -2412,6 +1811,8 @@ export class Engine {
     }
     return {
       mode: env.TRADING_MODE,
+      demoAccountId:
+        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
       liveAck: env.LIVE_TRADING_ACK,
       runtime: runtimeInfo,
       capabilities: {
@@ -2419,7 +1820,7 @@ export class Engine {
         positionBadgeCount: true,
         configurablePositionSize: true,
         fixedSolPositionSize: true,
-        firstBuyWins: true,
+        atomicBuyOwnership: true,
         kronosIntegration: true,
         candidateOneShot: true,
         capitalFlowAdaptive: true,
@@ -2461,12 +1862,14 @@ export class Engine {
     return {
       overview: this.overviewStatus(),
       mode: env.TRADING_MODE,
+      demoAccountId:
+        env.TRADING_MODE === "demo" ? this.store.demoAccountId() : null,
       liveAck: env.LIVE_TRADING_ACK,
       runtime: runtimeInfo,
       capabilities: {
         configurablePositionSize: true,
         fixedSolPositionSize: true,
-        firstBuyWins: true,
+        atomicBuyOwnership: true,
         kronosIntegration: true,
         candidateOneShot: true,
         trendingDiscovery: true,
@@ -2482,9 +1885,7 @@ export class Engine {
       solPriceUsd: this.solPrice ?? null,
       solPriceUpdatedAt: this.solPriceAt ?? null,
       balanceKind:
-        env.TRADING_MODE === "paper"
-          ? (this.store.get("paperBalanceSource") ?? "SIMULATED")
-          : "ON_CHAIN",
+        env.TRADING_MODE === "demo" ? "SIMULATED_USD_LEDGER" : "ON_CHAIN",
       availableLamports: sized?.available.toString() ?? null,
       nextBuyLamports: sized?.amount.toString() ?? null,
       reservedLamports: pending.toString(),
@@ -2520,9 +1921,14 @@ export class Engine {
         prebuyProbesLastMinute: Number(
           this.store.db
             .prepare(
-              "SELECT coalesce(sum(json_array_length(json_extract(payload,'$.levels'))),0) n FROM records WHERE kind='exit_feasibility' AND at>?",
+              "SELECT coalesce(sum(json_array_length(json_extract(payload,'$.levels'))),0) n FROM records WHERE kind='exit_feasibility' AND at>? AND COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?)",
             )
-            .get(Date.now() - 60000)!.n,
+            .get(
+              Date.now() - 60000,
+              env.TRADING_MODE,
+              env.TRADING_MODE,
+              this.store.demoAccountId(),
+            )!.n,
         ),
         ...Object.fromEntries(
           Object.entries(
@@ -2558,128 +1964,7 @@ export class Engine {
       exitLiquidity: this.exitLiquidity.status(),
       positionSafetyHistory: this.positionHistory.status(),
       gmgnRequests: this.gmgn.coordinator.status(),
-      structureMetrics: (() => {
-        const rows = this.structure.list().filter(hasEntryWatchEligibility),
-          passed = rows.filter((r) => r.confirmedAt !== undefined);
-        return {
-          active: rows.filter((r) => r.status === "ACTIVE").length,
-          observationAgeMs: rows
-            .filter((r) => r.status === "ACTIVE")
-            .map((r) => ({
-              mint: r.mint,
-              ageMs:
-                Date.now() - (r.lastObservedAt ?? r.structureWatchStartedAt),
-            })),
-          oldestObservationAgeMs: Math.max(
-            0,
-            ...rows
-              .filter((r) => r.status === "ACTIVE")
-              .map(
-                (r) =>
-                  Date.now() - (r.lastObservedAt ?? r.structureWatchStartedAt),
-              ),
-          ),
-          refreshSuccess: this.watchRefresh.success,
-          feedObservationsReused: this.watchRefresh.feedReused,
-          refreshDeferred: this.watchRefresh.deferred,
-          refreshDue: rows.filter(
-            (r) =>
-              r.status === "ACTIVE" &&
-              Date.now() - (r.lastObservedAt ?? r.structureWatchStartedAt) >=
-                this.settings.structureObservationMs,
-          ).length,
-          refreshStarved: rows.filter(
-            (r) =>
-              r.status === "ACTIVE" &&
-              Date.now() - (r.lastObservedAt ?? r.structureWatchStartedAt) >
-                this.settings.structureMaxGapMs,
-          ).length,
-          coverageRatio: rows.some((r) => r.status === "ACTIVE")
-            ? rows.filter(
-                (r) =>
-                  r.status === "ACTIVE" &&
-                  Date.now() -
-                    (r.lastObservedAt ?? r.structureWatchStartedAt) <=
-                    this.settings.structureMaxGapMs,
-              ).length / rows.filter((r) => r.status === "ACTIVE").length
-            : null,
-          confirmed: passed.length,
-          expired: rows.filter((r) => r.status === "EXPIRED").length,
-          averageConfirmationMs: passed.length
-            ? Math.round(
-                passed.reduce(
-                  (n, r) => n + r.confirmedAt! - r.structureWatchStartedAt,
-                  0,
-                ) / passed.length,
-              )
-            : null,
-          jevCallsAvoided:
-            (this.store.get<Record<string, number>>("faultMetrics") ?? {})
-              .sniperJevCallsAvoided ?? 0,
-        };
-      })(),
-      structureWatch: this.structure.list().map((r) => ({
-        evidenceCurrent: currentStructureEvidence(r),
-        eligibleForEntryWatch:
-          hasEntryWatchEligibility(r) &&
-          !this.store.bought(r.mint, env.TRADING_MODE),
-        recoveryGateMode: canBypassRecovery(r, this.settings)
-          ? "TEMP_RECOVERY_BYPASS"
-          : r.status === "PASSED"
-            ? "REAL_RECOVERY"
-            : "LOCKED",
-        ...r,
-        symbol: this.store.token(r.mint)?.symbol,
-        progress: {
-          selling: !currentStructureEvidence(r)
-            ? "PENDING"
-            : r.sellingSeen
-              ? "COMPLETE"
-              : r.sellingCount > 0
-                ? "FORMING"
-                : "PENDING",
-          absorption: !currentStructureEvidence(r)
-            ? "PENDING"
-            : r.absorptionDetected
-              ? "COMPLETE"
-              : r.absorptionCount > 0
-                ? "FORMING"
-                : "PENDING",
-          support: !currentStructureEvidence(r)
-            ? "PENDING"
-            : r.supportConfirmed
-              ? "COMPLETE"
-              : (r.supportCount ?? 0) > 0
-                ? "FORMING"
-                : "PENDING",
-          recovery: !currentStructureEvidence(r)
-            ? "PENDING"
-            : r.status === "PASSED"
-              ? "COMPLETE"
-              : r.recoveryCount > 0
-                ? "FORMING"
-                : "PENDING",
-        },
-        dataFreshMs: 10000,
-        entryDiscoverySource: hasEntryWatchEligibility(r)
-          ? "TRENDING"
-          : entrySource(
-              this.store.token(r.mint) ?? {
-                mint: r.mint,
-                source: "SNIPER",
-                discoveredAt: r.structureWatchStartedAt,
-              },
-              this.settings,
-            ),
-        observations: undefined,
-        observationCoverage: r.observationsAccepted,
-        quality:
-          r.lastObservedAt && Date.now() - r.lastObservedAt <= 10000
-            ? r.quality
-            : "STALE",
-      })),
-      jevExit: {
-        ...this.exitScheduler.status(),
+      exitStatus: {
         executionBusy: this.executionLoop || this.executor.isBusy,
         pendingExits: this.store
           .positions(env.TRADING_MODE)
@@ -2692,8 +1977,6 @@ export class Engine {
         queue: lifecycle.filter((r) =>
           ["QUEUED", "ANALYZING", "QUALIFIED", "APPROVED"].includes(r.state),
         ),
-        watch: lifecycle.filter((r) => r.state === "WATCH"),
-        deferred: lifecycle.filter((r) => r.state === "DEFERRED"),
         rejected: lifecycle.filter((r) => r.state === "REJECTED").length,
         capacity: this.settings.candidateQueueSize,
       },
@@ -2721,7 +2004,6 @@ export class Engine {
       },
       providers: {
         gmgn: this.gmgn.health,
-        jev: this.jev.http.health,
         solana: this.rpc.http.health,
         execution: this.executor.provider.health,
       },
@@ -2743,11 +2025,9 @@ export class Engine {
         })),
       analytics: this.analytics(),
       strategyAnalytics: {
-        STANDARD: this.analytics("STANDARD").strategyAccounting,
         KRONOS: this.analytics("KRONOS").strategyAccounting,
       },
       kronos: this.kronos.status(),
-      learning: this.memory.report(env.TRADING_MODE),
       controlled: this.executor.controlled?.read() ?? null,
       settings: this.settings,
       events: this.store.recent("events", 30),
