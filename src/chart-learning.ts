@@ -20,6 +20,7 @@ import { parseMarketHistory, type MarketHistory } from "./market-history.js";
 import { createTradeReplay } from "./chart-replay.js";
 import { validateLearningRule } from "./chart-validation.js";
 import { sqliteAtomic } from "./learning-database.js";
+import { tradeAccounting } from "./trade-accounting.js";
 
 export class ChartLearning {
   readonly runtime: ReasoningRuntime;
@@ -109,6 +110,190 @@ export class ChartLearning {
     )
       throw Error("CODEX_FABRICATED_EVIDENCE");
   }
+  private sourceFor(mode: Mode) {
+    return this.sources.find((source) => source.mode === mode) ?? this.store;
+  }
+  private confirmedBuy(p: Position) {
+    return this.sourceFor(p.mode)
+      .executions(p.mode)
+      .find(
+        (execution) =>
+          execution.intent.positionId === p.id &&
+          execution.intent.side === "BUY" &&
+          execution.state === "CONFIRMED",
+      );
+  }
+  private ensureCase(p: Position, now = Date.now()) {
+    if (!["OPEN", "PENDING_EXIT", "CLOSED"].includes(p.state)) return null;
+    const buy = this.confirmedBuy(p);
+    if (!buy) return null;
+    const accountId = this.charts.account(p.mode),
+      entryAt = buy.accounting?.at ?? buy.at,
+      existing = this.charts.db
+        .prepare("SELECT * FROM chart_learning_cases WHERE position_id=?")
+        .get(p.id);
+    if (!existing) {
+      const payload = {
+        positionId: p.id,
+        mint: p.mint,
+        mode: p.mode,
+        accountId,
+        buyExecutionId: buy.id,
+        buySignature: buy.signature ?? null,
+        simulated: buy.evidence?.simulated === true || p.mode === "demo",
+        entryAt,
+      };
+      sqliteAtomic(this.charts.db, () => {
+        this.charts.db
+          .prepare(
+            "INSERT OR IGNORE INTO chart_learning_cases(position_id,mint,mode,account_id,buy_confirmed_at,learning_started_at,entry_price_usd,entry_quantity,status,entry_snapshot_id,exit_snapshot_id,realized_pnl_lamports,realized_pnl_pct,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,?)",
+          )
+          .run(
+            p.id,
+            p.mint,
+            p.mode,
+            accountId,
+            entryAt,
+            now,
+            buy.accounting?.priceUsd ?? p.entryPriceUsd ?? null,
+            buy.accounting?.quantityAtomic ?? p.originalQuantity ?? p.quantity,
+            "OPEN",
+            now,
+            now,
+            JSON.stringify(payload),
+          );
+        this.charts.linkCaseEvidence(
+          p.id,
+          buy.id,
+          "EXECUTION",
+          "EXECUTION",
+          entryAt,
+        );
+      });
+    }
+    const current = this.charts.db
+      .prepare("SELECT * FROM chart_learning_cases WHERE position_id=?")
+      .get(p.id) as
+      | {
+          entry_snapshot_id: string | null;
+          status: string;
+        }
+      | undefined;
+    if (!current) return null;
+    if (p.state === "CLOSED" && current.status !== "CLOSED") {
+      const accounting = tradeAccounting(
+        p,
+        this.sourceFor(p.mode).executions(p.mode),
+      );
+      const exit = this.sourceFor(p.mode)
+        .executions(p.mode)
+        .filter(
+          (execution) =>
+            execution.intent.positionId === p.id &&
+            execution.intent.side === "SELL" &&
+            execution.state === "CONFIRMED",
+        )
+        .at(-1);
+      sqliteAtomic(this.charts.db, () => {
+        this.charts.db
+          .prepare(
+            "UPDATE chart_learning_cases SET status='CLOSED',exit_snapshot_id=?,realized_pnl_lamports=?,realized_pnl_pct=?,updated_at=?,payload=json_set(payload,'$.closedAt',?,'$.exitExecutionId',?,'$.accounting',?) WHERE position_id=?",
+          )
+          .run(
+            exit?.id ?? null,
+            accounting.netPnlLamports,
+            accounting.netPnlPct,
+            now,
+            p.closedAt ?? now,
+            exit?.id ?? null,
+            JSON.stringify(accounting),
+            p.id,
+          );
+        if (exit)
+          this.charts.linkCaseEvidence(
+            p.id,
+            exit.id,
+            "EXECUTION",
+            "EXECUTION",
+            exit.accounting?.at ?? exit.at,
+          );
+      });
+    }
+    return {
+      positionId: p.id,
+      entryAt,
+      snapshotId: current.entry_snapshot_id,
+      buy,
+    };
+  }
+  private addCaseReview(p: Position, now: number) {
+    const replay = createTradeReplay(new ChartStore(this.sourceFor(p.mode)), p, now);
+    this.charts.job("CASE_REVIEW", p.id, replay, p.mode, now);
+  }
+  registerBoughtPosition(
+    p: Position,
+    h?: MarketHistory,
+    market?: Market,
+    now = Date.now(),
+  ) {
+    const learningCase = this.ensureCase(p, now);
+    if (!learningCase) return false;
+    if (h && !learningCase.snapshotId) {
+      const snapshotId = this.charts.ingest(
+        p.mint,
+        h,
+        {
+          positionId: p.id,
+          entryAt: learningCase.entryAt,
+          buyConfirmedAt: learningCase.entryAt,
+          learningStartedAt: now,
+          executionId: learningCase.buy.id,
+          simulated:
+            learningCase.buy.evidence?.simulated === true || p.mode === "demo",
+          phase: "POST_BUY_LEARNING",
+          market: market ?? null,
+        },
+        now,
+      );
+      this.charts.db
+        .prepare(
+          "UPDATE chart_learning_cases SET entry_snapshot_id=coalesce(entry_snapshot_id,?),updated_at=? WHERE position_id=?",
+        )
+        .run(snapshotId, now, p.id);
+    }
+    this.charts.watch(
+      p.mint,
+      p.mode,
+      0,
+      "POST_BUY_POSITION:" + p.id,
+      now,
+    );
+    if (h) this.addCaseReview(p, now);
+    return true;
+  }
+  scheduleBoughtPosition(
+    p: Position,
+    h: MarketHistory,
+    market: Market,
+  ) {
+    setImmediate(() => {
+      try {
+        this.registerBoughtPosition(p, h, market);
+      } catch (error) {
+        this.lastError =
+          error instanceof Error ? error.message : "CHART_LEARNING_START_FAILED";
+        try {
+          this.sourceFor(p.mode).pipelineEvent(
+            "CHART_LEARNING_START_FAILED",
+            p.mint,
+            { positionId: p.id, error: this.lastError },
+          );
+        } catch {
+          // Learning must never affect the confirmed execution.
+        }
+      }
+    });
+  }
   async decide(
     candidate: Candidate,
     h: MarketHistory,
@@ -121,19 +306,16 @@ export class ChartLearning {
     );
     this.charts.db.exec("PRAGMA busy_timeout=25");
     try {
-      const at = Date.now(),
-        snapshotId = this.charts.ingest(
-          candidate.mint,
-          h,
-          { market, position: p ?? null },
-          at,
-        );
-      this.charts.watch(
-        candidate.mint,
-        mode,
-        p ? 0 : 2,
-        p ? "POSITION" : "GUARD",
-      );
+      const at = Date.now();
+      const eligibleCase = p ? this.ensureCase(p, at) : null;
+      const snapshotId = eligibleCase
+        ? this.charts.ingest(
+            candidate.mint,
+            h,
+            { positionId: p!.id, entryAt: eligibleCase.entryAt, market },
+            at,
+          )
+        : "READ_ONLY_GUARD";
       const features = chartFeatures(h.candles, at);
       const base: ChartDecision = {
         id: randomUUID(),
@@ -189,7 +371,16 @@ export class ChartLearning {
             .join(" | ");
         }
       }
-      this.charts.decision(base);
+      if (eligibleCase) {
+        this.charts.linkCaseEvidence(
+          p!.id,
+          base.id,
+          "DECISION",
+          "POST_BUY_OBSERVATION",
+          at,
+        );
+        this.charts.decision(base);
+      }
       return base;
     } finally {
       this.charts.db.exec("PRAGMA busy_timeout=" + priorTimeout);
@@ -237,10 +428,14 @@ export class ChartLearning {
   }
   private async work(mode: Mode, criticalBusy: boolean, now: number) {
     const account = this.charts.account(mode);
-    // Bounded sampling includes discovery rejections; open positions use the
-    // existing priority-1 PositionHistoryMonitor and are never refetched here.
-    for (const c of this.sources.flatMap((s) => s.tokens()).slice(0, 12))
-      this.charts.watch(c.mint, mode, 5, "DISCOVERY_SAMPLE", c.discoveredAt);
+    // Recovery is position scoped: only confirmed BUYs create cases after restart.
+    for (const source of this.sources) {
+      for (const p of source.positions(source.mode).slice(0, 100)) {
+        const c = this.ensureCase(p, now);
+        if (c && p.state !== "CLOSED")
+          this.charts.watch(p.mint, p.mode, 0, "POST_BUY_POSITION:" + p.id, now);
+      }
+    }
     this.drainOutboxes(now);
     for (const source of this.sources)
       for (const p of source
@@ -248,6 +443,7 @@ export class ChartLearning {
         .filter(
           (p) =>
             p.state === "CLOSED" &&
+            this.ensureCase(p, now) !== null &&
             !this.charts.db
               .prepare(
                 "SELECT position_id FROM chart_replays WHERE position_id=?",
@@ -260,7 +456,6 @@ export class ChartLearning {
           .prepare("INSERT OR IGNORE INTO chart_replays VALUES(?,?,?,?,?)")
           .run(p.id, p.mode, replay.accountId, now, JSON.stringify(replay));
         this.charts.job("TRADE_REVIEW", p.id, replay, p.mode, now);
-        this.charts.watch(p.mint, p.mode, 3, "CLOSED_TRADE");
       }
     this.followups(mode, now);
     if (criticalBusy) return;
@@ -280,7 +475,20 @@ export class ChartLearning {
           source: "CHART_FOLLOWUP",
           discoveredAt: now,
         };
-      try {
+      const cases = this.charts.db
+        .prepare(
+          "SELECT position_id, buy_confirmed_at FROM chart_learning_cases WHERE mint=? AND mode=? AND account_id=? AND status='OPEN' ORDER BY learning_started_at",
+        )
+        .all(mint, mode, account) as { position_id: string; buy_confirmed_at: number }[];
+      if (!cases.length) {
+        this.charts.db
+          .prepare(
+            this.store.sharedLearning
+              ? "DELETE FROM chart_observation_queue WHERE mint=?"
+              : "DELETE FROM chart_observation_queue WHERE mode=? AND account_id=? AND mint=?",
+          )
+          .run(...(this.store.sharedLearning ? [mint] : [mode, account, mint]));
+      } else try {
         const raw = await this.gmgn.marketHistory(c, 60000, {
           priority: 6,
           consumer: "chart-learning-observer",
@@ -289,11 +497,30 @@ export class ChartLearning {
         const h = parseMarketHistory(raw, c);
         if (h.freshness !== "FRESH" || h.status !== "AVAILABLE")
           throw Error("CHART_HISTORY_UNAVAILABLE");
-        this.charts.ingest(mint, h, { reason: row.reason });
-        for (const e of this.charts
-          .events(100)
-          .filter((e) => e.mint === mint && e.kind !== "CONTROL"))
+        for (const learningCase of cases) {
+          const snapshotId = this.charts.ingest(
+            mint,
+            h,
+            {
+              positionId: learningCase.position_id,
+              entryAt: learningCase.buy_confirmed_at,
+              phase: "POST_BUY_OBSERVATION",
+            },
+            now,
+          );
+          this.charts.linkCaseEvidence(
+            learningCase.position_id,
+            snapshotId,
+            "SNAPSHOT",
+            "POST_BUY_OBSERVATION",
+            now,
+          );
+        }
+        for (const e of this.charts.events(100).filter((e) => e.mint === mint && e.kind !== "CONTROL")) {
+          for (const learningCase of cases)
+            this.charts.linkCaseEvidence(learningCase.position_id, e.id, "EVENT", "POST_BUY_OBSERVATION", now);
           this.charts.job("EVENT_REVIEW", e.id, e, mode);
+        }
         this.charts.db
           .prepare(
             this.store.sharedLearning
@@ -629,6 +856,33 @@ export class ChartLearning {
         for (const row of rows) {
           const id = String(row.id),
             payload = JSON.parse(String(row.payload));
+          let eligible = false;
+          if (row.kind === "TRADE_CLOSED") {
+            eligible = this.ensureCase(payload as Position, now) !== null;
+          } else if (row.kind === "EXECUTION") {
+            const execution = payload as import("./domain.js").Execution;
+            const position = source
+              .positions(source.mode)
+              .find((p) => p.id === execution.intent.positionId);
+            eligible = Boolean(
+              execution.state === "CONFIRMED" &&
+                position &&
+                (execution.intent.side === "BUY"
+                  ? this.ensureCase(position, now)
+                  : this.charts.db
+                      .prepare("SELECT 1 FROM chart_learning_cases WHERE position_id=?")
+                      .get(position.id)),
+            );
+          } else {
+            const positionId = payload.payload?.positionId;
+            eligible = Boolean(
+              positionId &&
+                this.charts.db
+                  .prepare("SELECT 1 FROM chart_learning_cases WHERE position_id=?")
+                  .get(String(positionId)),
+            );
+          }
+          if (!eligible) continue;
           if (row.kind !== "TRADE_CLOSED")
             this.charts.db
               .prepare(

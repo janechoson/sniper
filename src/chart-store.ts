@@ -64,6 +64,10 @@ export class ChartStore {
     const rows = h.candles.filter((c) =>
       validChartCandle(c, Math.min(now, h.fetchedAt)),
     );
+    const caseContext =
+      context && typeof context === "object"
+        ? (context as { positionId?: string; entryAt?: number })
+        : {};
     sqliteAtomic(this.db, () => {
       const insert = this.db.prepare(
         "INSERT OR IGNORE INTO chart_candles VALUES(?,?,?,?,?,?)",
@@ -89,6 +93,16 @@ export class ChartStore {
           )
         )
           continue;
+        if (caseContext.positionId)
+          this.linkCaseEvidence(
+            caseContext.positionId,
+            id,
+            "CANDLE",
+            c.at < (caseContext.entryAt ?? now)
+              ? "PRE_BUY_CONTEXT"
+              : "POST_BUY_OBSERVATION",
+            now,
+          );
         const drop = rugDrop(c),
           rise = (c.high / c.open - 1) * 100;
         const prefix = rows.filter((x) => x.at < c.at).slice(-5);
@@ -153,6 +167,16 @@ export class ChartStore {
           this.db
             .prepare("INSERT OR IGNORE INTO chart_events VALUES(?,?,?,?,?,?,?)")
             .run(event.id, mint, kind, c.at, now, id, JSON.stringify(event));
+          if (caseContext.positionId)
+            this.linkCaseEvidence(
+              caseContext.positionId,
+              event.id,
+              "EVENT",
+              c.at < (caseContext.entryAt ?? now)
+                ? "PRE_BUY_CONTEXT"
+                : "POST_BUY_OBSERVATION",
+              now,
+            );
         }
       }
     });
@@ -183,7 +207,29 @@ export class ChartStore {
             }),
           );
     }
-    return this.snapshot(mint, now, { history: h, context });
+    const snapshotId = this.snapshot(mint, now, { history: h, context });
+    if (caseContext.positionId)
+      this.linkCaseEvidence(
+        caseContext.positionId,
+        snapshotId,
+        "SNAPSHOT",
+        "POST_BUY_OBSERVATION",
+        now,
+      );
+    return snapshotId;
+  }
+  linkCaseEvidence(
+    positionId: string,
+    evidenceId: string,
+    evidenceType: string,
+    phase: "PRE_BUY_CONTEXT" | "POST_BUY_OBSERVATION" | "EXECUTION" | "OUTCOME",
+    availableAt = Date.now(),
+  ) {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO chart_case_evidence VALUES(?,?,?,?,?)",
+      )
+      .run(positionId, evidenceId, evidenceType, phase, availableAt);
   }
   snapshot(mint: string, at: number, payload: unknown) {
     const id = randomUUID();

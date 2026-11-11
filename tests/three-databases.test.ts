@@ -116,7 +116,7 @@ test("shared market observations deduplicate both-mode windows and dashboards ha
     clean(dir);
   }
 });
-test("outbox delivery is idempotent and a shared worker never writes financial state", async () => {
+test("pre-buy shared observations are excluded from Learning and never touch financial state", async () => {
   const dir = directory();
   let r: DatabaseRegistry | undefined;
   let c: ChartLearning | undefined;
@@ -139,8 +139,9 @@ test("outbox delivery is idempotent and a shared worker never writes financial s
     c.drainOutboxes();
     assert.equal(
       r.learning.prepare("SELECT count(*) n FROM learning_records").get()!.n,
-      1,
+      0,
     );
+    assert.equal(r.live.db.prepare("SELECT count(*) n FROM learning_outbox WHERE delivered_at IS NULL").get()!.n, 0);
     assert.equal(
       r.demo.db.prepare("SELECT count(*) n FROM records").get()!.n,
       0,

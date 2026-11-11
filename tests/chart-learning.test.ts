@@ -175,7 +175,7 @@ test("predictive features exclude event candle and every future candle", () => {
     null,
   );
 });
-test("candle deduplication and immutable snapshots/decisions", async () => {
+test("pre-buy Guard is read-only while explicit Learning ingestion stays immutable", async () => {
   const s = new Store(":memory:"),
     g = provider(),
     c = new ChartLearning(s, g.gmgn, runtime());
@@ -184,23 +184,12 @@ test("candle deduplication and immutable snapshots/decisions", async () => {
     c.charts.ingest(MINT, h);
     c.charts.ingest(MINT, h);
     assert.equal(c.charts.candles(MINT).length, h.candles.length);
+    const snapshotsBeforeGuard = Number(c.charts.db.prepare("SELECT count(*) n FROM chart_snapshots").get()!.n);
     const d = await c.decide(candidate(), h, normalizeMarket(info()), "demo");
     assert.equal(d.action, "PASS");
     assert.equal(d.runtime, "NOT_INVOKED_COLD_START");
-    assert.throws(
-      () =>
-        s.db
-          .prepare("UPDATE chart_decisions SET action='BLOCK' WHERE id=?")
-          .run(d.id),
-      /Immutable/,
-    );
-    assert.throws(
-      () =>
-        s.db
-          .prepare("UPDATE chart_snapshots SET payload='{}' WHERE id=?")
-          .run(d.snapshotId),
-      /Immutable/,
-    );
+    assert.equal(c.charts.decisions("demo").length, 0);
+    assert.equal(Number(c.charts.db.prepare("SELECT count(*) n FROM chart_snapshots").get()!.n), snapshotsBeforeGuard);
     assert.equal(c.charts.decisions("live").length, 0);
   } finally {
     await c.stop();
@@ -349,13 +338,25 @@ test("PASS lets KRONOS BUY use existing executor and WAIT creates no order", asy
         await assert.rejects(f.engine.analyze(MINT), /TEMPORARY_RISK_CHANGE/);
       else await f.engine.analyze(MINT);
       await f.engine.settleEntryEvaluations();
-      assert.equal(
-        f.engine.chartLearning.charts.decisions("demo")[0]!.action,
-        "PASS",
-      );
+      assert.equal(f.engine.chartLearning.charts.decisions("demo").length, 0);
       assert.equal(f.store.executions().length, wait ? 0 : 1);
       if (!wait)
-        assert.equal(f.store.executions()[0]!.evidence?.simulated, true);
+        {
+          assert.equal(f.store.executions()[0]!.evidence?.simulated, true);
+          const bought = f.store.positions("demo").find((p) => p.state === "OPEN")!;
+          assert.equal(f.engine.chartLearning.registerBoughtPosition(bought), true);
+          assert.equal(
+            f.engine.chartLearning.charts.db
+              .prepare("SELECT mode,status FROM chart_learning_cases WHERE position_id=?")
+              .get(bought.id)?.status,
+            "OPEN",
+          );
+        }
+      else
+        assert.equal(
+          Number(f.engine.chartLearning.charts.db.prepare("SELECT count(*) n FROM chart_learning_cases").get()!.n),
+          0,
+        );
     } finally {
       await f.engine.stop();
       f.store.close();

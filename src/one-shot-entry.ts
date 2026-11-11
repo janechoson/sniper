@@ -28,7 +28,6 @@ export async function oneShotEntry(
   let owned: BuyOwnershipClaim | undefined;
   try {
     let candidate = e.store.token(mint)!;
-    e.chartLearning.charts.watch(mint, e.mode, 4, "ENTRY_CANDIDATE");
     const attemptId = e.attempts.current!.attemptId;
     e.attempts.summary("strategy", "KRONOS");
     const run = <T>(stage: AttemptStage, work: () => Promise<T> | T) =>
@@ -617,12 +616,12 @@ export async function oneShotEntry(
     if (execution.state !== "CONFIRMED")
       reject("BUY_NOT_CONFIRMED_RECONCILE_REQUIRED");
     await run("POSITION", () => {
-      if (
-        !e.store
-          .positions(e.mode)
-          .some((p) => p.id === intent.positionId && p.state === "OPEN")
-      )
+      const bought = e.store
+        .positions(e.mode)
+        .find((p) => p.id === intent.positionId && p.state === "OPEN");
+      if (!bought)
         reject("POSITION_NOT_RECONCILED");
+      e.chartLearning.scheduleBoughtPosition(bought!, history, market);
     });
     e.attempts.strategy(attemptId, strategy, {
       execution: "CONFIRMED",

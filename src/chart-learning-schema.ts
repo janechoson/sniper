@@ -45,6 +45,23 @@ CREATE TABLE IF NOT EXISTS chart_jobs (
 CREATE INDEX IF NOT EXISTS chart_jobs_due ON chart_jobs(state,due);
 CREATE TABLE IF NOT EXISTS chart_validations (
  id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chart_learning_cases (
+ position_id TEXT PRIMARY KEY, mint TEXT NOT NULL, mode TEXT NOT NULL,
+ account_id TEXT NOT NULL, buy_confirmed_at INTEGER NOT NULL,
+ learning_started_at INTEGER NOT NULL, entry_price_usd REAL, entry_quantity TEXT,
+ status TEXT NOT NULL CHECK(status IN ('OPEN','CLOSED')),
+ entry_snapshot_id TEXT, exit_snapshot_id TEXT, realized_pnl_lamports TEXT,
+ realized_pnl_pct REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chart_learning_cases_mode_status ON chart_learning_cases(mode,status,learning_started_at);
+CREATE INDEX IF NOT EXISTS chart_learning_cases_mint ON chart_learning_cases(mint,learning_started_at);
+CREATE TABLE IF NOT EXISTS chart_case_evidence (
+ case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ evidence_id TEXT NOT NULL, evidence_type TEXT NOT NULL,
+ phase TEXT NOT NULL CHECK(phase IN ('PRE_BUY_CONTEXT','POST_BUY_OBSERVATION','EXECUTION','OUTCOME')),
+ available_at INTEGER NOT NULL,
+ PRIMARY KEY(case_id,evidence_id,evidence_type));
+CREATE INDEX IF NOT EXISTS chart_case_evidence_evidence ON chart_case_evidence(evidence_id,evidence_type,available_at);
 ${[
   "chart_candles",
   "chart_events",
@@ -78,5 +95,6 @@ BEGIN SELECT RAISE(ABORT,'Immutable chart history'); END;`,
   )
   .join("")}
 INSERT OR IGNORE INTO migrations VALUES(17,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(19,unixepoch());
 COMMIT;
 `;
