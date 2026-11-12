@@ -44,7 +44,6 @@ export const env = z
     AI_GUARD_MAX_CONCURRENCY: z.literal("1").default("1"),
     AI_GUARD_MAX_ATTEMPTS: z.literal("1").default("1"),
     AI_GUARD_FAIL_POLICY: z.literal("BLOCK").default("BLOCK"),
-    AI_GUARD_COLD_START_POLICY: z.enum(["UNCERTAIN", "BLOCK", "PASS"]).default("UNCERTAIN"),
     AUTO_CHART_LEARNING_ENABLED: bool.default(true),
     AUTO_CHART_LEARNING_DELAY_MS: z.coerce.number().int().min(30000).max(86400000).default(30000),
     AUTO_CHART_LEARNING_MAX_CONCURRENCY: z.literal("1").default("1"),

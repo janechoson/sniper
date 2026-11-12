@@ -18,6 +18,10 @@ REJECT and DELETE add durable suppression entries to the control-event history. 
 
 Before accepting a Guard response, the service rechecks the active knowledge revision. Any revision change during inference fails closed, so a disable/delete/reject cannot leave an in-flight stale PASS authoritative.
 
+## AI Guard cold start and match policy
+
+Validated knowledge is historical experience, not a whitelist. With no active PRE_BUY knowledge, a successful AI `PASS` remains a `PASS` with reason `NO_KNOWLEDGE`. With knowledge available but no relevant match, a successful `PASS` is `NO_MATCH`. Evidence-supported matches are labeled `KNOWN_SAFE_MATCH` for PASS or `KNOWN_DANGEROUS_MATCH` for BLOCK. Uncertain responses are classified as `CONFLICTING_EVIDENCE` or `INSUFFICIENT_MARKET_EVIDENCE`. Timeout, invalid output and runtime failures produce `ERROR` / `AI_ERROR` and fail closed. All independent deterministic checks and final BUY revalidation remain authoritative; PASS TTL starts when inference completes.
+
 ## Drift monitoring
 
 The validator monitors newly closed positions whose pre-BUY Guard PASS matched an active knowledge version. It excludes the version's training and original holdout cases, repeated mints and overlapping windows. Ten independent post-deployment cases with a dangerous-outcome rate above 30% trigger an append-only SYSTEM `SUSPEND` event; suspended knowledge is immediately excluded from future Guard requests. The dashboard exposes drift sample counts and outcomes. User RESTORE is explicit and audited.

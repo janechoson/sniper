@@ -6,7 +6,8 @@ import type { ReasoningRuntime } from "./codex-runtime.js";
 import { AI_GUARD_PROMPT_VERSION, aiGuardResponseSchema, type AIGuardResponse } from "./codex-ai-guard-contract.js";
 import { ChartKnowledgeRepository } from "./chart-knowledge.js";
 
-type GuardOutput = Omit<AIGuardResponse, "action"> & { action: AIGuardResponse["action"] | "ERROR" };
+export type AIGuardReasonCode = "NO_KNOWLEDGE" | "NO_MATCH" | "KNOWN_SAFE_MATCH" | "KNOWN_DANGEROUS_MATCH" | "CONFLICTING_EVIDENCE" | "INSUFFICIENT_MARKET_EVIDENCE" | "AI_ERROR";
+type GuardOutput = Omit<AIGuardResponse, "action"> & { action: AIGuardResponse["action"] | "ERROR"; reasonCode: AIGuardReasonCode };
 export type AIGuardDecision = GuardOutput & {
   id: string; mint: string; mode: Mode; attemptId: string; at: number; expiresAt: number;
   inferenceDeadlineAt: number; evaluatedAt: number; decisionExpiresAt: number; marketEvidenceCutoffAt: number;
@@ -40,7 +41,7 @@ export class CodexAIGuard {
     const cutoff = Date.now();
     const fail = (reason: string) => ({
       action: "ERROR" as const, riskLevel: "HIGH" as const, confidence: 0, summary: reason,
-      matchedKnowledge: [], marketObservations: [], uncertaintyReasons: [reason], evidenceCutoffAt: cutoff,
+      matchedKnowledge: [], marketObservations: [], uncertaintyReasons: [reason], evidenceCutoffAt: cutoff, reasonCode: "AI_ERROR" as const,
     });
     try {
       if (process.env.AI_GUARD_ENABLED === "false") throw Error("AI_GUARD_DISABLED");
@@ -77,33 +78,46 @@ export class CodexAIGuard {
       inference = this.runtime.analyzeGuard(inputPayload, abort.signal, (wait)=>{queueWaitMs=wait;});
       const timeout = new Promise<never>((_resolve, reject) => { timerId = setTimeout(() => { abort?.abort(); reject(Error("AI_GUARD_TIMEOUT")); }, timeoutMs); });
       const raw = await Promise.race([inference, timeout]);
-      response = aiGuardResponseSchema.parse(raw);
-      if (response.evidenceCutoffAt !== cutoff) throw Error("AI_GUARD_INVALID_CUTOFF");
+      const evaluated = { ...aiGuardResponseSchema.parse(raw), reasonCode: "NO_MATCH" as const };
+      response = evaluated;
+      evaluatedAt = Date.now();
+      if (evaluated.evidenceCutoffAt !== cutoff) throw Error("AI_GUARD_INVALID_CUTOFF");
       const knowledgeByKey = new Set(validated.map((item) => `${item.id}:${item.version}`));
-      for (const match of response.matchedKnowledge) if (!knowledgeByKey.has(`${match.knowledgeId}:${match.version}`)) throw Error("AI_GUARD_UNKNOWN_KNOWLEDGE");
+      for (const match of evaluated.matchedKnowledge) if (!knowledgeByKey.has(`${match.knowledgeId}:${match.version}`)) throw Error("AI_GUARD_UNKNOWN_KNOWLEDGE");
       const available = new Set(["MARKET-1", ...facts.map((item) => item.evidenceId), ...contextEvidence.map((item) => item.evidenceId)]);
       const evidenceIds = [
-        ...response.marketObservations.flatMap((item) => [item.evidenceId]),
-        ...response.matchedKnowledge.flatMap((item) => [...item.matchingEvidence, ...item.contradictoryEvidence].map((ref) => ref.evidenceId)),
+        ...evaluated.marketObservations.flatMap((item) => [item.evidenceId]),
+        ...evaluated.matchedKnowledge.flatMap((item) => [...item.matchingEvidence, ...item.contradictoryEvidence].map((ref) => ref.evidenceId)),
       ];
       if (evidenceIds.some((evidenceId) => !available.has(evidenceId))) throw Error("AI_GUARD_UNKNOWN_EVIDENCE");
-      if (response.matchedKnowledge.some((match) => !match.matchingEvidence.length && !match.contradictoryEvidence.length)) throw Error("AI_GUARD_KNOWLEDGE_MATCH_WITHOUT_EVIDENCE");
-      if (response.action !== "UNCERTAIN" && !response.marketObservations.length) throw Error("AI_GUARD_DECISION_WITHOUT_MARKET_EVIDENCE");
-      if (!validated.length && response.action === "PASS") {
-        const policy = process.env.AI_GUARD_COLD_START_POLICY ?? "UNCERTAIN";
-        if (policy === "UNCERTAIN") response = { ...response, action: "UNCERTAIN", summary: `Cold start: no validated PRE_BUY knowledge exists. ${response.summary}`.slice(0, 1200), uncertaintyReasons: [...response.uncertaintyReasons, "No validated PRE_BUY knowledge exists; cold-start policy is UNCERTAIN"].slice(0, 20) };
-        if (policy === "BLOCK") response = { ...response, action: "BLOCK", riskLevel: "HIGH", summary: `Cold start: no validated PRE_BUY knowledge exists. ${response.summary}`.slice(0, 1200), uncertaintyReasons: [...response.uncertaintyReasons, "No validated PRE_BUY knowledge exists; cold-start policy is BLOCK"].slice(0, 20) };
-      }
+      if (evaluated.matchedKnowledge.some((match) => !match.matchingEvidence.length && !match.contradictoryEvidence.length)) throw Error("AI_GUARD_KNOWLEDGE_MATCH_WITHOUT_EVIDENCE");
+      if (evaluated.action !== "UNCERTAIN" && !evaluated.marketObservations.length) throw Error("AI_GUARD_DECISION_WITHOUT_MARKET_EVIDENCE");
+      const hasConflict = evaluated.matchedKnowledge.some((match) => match.contradictoryEvidence.length > 0) || evaluated.uncertaintyReasons.some((reason) => /conflict|contradict|ambiguous/i.test(reason));
+      const hasSupportedDangerousMatch = evaluated.action === "BLOCK" && evaluated.matchedKnowledge.some((match) => match.matchingEvidence.length > 0);
+      const normalizedAction = hasConflict || (evaluated.action === "BLOCK" && evaluated.matchedKnowledge.length > 0 && !hasSupportedDangerousMatch)
+        ? "UNCERTAIN" as const
+        : evaluated.action;
+      const reasonCode: AIGuardReasonCode = normalizedAction === "BLOCK" && hasSupportedDangerousMatch
+        ? "KNOWN_DANGEROUS_MATCH"
+        : normalizedAction === "PASS" && evaluated.matchedKnowledge.length
+          ? "KNOWN_SAFE_MATCH"
+          : normalizedAction === "PASS" && !validated.length
+            ? "NO_KNOWLEDGE"
+            : normalizedAction === "PASS"
+              ? "NO_MATCH"
+              : hasConflict
+                ? "CONFLICTING_EVIDENCE"
+                : "INSUFFICIENT_MARKET_EVIDENCE";
+      response = { ...evaluated, action: normalizedAction, reasonCode };
       const post = await revalidate();
       const activeKnowledge=knowledge.validatedPreBuy(),activeKeys=new Set(activeKnowledge.map((item)=>`${item.id}:${item.version}`));
-      if(knowledge.revision()!==knowledgeRevision||response.matchedKnowledge.some((match)=>!activeKeys.has(`${match.knowledgeId}:${match.version}`)))throw Error("AI_GUARD_KNOWLEDGE_REVISION_CHANGED");
+      if(knowledge.revision()!==knowledgeRevision||evaluated.matchedKnowledge.some((match)=>!activeKeys.has(`${match.knowledgeId}:${match.version}`)))throw Error("AI_GUARD_KNOWLEDGE_REVISION_CHANGED");
       const currentAt = Date.now(), originalPrice = input.market.price.value, currentPrice = post.market.price.state === "KNOWN" ? post.market.price.value : null;
       if (!post.authorityValid) throw Error("AI_GUARD_AUTHORITY_CHANGED");
       if (!currentPrice || post.market.at > currentAt || currentAt - post.market.at > maxAgeMs || currentAt - input.history.fetchedAt > maxAgeMs) throw Error("AI_GUARD_STALE_AFTER_INFERENCE");
       if (Math.abs(currentPrice / originalPrice - 1) * 100 > input.maxPriceMovePercent) throw Error("AI_GUARD_MARKET_CHANGED");
-      evaluatedAt = currentAt;
       decisionExpiresAt = Math.min(evaluatedAt + passTtlMs, input.market.at + maxAgeMs, input.history.fetchedAt + maxAgeMs, post.market.at + maxAgeMs);
-      if(decisionExpiresAt<=evaluatedAt)throw Error("AI_GUARD_NO_PASS_VALIDITY_REMAINS");
+      if(decisionExpiresAt<=currentAt)throw Error("AI_GUARD_PASS_EXPIRED_DURING_REVALIDATION");
       outputHash = sha(response);
       outcome = "COMPLETED";
     } catch (error) {
@@ -139,7 +153,7 @@ export class CodexAIGuard {
     const durations = this.db.prepare("SELECT duration_ms FROM chart_ai_guard_decisions ORDER BY at DESC LIMIT 1000").all().map((row: any) => Number(row.duration_ms)).sort((a, b) => a - b);
     const percentile = (p: number) => durations.length ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * p) - 1)]! : null;
     const scheduler = this.runtime.status().scheduler as any;
-    return { enabled: process.env.AI_GUARD_ENABLED !== "false", runtime: this.runtime.status(), active: this.activeCount>0, activeCount:this.activeCount, queued: Number(scheduler?.queuedByPriority?.guard ?? 0), timeoutMs: Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), passTtlMs: Number(process.env.AI_GUARD_PASS_TTL_MS ?? 15000), concurrency: 1, maxAttempts: 1, failPolicy: "BLOCK", coldStartPolicy: process.env.AI_GUARD_COLD_START_POLICY ?? "UNCERTAIN", latest: latest ? JSON.parse(latest.payload) : null, timeoutCount: timeouts, errorCount: errors, validatedKnowledgeCount: knowledge.validatedPreBuy().length, knowledgeRevision: knowledge.revision(), latencyMs: { sampleCount: durations.length, p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99) } };
+    return { enabled: process.env.AI_GUARD_ENABLED !== "false", runtime: this.runtime.status(), active: this.activeCount>0, activeCount:this.activeCount, queued: Number(scheduler?.queuedByPriority?.guard ?? 0), timeoutMs: Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), passTtlMs: Number(process.env.AI_GUARD_PASS_TTL_MS ?? 15000), concurrency: 1, maxAttempts: 1, failPolicy: "BLOCK", coldStartPolicy: "ALLOW_IF_AI_PASS_AND_SAFETY_CHECKS_PASS", latest: latest ? JSON.parse(latest.payload) : null, timeoutCount: timeouts, errorCount: errors, validatedKnowledgeCount: knowledge.validatedPreBuy().length, knowledgeRevision: knowledge.revision(), latencyMs: { sampleCount: durations.length, p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99) } };
   }
   async stop() { this.stopped = true; for(const controller of this.activeControllers)controller.abort(); }
 }

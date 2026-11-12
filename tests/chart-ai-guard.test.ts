@@ -47,6 +47,7 @@ test("AI Guard reasons over semantic VALIDATED PRE_BUY knowledge and persists an
     const input = { ...guardInput(), context: { intelligence: { at: Date.now(), note: "timestamped fixture fact" }, security: { note: "untimestamped value must not reach Codex" } } };
     const result = await evaluate(g, input);
     assert.equal(result.action, "PASS");
+    assert.equal(result.reasonCode, "KNOWN_SAFE_MATCH");
     assert.equal(sent.validatedKnowledge.length, 1);
     assert.deepEqual(sent.validatedKnowledge[0].variations, baseKnowledge.variations);
     assert.deepEqual(sent.validatedKnowledge[0].counterexamples, baseKnowledge.counterexamples);
@@ -68,21 +69,32 @@ test("AI Guard still invokes Codex at cold start and excludes DRAFT and POST_BUY
   try {
     const decision = await evaluate(g);
     assert.equal(decision.action, "PASS");
+    assert.equal(decision.reasonCode, "NO_KNOWLEDGE");
     assert.equal(calls, 1);
     assert.equal(knowledgeCount, 0);
   } finally { store.close(); }
 });
-test("cold-start default changes model PASS to UNCERTAIN but still records its market reasoning", async () => {
-  const previous = process.env.AI_GUARD_COLD_START_POLICY;
-  process.env.AI_GUARD_COLD_START_POLICY = "UNCERTAIN";
-  const store = new Store(":memory:"); let calls = 0;
-  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => { calls++; return response(payload); }));
-  try {
-    const result = await evaluate(g);
-    assert.equal(calls, 1);
-    assert.equal(result.action, "UNCERTAIN");
-    assert.match(result.summary, /Cold start/);
-  } finally { await g.stop(); store.close(); if (previous === undefined) delete process.env.AI_GUARD_COLD_START_POLICY; else process.env.AI_GUARD_COLD_START_POLICY = previous; }
+test("empty knowledge permits successful AI PASS and records NO_KNOWLEDGE", async () => {
+  const store = new Store(":memory:");
+  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
+  try { const result = await evaluate(g); assert.equal(result.action, "PASS"); assert.equal(result.reasonCode, "NO_KNOWLEDGE"); }
+  finally { await g.stop(); store.close(); }
+});
+test("validated knowledge with no relevant match permits successful PASS as NO_MATCH", async () => {
+  const store = new Store(":memory:"); installValidated(store.db);
+  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
+  try { const result = await evaluate(g); assert.equal(result.action, "PASS"); assert.equal(result.reasonCode, "NO_MATCH"); }
+  finally { store.close(); }
+});
+test("evidence-supported dangerous match blocks and conflicting evidence remains uncertain", async () => {
+  const store = new Store(":memory:"), valid = installValidated(store.db);
+  const match = { knowledgeId: valid.id, version: 2, similarity: 0.9, matchingEvidence: [{ evidenceId: "CANDLE-1", explanation: "Observed distribution pattern." }], differences: [], contradictoryEvidence: [] };
+  const dangerous = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload, { action: "BLOCK", riskLevel: "HIGH", matchedKnowledge: [match] })));
+  try { const result = await evaluate(dangerous); assert.equal(result.action, "BLOCK"); assert.equal(result.reasonCode, "KNOWN_DANGEROUS_MATCH"); }
+  finally { await dangerous.stop(); }
+  const conflicting = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload, { action: "UNCERTAIN", matchedKnowledge: [{ ...match, contradictoryEvidence: [{ evidenceId: "CANDLE-2", explanation: "Counterevidence conflicts with the match." }] }], uncertaintyReasons: ["Conflicting evidence"] })));
+  try { const result = await evaluate(conflicting); assert.equal(result.action, "UNCERTAIN"); assert.equal(result.reasonCode, "CONFLICTING_EVIDENCE"); }
+  finally { await conflicting.stop(); store.close(); }
 });
 test("PASS TTL begins after completed evaluation and is independently bounded by evidence freshness", async()=>{
   const previousTimeout=process.env.AI_GUARD_TIMEOUT_MS,previousTtl=process.env.AI_GUARD_PASS_TTL_MS;
@@ -100,6 +112,15 @@ test("PASS TTL begins after completed evaluation and is independently bounded by
     assert.equal(result.expiresAt,result.decisionExpiresAt);
     assert.ok(result.marketEvidenceCutoffAt<=result.evaluatedAt);
   }finally{store.close();if(previousTimeout===undefined)delete process.env.AI_GUARD_TIMEOUT_MS;else process.env.AI_GUARD_TIMEOUT_MS=previousTimeout;if(previousTtl===undefined)delete process.env.AI_GUARD_PASS_TTL_MS;else process.env.AI_GUARD_PASS_TTL_MS=previousTtl;}
+});
+test("PASS that expires while final market and authority revalidation is pending fails closed", async()=>{
+  const previousTtl=process.env.AI_GUARD_PASS_TTL_MS;process.env.AI_GUARD_PASS_TTL_MS="10";
+  const store=new Store(":memory:"),g=new CodexAIGuard(store.learningDb,fakeRuntime((payload)=>response(payload)));
+  try{
+    const input=guardInput();input.maxAgeMs=300000;
+    const result=await evaluate(g,input,async()=>{await new Promise((resolve)=>setTimeout(resolve,30));return{market:input.market,authorityValid:true};});
+    assert.equal(result.action,"ERROR");assert.equal(result.reasonCode,"AI_ERROR");assert.equal(result.runtimeOutcome,"AI_GUARD_PASS_EXPIRED_DURING_REVALIDATION");
+  }finally{store.close();if(previousTtl===undefined)delete process.env.AI_GUARD_PASS_TTL_MS;else process.env.AI_GUARD_PASS_TTL_MS=previousTtl;}
 });
 test("legacy sample-count promotion endpoint is disabled without replay report", () => {
   const store = new Store(":memory:"), repo = new ChartKnowledgeRepository(store.db);
@@ -128,12 +149,12 @@ test("AI Guard fails closed for timeout, unavailable runtime, stale data, change
   process.env.AI_GUARD_TIMEOUT_MS = "20";
   try {
     const store = new Store(":memory:"), hanging: ReasoningRuntime = { ...fakeRuntime(() => ({})), analyzeGuard: (_payload, signal) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(Error("aborted")), { once: true })) }, g = new CodexAIGuard(store.learningDb, hanging);
-    try { const result = await evaluate(g); assert.equal(result.action, "ERROR"); assert.equal(result.runtimeOutcome, "AI_GUARD_TIMEOUT"); }
+    try { const result = await evaluate(g); assert.equal(result.action, "ERROR"); assert.equal(result.reasonCode, "AI_ERROR"); assert.equal(result.runtimeOutcome, "AI_GUARD_TIMEOUT"); }
     finally { store.close(); }
   } finally { if (originalTimeout === undefined) delete process.env.AI_GUARD_TIMEOUT_MS; else process.env.AI_GUARD_TIMEOUT_MS = originalTimeout; }
   {
     const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, { status: () => ({ state: "MISSING_OPENAI_API_KEY", model: "", promptVersion: "" }), analyze: async () => { throw Error("unused"); } });
-    try { assert.equal((await evaluate(g)).action, "ERROR"); }
+    try { const result = await evaluate(g); assert.equal(result.action, "ERROR"); assert.equal(result.reasonCode, "AI_ERROR"); }
     finally { store.close(); }
   }
   for (const revalidate of [
@@ -143,6 +164,11 @@ test("AI Guard fails closed for timeout, unavailable runtime, stale data, change
     const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
     try { assert.equal((await evaluate(g, guardInput(), revalidate)).action, "ERROR"); }
     finally { store.close(); }
+  }
+  {
+    const store=new Store(":memory:"),g=new CodexAIGuard(store.learningDb,fakeRuntime((payload)=>response(payload,{action:"UNCERTAIN",marketObservations:[],uncertaintyReasons:["Insufficient market evidence to decide."]})));
+    try{const result=await evaluate(g);assert.equal(result.action,"UNCERTAIN");assert.equal(result.reasonCode,"INSUFFICIENT_MARKET_EVIDENCE");}
+    finally{store.close();}
   }
   {
     const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
@@ -163,6 +189,9 @@ test("CodexRuntime sends strict guard schema and semantic instructions through i
   const body = JSON.parse(request);
   assert.equal(result.action, "PASS");
   assert.match(body.instructions, /semantically/);
+  assert.match(body.instructions, /not a whitelist/);
+  assert.match(body.instructions, /novel chart is not inherently dangerous/);
+  assert.match(body.instructions, /never fabricate a match/);
   assert.ok(body.text.format.schema);
   assert.equal("tools" in body, false);
 });
