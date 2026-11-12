@@ -21,6 +21,8 @@ function installValidated(db: Store["db"], id = baseKnowledge.id, stage: "PRE_BU
   const repo = new ChartKnowledgeRepository(db), draft = repo.createDraft({ ...baseKnowledge, id, applicableStage: stage });
   const validated = { ...draft, version: 2, validationStatus: "VALIDATED" as const, validationId: "validation-1", validationMetrics: { holdoutCases: 3 }, applicableStage: stage };
   db.prepare("INSERT INTO chart_knowledge_versions VALUES(?,?,?,?,?,?,?,?)").run(id, 2, validated.category, stage, "VALIDATED", draft.createdAt, draft.updatedAt + 1, JSON.stringify(validated));
+  const report = { validationId: "validation-1", knowledgeId: id, knowledgeVersion: 1, labelPolicy: { name: "DANGEROUS_TRADE_V1" }, qualityGate: { passed: true }, lifecycleState: "VALIDATED" };
+  db.prepare("INSERT INTO chart_knowledge_validations VALUES(?,?,?,?,?,?,?,?)").run("validation-1", id, 1, draft.updatedAt + 1, JSON.stringify(["case-train-1"]), JSON.stringify(["case-holdout-1", "case-holdout-2", "case-holdout-3"]), JSON.stringify({ holdoutCases: 3 }), JSON.stringify(report));
   return validated;
 }
 function guardInput() {
@@ -60,7 +62,7 @@ test("AI Guard reasons over semantic VALIDATED PRE_BUY knowledge and persists an
   } finally { store.close(); }
 });
 
-test("AI Guard still invokes Codex at cold start and excludes DRAFT and POST_BUY knowledge", async () => {
+test("AI Guard skips Codex at cold start and excludes DRAFT and POST_BUY knowledge", async () => {
   const store = new Store(":memory:"), repo = new ChartKnowledgeRepository(store.db);
   repo.createDraft({ ...baseKnowledge, id: "draft-only" });
   installValidated(store.db, "post-buy", "POST_BUY");
@@ -70,8 +72,8 @@ test("AI Guard still invokes Codex at cold start and excludes DRAFT and POST_BUY
     const decision = await evaluate(g);
     assert.equal(decision.action, "PASS");
     assert.equal(decision.reasonCode, "NO_KNOWLEDGE");
-    assert.equal(calls, 1);
-    assert.equal(knowledgeCount, 0);
+    assert.equal(calls, 0);
+    assert.equal(knowledgeCount, -1);
   } finally { store.close(); }
 });
 test("empty knowledge permits successful AI PASS and records NO_KNOWLEDGE", async () => {
@@ -80,10 +82,25 @@ test("empty knowledge permits successful AI PASS and records NO_KNOWLEDGE", asyn
   try { const result = await evaluate(g); assert.equal(result.action, "PASS"); assert.equal(result.reasonCode, "NO_KNOWLEDGE"); }
   finally { await g.stop(); store.close(); }
 });
-test("validated knowledge with no relevant match permits successful PASS as NO_MATCH", async () => {
+test("disabled, rejected, and deleted validated knowledge is ignored without calling Codex", async () => {
+  for (const control of ["disable", "reject", "delete"] as const) {
+    const store = new Store(":memory:"), valid = installValidated(store.db);
+    const repo = new ChartKnowledgeRepository(store.db);
+    repo[control](valid.id, valid.version, "fixture control");
+    let calls = 0;
+    const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => { calls++; return response(payload); }));
+    try {
+      const result = await evaluate(g);
+      assert.equal(result.action, "PASS");
+      assert.equal(result.reasonCode, "NO_KNOWLEDGE");
+      assert.equal(calls, 0);
+    } finally { await g.stop(); store.close(); }
+  }
+});
+test("validated knowledge with no relevant match cannot turn an unsupported model BLOCK into a block", async () => {
   const store = new Store(":memory:"); installValidated(store.db);
-  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
-  try { const result = await evaluate(g); assert.equal(result.action, "PASS"); assert.equal(result.reasonCode, "NO_MATCH"); }
+  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload, { action: "BLOCK", riskLevel: "HIGH", summary: "General market concern without a knowledge match." })));
+  try { const result = await evaluate(g); assert.equal(result.action, "PASS"); assert.equal(result.reasonCode, "NO_MATCH"); assert.equal(result.modelProposal?.action, "BLOCK"); }
   finally { store.close(); }
 });
 test("evidence-supported dangerous match blocks and conflicting evidence remains uncertain", async () => {
@@ -96,10 +113,24 @@ test("evidence-supported dangerous match blocks and conflicting evidence remains
   try { const result = await evaluate(conflicting); assert.equal(result.action, "UNCERTAIN"); assert.equal(result.reasonCode, "CONFLICTING_EVIDENCE"); }
   finally { await conflicting.stop(); store.close(); }
 });
+test("a changed knowledge revision during Codex evaluation invalidates the result", async () => {
+  const store = new Store(":memory:");
+  installValidated(store.db);
+  const repo = new ChartKnowledgeRepository(store.db);
+  const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => {
+    repo.createDraft({ ...baseKnowledge, id: "concurrent-revision" });
+    return response(payload);
+  }));
+  try {
+    const result = await evaluate(g);
+    assert.equal(result.action, "ERROR");
+    assert.match(result.runtimeOutcome, /KNOWLEDGE_REVISION_CHANGED/);
+  } finally { await g.stop(); store.close(); }
+});
 test("PASS TTL begins after completed evaluation and is independently bounded by evidence freshness", async()=>{
   const previousTimeout=process.env.AI_GUARD_TIMEOUT_MS,previousTtl=process.env.AI_GUARD_PASS_TTL_MS;
   process.env.AI_GUARD_TIMEOUT_MS="1000";process.env.AI_GUARD_PASS_TTL_MS="20000";
-  const store=new Store(":memory:");let start=0;
+  const store=new Store(":memory:");installValidated(store.db);let start=0;
   const g=new CodexAIGuard(store.learningDb,fakeRuntime(async(payload)=>{await new Promise((resolve)=>setTimeout(resolve,35));return response(payload);}));
   try{
     const input=guardInput();input.maxAgeMs=300000;start=Date.now();
@@ -138,7 +169,8 @@ test("AI Guard rejects unknown knowledge/evidence references and non-finite or m
     { confidence: Number.NaN },
     { action: "BUY" },
   ]) {
-    const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload, patch)));
+    const store = new Store(":memory:"); installValidated(store.db);
+    const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload, patch)));
     try { assert.equal((await evaluate(g)).action, "ERROR"); }
     finally { store.close(); }
   }
@@ -148,12 +180,14 @@ test("AI Guard fails closed for timeout, unavailable runtime, stale data, change
   const originalTimeout = process.env.AI_GUARD_TIMEOUT_MS;
   process.env.AI_GUARD_TIMEOUT_MS = "20";
   try {
-    const store = new Store(":memory:"), hanging: ReasoningRuntime = { ...fakeRuntime(() => ({})), analyzeGuard: (_payload, signal) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(Error("aborted")), { once: true })) }, g = new CodexAIGuard(store.learningDb, hanging);
+    const store = new Store(":memory:"); installValidated(store.db);
+    const hanging: ReasoningRuntime = { ...fakeRuntime(() => ({})), analyzeGuard: (_payload, signal) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(Error("aborted")), { once: true })) }, g = new CodexAIGuard(store.learningDb, hanging);
     try { const result = await evaluate(g); assert.equal(result.action, "ERROR"); assert.equal(result.reasonCode, "AI_ERROR"); assert.equal(result.runtimeOutcome, "AI_GUARD_TIMEOUT"); }
     finally { store.close(); }
   } finally { if (originalTimeout === undefined) delete process.env.AI_GUARD_TIMEOUT_MS; else process.env.AI_GUARD_TIMEOUT_MS = originalTimeout; }
   {
-    const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, { status: () => ({ state: "MISSING_OPENAI_API_KEY", model: "", promptVersion: "" }), analyze: async () => { throw Error("unused"); } });
+    const store = new Store(":memory:"); installValidated(store.db);
+    const g = new CodexAIGuard(store.learningDb, { status: () => ({ state: "MISSING_OPENAI_API_KEY", model: "", promptVersion: "" }), analyze: async () => { throw Error("unused"); } });
     try { const result = await evaluate(g); assert.equal(result.action, "ERROR"); assert.equal(result.reasonCode, "AI_ERROR"); }
     finally { store.close(); }
   }
@@ -161,17 +195,20 @@ test("AI Guard fails closed for timeout, unavailable runtime, stale data, change
     async () => ({ market: { ...guardInput().market, price: { state: "KNOWN" as const, value: 2 }, at: Date.now() }, authorityValid: true }),
     async () => ({ market: guardInput().market, authorityValid: false }),
   ]) {
-    const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
+    const store = new Store(":memory:"); installValidated(store.db);
+    const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
     try { assert.equal((await evaluate(g, guardInput(), revalidate)).action, "ERROR"); }
     finally { store.close(); }
   }
   {
-    const store=new Store(":memory:"),g=new CodexAIGuard(store.learningDb,fakeRuntime((payload)=>response(payload,{action:"UNCERTAIN",marketObservations:[],uncertaintyReasons:["Insufficient market evidence to decide."]})));
+    const store=new Store(":memory:"); installValidated(store.db);
+    const g=new CodexAIGuard(store.learningDb,fakeRuntime((payload)=>response(payload,{action:"UNCERTAIN",marketObservations:[],uncertaintyReasons:["Insufficient market evidence to decide."]})));
     try{const result=await evaluate(g);assert.equal(result.action,"UNCERTAIN");assert.equal(result.reasonCode,"INSUFFICIENT_MARKET_EVIDENCE");}
     finally{store.close();}
   }
   {
-    const store = new Store(":memory:"), g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
+    const store = new Store(":memory:"); installValidated(store.db);
+    const g = new CodexAIGuard(store.learningDb, fakeRuntime((payload) => response(payload)));
     const input = { ...guardInput(), history: { ...guardInput().history, fetchedAt: Date.now() - 120000 } };
     try { assert.equal((await evaluate(g, input)).runtimeOutcome, "AI_GUARD_STALE_INPUT"); }
     finally { store.close(); }
@@ -189,9 +226,9 @@ test("CodexRuntime sends strict guard schema and semantic instructions through i
   const body = JSON.parse(request);
   assert.equal(result.action, "PASS");
   assert.match(body.instructions, /semantically/);
-  assert.match(body.instructions, /not a whitelist/);
+  assert.match(body.instructions, /sole task is to compare/);
   assert.match(body.instructions, /novel chart is not inherently dangerous/);
-  assert.match(body.instructions, /never fabricate a match/);
+  assert.match(body.instructions, /Never fabricate a rule, match, ID, version, or evidence/);
   assert.ok(body.text.format.schema);
   assert.equal("tools" in body, false);
 });

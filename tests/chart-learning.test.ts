@@ -364,25 +364,30 @@ test("validated rule BLOCK records actual references and fabricated IDs are reje
     s.close();
   }
 });
-test("guard integration runs before KRONOS and BLOCK prevents entry inference", async () => {
+test("cold-start Guard skips Codex and does not let an unsupported BLOCK veto KRONOS", async () => {
   const f = setup();
+  let guardCalls = 0;
   try {
-    f.engine.chartLearning.runtime.analyzeGuard = async (input) => ({
-      action: "BLOCK", riskLevel: "HIGH", confidence: 0.9, summary: "controlled guard fixture",
-      matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture risk evidence." }],
-      uncertaintyReasons: [], evidenceCutoffAt: Number((input as any).evidenceCutoffAt),
-    });
-    await assert.rejects(f.engine.analyze(MINT), /TEMPORARY_RISK_CHANGE/);
+    f.engine.chartLearning.runtime.analyzeGuard = async (input) => {
+      guardCalls++;
+      return {
+        action: "BLOCK", riskLevel: "HIGH", confidence: 0.9, summary: "controlled guard fixture",
+        matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture risk evidence." }],
+        uncertaintyReasons: [], evidenceCutoffAt: Number((input as any).evidenceCutoffAt),
+      };
+    };
+    await f.engine.analyze(MINT);
     await f.engine.settleEntryEvaluations();
-    assert.equal(f.calls(), 0);
-    assert.equal(f.store.executions().length, 0);
-    assert.equal(f.engine.attempts.current!.failedStage, "CODEX_GUARD");
+    assert.equal(guardCalls, 0);
+    assert.equal(f.calls(), 1);
+    const latest = f.store.learningDb.prepare("SELECT payload FROM chart_ai_guard_decisions ORDER BY at DESC LIMIT 1").get() as { payload: string };
+    assert.equal(JSON.parse(latest.payload).reasonCode, "NO_KNOWLEDGE");
   } finally {
     await f.engine.stop();
     f.store.close();
   }
 });
-test("AI Guard UNCERTAIN, malformed response, and unavailable runtime fail closed before KRONOS/BUY", async () => {
+test("cold-start Guard skips uncertain, malformed, and unavailable Codex paths", async () => {
   for (const kind of ["UNCERTAIN", "MALFORMED", "UNAVAILABLE"] as const) {
     const f = setup();
     try {
@@ -390,11 +395,11 @@ test("AI Guard UNCERTAIN, malformed response, and unavailable runtime fail close
       else f.engine.chartLearning.runtime.analyzeGuard = async (input) => kind === "MALFORMED"
         ? { action: "PASS", riskLevel: "LOW", confidence: 1, summary: "forged", matchedKnowledge: [], marketObservations: [{ evidenceId: "FUTURE", explanation: "forged" }], uncertaintyReasons: [], evidenceCutoffAt: Number((input as any).evidenceCutoffAt) }
         : { action: "UNCERTAIN", riskLevel: "HIGH", confidence: 0.5, summary: "uncertain evidence", matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Current evidence is inconclusive." }], uncertaintyReasons: ["contradictory evidence"], evidenceCutoffAt: Number((input as any).evidenceCutoffAt) };
-      await assert.rejects(f.engine.analyze(MINT), /TEMPORARY_RISK_CHANGE/);
+      await f.engine.analyze(MINT);
       await f.engine.settleEntryEvaluations();
-      assert.equal(f.calls(), 0);
-      assert.equal(f.store.executions().length, 0);
-      assert.equal(f.engine.attempts.current!.failedStage, "CODEX_GUARD");
+      assert.equal(f.calls(), 1);
+      const latest = f.store.learningDb.prepare("SELECT payload FROM chart_ai_guard_decisions ORDER BY at DESC LIMIT 1").get() as { payload: string };
+      assert.equal(JSON.parse(latest.payload).reasonCode, "NO_KNOWLEDGE");
       assert.equal(Number(f.store.learningDb.prepare("SELECT count(*) n FROM chart_learning_cases").get()!.n), 0);
     } finally { await f.engine.stop(); f.store.close(); }
   }

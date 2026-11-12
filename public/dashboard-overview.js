@@ -157,11 +157,11 @@ export async function mount(ctx) {
       n.append(node("span", label), node("strong", value));
       return n;
     }
-    function stageIndicator(stage, state, label = labels[stage]) {
+    function stageIndicator(stage, state, label = labels[stage], detail = "") {
       const row = node("div", undefined, "terminal-stage");
       row.dataset.stage = stage;
       row.dataset.status = state;
-      row.setAttribute("aria-label", label + ": " + state);
+      row.setAttribute("aria-label", label + ": " + state + (detail ? " · " + detail : ""));
       row.append(
         node(
           "i",
@@ -185,7 +185,12 @@ export async function mount(ctx) {
             INSUFFICIENT_DATA: "?",
           }[state] || "?",
         ),
-        node("span", label),
+        (() => {
+          const text = node("span", undefined, "terminal-stage-label");
+          text.append(node("span", label));
+          if (detail) text.append(node("small", detail, "terminal-stage-reason"));
+          return text;
+        })(),
         node("b", state),
         node("em"),
       );
@@ -225,6 +230,8 @@ export async function mount(ctx) {
                 : guard?.action === "ERROR"
                   ? "ERROR"
                   : a.stages.CODEX_GUARD || "PENDING",
+              labels.CODEX_GUARD,
+              guard?.reasonCode || (guard?.action === "ERROR" ? "KNOWLEDGE_EVALUATION_FAILED" : ""),
             ),
           );
         }
