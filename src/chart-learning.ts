@@ -30,6 +30,7 @@ export class ChartLearning {
   private stopped = false;
   private next = 0;
   private maintenanceAt = 0;
+  private positionRecoveryCursor = 0;
   private lastError: string | null = null;
   private readonly sources: readonly Store[];
   private timer?: NodeJS.Timeout;
@@ -200,7 +201,7 @@ export class ChartLearning {
       sqliteAtomic(this.charts.db, () => {
         this.charts.db
           .prepare(
-            "UPDATE chart_learning_cases SET status='CLOSED',exit_snapshot_id=?,realized_pnl_lamports=?,realized_pnl_pct=?,updated_at=?,payload=json_set(payload,'$.closedAt',?,'$.exitExecutionId',?,'$.accounting',?,'$.exitPriceUsd',?) WHERE position_id=?",
+            "UPDATE chart_learning_cases SET status='CLOSED',exit_snapshot_id=?,realized_pnl_lamports=?,realized_pnl_pct=?,updated_at=?,payload=json_set(payload,'$.closedAt',?,'$.exitExecutionId',?,'$.sellConfirmedAt',?,'$.accounting',?,'$.exitPriceUsd',?,'$.simulated',?) WHERE position_id=?",
           )
           .run(
             exit?.id ?? null,
@@ -209,8 +210,10 @@ export class ChartLearning {
             now,
             p.closedAt ?? now,
             exit?.id ?? null,
+            exit ? (exit.accounting?.at ?? exit.at) : null,
             JSON.stringify(accounting),
             JSON.stringify(exit?.accounting?.priceUsd ?? null),
+            JSON.stringify(p.mode === "demo" || exit?.evidence?.simulated === true),
             p.id,
           );
         if (exit)
@@ -256,6 +259,10 @@ export class ChartLearning {
       this.charts.db
         .prepare("UPDATE chart_learning_cases SET payload=json_set(payload,'$.entryEvidence',json(?)),updated_at=? WHERE position_id=?")
         .run(JSON.stringify(entryEvidence), now, p.id);
+    if (entryEvidence?.guardDecision)
+      this.recordCaseDecision(p.id, "GUARD_ENTRY", entryEvidence.guardDecision, p.mode === "demo");
+    if (entryEvidence?.kronosDecision)
+      this.recordCaseDecision(p.id, "KRONOS_ENTRY", entryEvidence.kronosDecision, p.mode === "demo");
     if (h && !learningCase.snapshotId) {
       const snapshotId = this.charts.ingest(
         p.mint,
@@ -403,11 +410,22 @@ export class ChartLearning {
           at,
         );
         this.charts.decision(base);
+        this.recordCaseDecision(p!.id, "GUARD", base, p!.mode === "demo");
       }
       return base;
     } finally {
       this.charts.db.exec("PRAGMA busy_timeout=" + priorTimeout);
     }
+  }
+  recordCaseDecision(positionId: string, source: string, decision: unknown, simulated: boolean) {
+    if (!this.charts.db.prepare("SELECT 1 FROM chart_learning_cases WHERE position_id=?").get(positionId)) return false;
+    const value = decision as Record<string, unknown>;
+    const decisionId = String(value.decisionId ?? value.id ?? randomUUID());
+    const at = Number(value.decisionAt ?? value.at ?? Date.now());
+    const action = String(value.action ?? "UNKNOWN");
+    this.charts.db.prepare("INSERT OR IGNORE INTO chart_case_decisions VALUES(?,?,?,?,?,?,?)")
+      .run(positionId, decisionId, source, at, action, simulated ? 1 : 0, JSON.stringify(decision));
+    return true;
   }
   observePosition(
     p: Position,
@@ -453,11 +471,15 @@ export class ChartLearning {
     const account = this.charts.account(mode);
     // Recovery is position scoped: only confirmed BUYs create cases after restart.
     for (const source of this.sources) {
-      for (const p of source.positions(source.mode).slice(0, 100)) {
+      const positions = source.positions(source.mode);
+      const start = positions.length ? this.positionRecoveryCursor % positions.length : 0;
+      const batch = [...positions.slice(start, start + 100), ...positions.slice(0, Math.max(0, start + 100 - positions.length))];
+      for (const p of batch) {
         const c = this.ensureCase(p, now);
         if (c && p.state !== "CLOSED")
           this.charts.watch(p.mint, p.mode, 0, "POST_BUY_POSITION:" + p.id, now);
       }
+      this.positionRecoveryCursor = positions.length ? (start + 100) % positions.length : 0;
     }
     this.drainOutboxes(now);
     for (const source of this.sources)

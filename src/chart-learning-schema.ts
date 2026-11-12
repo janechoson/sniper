@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS chart_case_analyses (
  id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
  job_id TEXT NOT NULL UNIQUE REFERENCES chart_analysis_jobs(id), analyzed_at INTEGER NOT NULL,
  analysis_version TEXT NOT NULL, runtime_model TEXT, result TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chart_case_decisions (
+ position_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ decision_id TEXT NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL,
+ action TEXT NOT NULL, simulated INTEGER NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(position_id,decision_id));
+CREATE INDEX IF NOT EXISTS chart_case_decisions_time ON chart_case_decisions(position_id,at);
 ${[
   "chart_candles",
   "chart_events",
@@ -119,5 +125,6 @@ BEGIN SELECT RAISE(ABORT,'Immutable chart history'); END;`,
   .join("")}
 INSERT OR IGNORE INTO migrations VALUES(17,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(19,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(20,unixepoch());
 COMMIT;
 `;

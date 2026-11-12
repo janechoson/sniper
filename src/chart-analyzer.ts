@@ -116,6 +116,16 @@ export class ChartAnalyzer {
       )
       .all(caseId, now, now)
       .map((row: any) => JSON.parse(String(row.payload)));
+    const snapshots = this.charts.db
+      .prepare("SELECT s.id,s.at,s.payload,ce.phase,ce.available_at FROM chart_case_evidence ce JOIN chart_snapshots s ON ce.evidence_type='SNAPSHOT' AND ce.evidence_id=s.id WHERE ce.case_id=? AND ce.available_at<=? ORDER BY s.at DESC LIMIT 120")
+      .all(caseId, now)
+      .map((row: any) => ({ id: String(row.id), at: Number(row.at), phase: String(row.phase), availableAt: Number(row.available_at), payload: JSON.parse(String(row.payload)) }))
+      .reverse();
+    const decisions = this.charts.db
+      .prepare("SELECT decision_id,source,at,action,simulated,payload FROM chart_case_decisions WHERE position_id=? ORDER BY at DESC LIMIT 500")
+      .all(caseId)
+      .map((row: any) => ({ id: String(row.decision_id), source: String(row.source), at: Number(row.at), action: String(row.action), simulated: Boolean(row.simulated), payload: JSON.parse(String(row.payload)) }))
+      .reverse();
     const replay = this.charts.db
       .prepare("SELECT payload FROM chart_replays WHERE position_id=?")
       .get(caseId) as { payload: string } | undefined;
@@ -124,11 +134,12 @@ export class ChartAnalyzer {
       .all(caseId);
     if (!replay) throw Error("LEARNING_CASE_REPLAY_UNAVAILABLE");
     const caseData = JSON.parse(String(learningCase.payload));
-    const sellAt = this.charts.db.prepare("SELECT min(json_extract(f.payload,'$.at')) at FROM execution_fills f JOIN executions e ON e.id=f.execution_id WHERE json_extract(e.payload,'$.intent.positionId')=? AND json_extract(e.payload,'$.intent.side')='SELL' AND e.state='CONFIRMED'").get(caseId) as {at:number|null};
     return {
-      case: { ...caseData, buyConfirmedAt: Number((learningCase as any).buy_confirmed_at), sellConfirmedAt: sellAt.at === null ? null : Number(sellAt.at) },
+      case: { ...caseData, buyConfirmedAt: Number((learningCase as any).buy_confirmed_at), sellConfirmedAt: caseData.sellConfirmedAt ?? null },
       replay: JSON.parse(replay.payload),
       candles,
+      snapshots,
+      decisions,
       events: evidence,
       followups,
       policy: CHART_POLICY,

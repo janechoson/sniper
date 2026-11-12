@@ -1304,6 +1304,7 @@ export class Engine {
           positionId: p.id,
           mode: p.mode,
         });
+        this.chartLearning.recordCaseDecision(p.id, "KRONOS", d, p.mode === "demo");
         this.store.pipelineEvent("KRONOS_" + d.action, p.mint, {
           strategy: "KRONOS",
           positionId: p.id,
