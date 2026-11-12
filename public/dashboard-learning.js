@@ -247,6 +247,15 @@ export async function mount(ctx) {
     const status = data.status || {},
       runtime = status.analyzer?.runtime || status.runtime || {},
       analysis = data.analysisStatus || {};
+    const guard = data.aiGuardStatus || {}, latest = guard.latest || {};
+    document.getElementById("aiGuardState").textContent = guard.enabled ? (guard.active ? "Đang suy luận" : "Bật · fail closed") : "Tắt · từ chối BUY";
+    document.getElementById("aiGuardRuntime").textContent = `${guard.runtime?.state || "N/A"} · timeout ${guard.timeoutMs || 8000}ms · concurrency ${guard.concurrency || 1} · fail ${guard.failPolicy || "BLOCK"} · cold start ${guard.coldStartPolicy || "UNCERTAIN"}`;
+    document.getElementById("aiGuardLatest").textContent = latest.action || "Chưa có đánh giá";
+    document.getElementById("aiGuardLatency").textContent = latest.id ? `${latest.durationMs}ms total · queue ${latest.queueWaitMs}ms · p50/p95/p99 ${guard.latencyMs?.p50 ?? "N/A"}/${guard.latencyMs?.p95 ?? "N/A"}/${guard.latencyMs?.p99 ?? "N/A"}ms · ${latest.summary || latest.runtimeOutcome}` : "Chưa có mẫu latency thực tế";
+    document.getElementById("aiGuardKnowledge").textContent = String(guard.validatedKnowledgeCount ?? 0);
+    document.getElementById("aiGuardMatches").textContent = (latest.matchedKnowledge || []).map((item) => item.knowledgeId).join(", ") || "Không có pattern đã match gần nhất";
+    document.getElementById("aiGuardErrors").textContent = String(guard.errorCount ?? 0);
+    document.getElementById("aiGuardQueue").textContent = `${guard.timeoutCount ?? 0} timeout · ${guard.active ? 1 : 0} active · ${guard.queued ?? 0} queued`;
     const collector = document.getElementById("learningCollector");
     collector.textContent = status.collector?.state === "PAUSED"
       ? "Tạm dừng"
@@ -324,6 +333,30 @@ export async function mount(ctx) {
     document.getElementById("analyzeSelectedCases").disabled = selectedCases.size === 0;
     document.getElementById("analyzeReadyCases").textContent = `Analyze Ready Cases (${data?.analysisStatus?.ready ?? 0})`;
     document.getElementById("analyzeReadyCases").disabled = Number(data?.analysisStatus?.ready ?? 0) === 0;
+  }
+  function renderKnowledge() {
+    const list = document.getElementById("semanticKnowledgeList");
+    list.replaceChildren();
+    for (const item of data?.knowledge || []) {
+      const row = el("div", undefined, "learning-case-row");
+      row.append(el("strong", item.title), el("small", `${item.category} · ${item.applicableStage} · v${item.version} · ${item.validationStatus}`), el("small", item.description));
+      if (item.validationStatus === "DRAFT") row.append(button("Validate on independent cases", async () => {
+        const value = window.prompt("Nhập ít nhất 3 closed case ID, phân tách bằng dấu phẩy. Các case phải khác token và không overlap dữ liệu training.");
+        if (!value) return;
+        const validationCaseIds = value.split(",").map((id) => id.trim()).filter(Boolean);
+        if (!window.confirm("Xác nhận đã xem xét kết quả holdout độc lập và promote knowledge này?")) return;
+        try { await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/validate`, { version: item.version, validationCaseIds, approved: true }); data = await read(""); renderHealth(); renderKnowledge(); }
+        catch (error) { ctx.error(error); }
+      }));
+      if (item.validationStatus === "DRAFT") row.append(button("Reject DRAFT", async () => {
+        const reason = window.prompt("Lý do từ chối semantic knowledge này?");
+        if (!reason) return;
+        try { await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/reject`, { version: item.version, reason }); data = await read(""); renderHealth(); renderKnowledge(); }
+        catch (error) { ctx.error(error); }
+      }));
+      list.append(row);
+    }
+    if (!list.childElementCount) list.append(el("p", "Chưa có semantic knowledge."));
   }
   function renderEventList() {
     const list = document.getElementById("learningEventList"),
@@ -767,6 +800,7 @@ export async function mount(ctx) {
     if (tab === "Analysis Jobs") data.jobs = await read("/analysis-jobs");
     renderHealth();
     renderCaseList();
+    renderKnowledge();
     const o = data.overview,
       a = data.analysisStatus || {},
       overview = document.getElementById("learningOverview");

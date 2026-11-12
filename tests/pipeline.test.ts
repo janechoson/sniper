@@ -21,6 +21,7 @@ test("DEMO shares one-shot BUY, duplicate protection, and existing manual partia
     await f.engine.analyze(MINT);
     await f.engine.settleEntryEvaluations();
     assert.equal(f.engine.attempts.current!.result, "BOUGHT");
+    assert.equal(f.store.learningDb.prepare("SELECT action FROM chart_ai_guard_decisions ORDER BY at DESC LIMIT 1").get()!.action, "PASS");
     assert.equal(f.calls(), 1);
     const p = f.store.positions("demo")[0]!;
     await assert.rejects(f.engine.analyze(MINT));

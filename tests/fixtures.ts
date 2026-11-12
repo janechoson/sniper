@@ -17,8 +17,17 @@ import {
 } from "../src/gmgn.js";
 import { attemptFlow, parseMarketHistory } from "../src/market-history.js";
 import type { Store } from "../src/store.js";
+import type { ReasoningRuntime, ReasoningResult } from "../src/codex-runtime.js";
 import { makeFillAccounting } from "../src/trade-accounting.js";
 import { fixtureDecision } from "./kronos-fixtures.js";
+
+export function fixtureCodex(): ReasoningRuntime {
+  return {
+    status: () => ({ state: "READY", model: "FIXTURE_ONLY", promptVersion: "fixture" }),
+    analyze: async () => ({ action: "REVIEW", reason: "Fixture review", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "Fixture only", hypothesis: null } satisfies ReasoningResult),
+    analyzeGuard: async (input: any) => ({ action: "PASS", riskLevel: "LOW", confidence: 0.8, summary: "Fixture mock pass; not evidence of semantic quality.", matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture market snapshot supplied." }], uncertaintyReasons: ["Fixture runtime"], evidenceCutoffAt: input.evidenceCutoffAt }),
+  };
+}
 
 /** Explicit fee-free reconciled entry for monitoring fixtures. */
 export function seedEntryAccounting(store: Store, p: Position) {

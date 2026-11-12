@@ -250,7 +250,7 @@ export class ChartLearning {
     p: Position,
     h?: MarketHistory,
     market?: Market,
-    entryEvidence?: { guardDecision?: ChartDecision; kronosDecision?: unknown; riskSnapshot?: unknown },
+    entryEvidence?: { guardDecision?: unknown; kronosDecision?: unknown; riskSnapshot?: unknown },
     now = Date.now(),
   ) {
     const learningCase = this.ensureCase(p, now);
@@ -304,7 +304,7 @@ export class ChartLearning {
     p: Position,
     h: MarketHistory,
     market: Market,
-    entryEvidence?: { guardDecision?: ChartDecision; kronosDecision?: unknown; riskSnapshot?: unknown },
+    entryEvidence?: { guardDecision?: unknown; kronosDecision?: unknown; riskSnapshot?: unknown },
   ) {
     setImmediate(() => {
       try {

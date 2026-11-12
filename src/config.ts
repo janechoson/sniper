@@ -38,6 +38,12 @@ export const env = z
     SCANNER_ENABLED: bool.default(true),
     SCAN_INTERVAL_MS: z.coerce.number().int().min(10000).default(15000),
     OBSERVATION_CYCLES: z.coerce.number().int().min(1).max(20).default(3),
+    AI_GUARD_ENABLED: bool.default(true),
+    AI_GUARD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
+    AI_GUARD_MAX_CONCURRENCY: z.literal("1").default("1"),
+    AI_GUARD_MAX_ATTEMPTS: z.literal("1").default("1"),
+    AI_GUARD_FAIL_POLICY: z.literal("BLOCK").default("BLOCK"),
+    AI_GUARD_COLD_START_POLICY: z.enum(["UNCERTAIN", "BLOCK", "PASS"]).default("UNCERTAIN"),
   })
   .parse(process.env);
 export function gmgnSigningKey() {

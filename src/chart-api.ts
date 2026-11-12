@@ -1,6 +1,7 @@
 import type { Engine } from "./engine.js";
 import type { ChartEvent } from "./chart-store.js";
 import { env } from "./config.js";
+import { ChartKnowledgeRepository } from "./chart-knowledge.js";
 
 function caseRows(engine: Engine) {
   return engine.chartLearning.charts.db.prepare(
@@ -20,6 +21,16 @@ function caseRows(engine: Engine) {
 export function chartLearningCommand(engine: Engine, url: URL, body: unknown) {
   if (!body || typeof body !== "object") throw Error("INVALID_ANALYSIS_REQUEST");
   const input = body as Record<string, unknown>;
+  const validateKnowledge = url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)\/validate$/);
+  if (validateKnowledge) {
+    if (!Number.isInteger(input.version) || !Array.isArray(input.validationCaseIds) || !input.validationCaseIds.every((id) => typeof id === "string")) throw Error("INVALID_KNOWLEDGE_VALIDATION_REQUEST");
+    return new ChartKnowledgeRepository(engine.store.learningDb).validateDraft(decodeURIComponent(validateKnowledge[1]!), Number(input.version), input.validationCaseIds as string[], input.approved === true);
+  }
+  const rejectKnowledge = url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)\/reject$/);
+  if (rejectKnowledge) {
+    if (!Number.isInteger(input.version) || typeof input.reason !== "string") throw Error("INVALID_KNOWLEDGE_REJECTION_REQUEST");
+    return new ChartKnowledgeRepository(engine.store.learningDb).rejectDraft(decodeURIComponent(rejectKnowledge[1]!), Number(input.version), input.reason);
+  }
   if (url.pathname === "/api/chart-learning/analyze") {
     if (typeof input.caseId !== "string") throw Error("LEARNING_CASE_ID_REQUIRED");
     return engine.chartLearning.analyzer.request([input.caseId]);
@@ -74,6 +85,7 @@ function eventReviews(
 
 /** Read-only bounded projections. Mode/account is server authority, not a query parameter. */
 export function chartLearningView(engine: Engine, url: URL) {
+  if (url.pathname === "/api/chart-learning/knowledge") return new ChartKnowledgeRepository(engine.store.learningDb).all();
   if (engine.store.sharedLearning) return sharedLearningView(engine, url);
   const charts = engine.chartLearning.charts,
     db = charts.db,
@@ -89,6 +101,7 @@ export function chartLearningView(engine: Engine, url: URL) {
     return {
       overview: charts.overview(mode),
       status: engine.chartLearning.status(),
+      aiGuardStatus: engine.codexAIGuard.status(),
       rules: charts.rules(),
       events: eventReviews(
         db,
@@ -114,6 +127,7 @@ export function chartLearningView(engine: Engine, url: URL) {
       ),
       learningCases: caseRows(engine),
       analysisJobs: engine.chartLearning.analyzer.jobs(),
+      knowledge: new ChartKnowledgeRepository(db).all(),
       analysisStatus: {
         manualOnly: true,
         ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),
@@ -299,6 +313,7 @@ function sharedLearningView(engine: Engine, url: URL) {
     return {
       overview: charts.overview("demo"),
       status: engine.chartLearning.status(),
+      aiGuardStatus: engine.codexAIGuard.status(),
       rules: charts.rules(),
       events: eventReviews(
         db,
@@ -315,6 +330,7 @@ function sharedLearningView(engine: Engine, url: URL) {
       ),
       learningCases: caseRows(engine),
       analysisJobs: engine.chartLearning.analyzer.jobs(),
+      knowledge: new ChartKnowledgeRepository(db).all(),
       analysisStatus: {
         manualOnly: true,
         ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),

@@ -504,6 +504,12 @@
             <article><span>Learning Queue</span><strong id="learningQueueHealth">Đang kiểm tra</strong><small id="learningQueueDetail"></small></article>
             <article><span>Rule Validation</span><strong id="learningValidation">Đang kiểm tra</strong><small id="learningValidationDetail"></small></article>
           </section>
+          <section id="aiGuardHealth" aria-label="Tình trạng AI Guard">
+            <article><span>Codex AI Guard</span><strong id="aiGuardState">Đang kiểm tra</strong><small id="aiGuardRuntime"></small></article>
+            <article><span>Đánh giá gần nhất</span><strong id="aiGuardLatest">Chưa có</strong><small id="aiGuardLatency"></small></article>
+            <article><span>Knowledge hợp lệ</span><strong id="aiGuardKnowledge">0</strong><small id="aiGuardMatches"></small></article>
+            <article><span>Lỗi Guard</span><strong id="aiGuardErrors">0</strong><small id="aiGuardQueue"></small></article>
+          </section>
           <p id="learningStatus" role="status"></p>
           <section id="learningCaseControls" class="learning-case-controls" aria-label="Phân tích Learning Case thủ công">
             <header><div><h3>Learning Cases</h3><p>Chart collection tự động · Codex analysis chỉ chạy khi bạn bấm.</p></div>
@@ -512,6 +518,10 @@
             <div id="learningCaseStatus" role="status"></div>
             <div id="learningCaseList" role="list"></div>
             <article id="learningCaseAnalysis" class="panel" hidden aria-live="polite"></article>
+          </section>
+          <section id="semanticKnowledge" class="learning-case-controls" aria-label="Semantic trading knowledge">
+            <header><div><h3>Semantic Knowledge</h3><p>DRAFT chỉ tác động Guard sau khi qua validation độc lập.</p></div></header>
+            <div id="semanticKnowledgeList" role="list"></div>
           </section>
           <section id="learningOverview" aria-label="Chỉ số học"></section>
           <details id="learningMoreStats"><summary>Chi tiết thống kê</summary><div id="learningSecondaryStats"></div></details>

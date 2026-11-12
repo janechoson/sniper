@@ -6048,13 +6048,15 @@ tbody tr:hover {
   font-weight: 750;
   white-space: nowrap;
 }
-#learningHealth {
+#learningHealth,
+#aiGuardHealth {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
-#learningHealth article {
+#learningHealth article,
+#aiGuardHealth article {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -6064,11 +6066,13 @@ tbody tr:hover {
   border-radius: 10px;
   background: var(--rk-surface-elevated);
 }
-#learningHealth span {
+#learningHealth span,
+#aiGuardHealth span {
   color: var(--rk-text-secondary);
   font-size: 10px;
 }
-#learningHealth strong {
+#learningHealth strong,
+#aiGuardHealth strong {
   overflow-wrap: anywhere;
   font-size: 12px;
 }
@@ -6364,7 +6368,7 @@ tbody tr:hover {
 .learning-insights-panel p { color: var(--rk-text-secondary); font-size: 10px; }
 @media (max-width: 1100px) {
   #learningOverview { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  #learningHealth { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #learningHealth, #aiGuardHealth { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .learning-workspace { grid-template-columns: minmax(190px, 0.8fr) minmax(0, 2fr); }
   .learning-insights-panel { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .learning-event-panel { grid-row: span 2; }

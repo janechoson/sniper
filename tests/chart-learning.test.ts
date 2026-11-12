@@ -85,6 +85,12 @@ function runtime(result: Partial<ReasoningResult> = {}): ReasoningRuntime {
       hypothesis: null,
       ...result,
     }),
+    analyzeGuard: async (input: any) => ({
+      action: "PASS", riskLevel: "LOW", confidence: 0.8,
+      summary: "Fixture mock pass; not evidence of model quality.",
+      matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture market snapshot supplied." }], uncertaintyReasons: ["Mock Codex response"],
+      evidenceCutoffAt: input.evidenceCutoffAt,
+    }),
   };
 }
 test("Chart Learning has a single runtime.analyze call site: the manual Analyzer", () => {
@@ -93,17 +99,21 @@ test("Chart Learning has a single runtime.analyze call site: the manual Analyzer
     .filter((name) => /(?:this\.)?runtime\.analyze\s*\(/.test(readFileSync(join(src, name), "utf8")));
   assert.deepEqual(callsites, ["chart-analyzer.ts"]);
 });
-test("case-decision migration is additive and idempotent across Learning DB reopen", async () => {
+test("semantic knowledge and AI audit migration is additive and idempotent across Learning DB reopen", async () => {
   const { openLearningDatabase } = await import("../src/learning-database.js");
   const dir = mkdtempSync(join(tmpdir(), "chart-learning-migration-"));
   try {
     let db = openLearningDatabase(join(dir, "learning.sqlite"));
-    assert.ok(db.prepare("SELECT version FROM migrations WHERE version=20").get());
+    assert.ok(db.prepare("SELECT version FROM migrations WHERE version=21").get());
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_case_decisions'").get());
+    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions"])
+      assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
     db.close();
     db = openLearningDatabase(join(dir, "learning.sqlite"));
-    assert.equal(db.prepare("SELECT count(*) n FROM migrations WHERE version=20").get()!.n, 1);
+    assert.equal(db.prepare("SELECT count(*) n FROM migrations WHERE version=21").get()!.n, 1);
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_case_decisions'").get());
+    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions"])
+      assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
     db.close();
   } finally {
     assert.equal(dirname(resolve(dir)), resolve(tmpdir()));
@@ -355,11 +365,11 @@ test("validated rule BLOCK records actual references and fabricated IDs are reje
 test("guard integration runs before KRONOS and BLOCK prevents entry inference", async () => {
   const f = setup();
   try {
-    f.engine.chartLearning.decide = async () =>
-      ({
-        action: "BLOCK",
-        reason: "controlled guard fixture",
-      }) as ChartDecision;
+    f.engine.chartLearning.runtime.analyzeGuard = async (input) => ({
+      action: "BLOCK", riskLevel: "HIGH", confidence: 0.9, summary: "controlled guard fixture",
+      matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture risk evidence." }],
+      uncertaintyReasons: [], evidenceCutoffAt: Number((input as any).evidenceCutoffAt),
+    });
     await assert.rejects(f.engine.analyze(MINT), /TEMPORARY_RISK_CHANGE/);
     await f.engine.settleEntryEvaluations();
     assert.equal(f.calls(), 0);
@@ -368,6 +378,23 @@ test("guard integration runs before KRONOS and BLOCK prevents entry inference", 
   } finally {
     await f.engine.stop();
     f.store.close();
+  }
+});
+test("AI Guard UNCERTAIN, malformed response, and unavailable runtime fail closed before KRONOS/BUY", async () => {
+  for (const kind of ["UNCERTAIN", "MALFORMED", "UNAVAILABLE"] as const) {
+    const f = setup();
+    try {
+      if (kind === "UNAVAILABLE") f.engine.chartLearning.runtime.analyzeGuard = undefined;
+      else f.engine.chartLearning.runtime.analyzeGuard = async (input) => kind === "MALFORMED"
+        ? { action: "PASS", riskLevel: "LOW", confidence: 1, summary: "forged", matchedKnowledge: [], marketObservations: [{ evidenceId: "FUTURE", explanation: "forged" }], uncertaintyReasons: [], evidenceCutoffAt: Number((input as any).evidenceCutoffAt) }
+        : { action: "UNCERTAIN", riskLevel: "HIGH", confidence: 0.5, summary: "uncertain evidence", matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Current evidence is inconclusive." }], uncertaintyReasons: ["contradictory evidence"], evidenceCutoffAt: Number((input as any).evidenceCutoffAt) };
+      await assert.rejects(f.engine.analyze(MINT), /TEMPORARY_RISK_CHANGE/);
+      await f.engine.settleEntryEvaluations();
+      assert.equal(f.calls(), 0);
+      assert.equal(f.store.executions().length, 0);
+      assert.equal(f.engine.attempts.current!.failedStage, "CODEX_GUARD");
+      assert.equal(Number(f.store.learningDb.prepare("SELECT count(*) n FROM chart_learning_cases").get()!.n), 0);
+    } finally { await f.engine.stop(); f.store.close(); }
   }
 });
 test("PASS lets KRONOS BUY use existing executor and WAIT creates no order", async () => {

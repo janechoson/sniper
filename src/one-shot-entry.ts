@@ -26,6 +26,7 @@ export async function oneShotEntry(
   protectiveBusy: () => boolean,
 ) {
   let owned: BuyOwnershipClaim | undefined;
+  let aiGuardExpiresAt = Number.POSITIVE_INFINITY;
   try {
     let candidate = e.store.token(mint)!;
     const attemptId = e.attempts.current!.attemptId;
@@ -48,6 +49,7 @@ export async function oneShotEntry(
     const assertAuthority = () => {
       if (e.entriesStopping) reject("ENGINE_STOPPING");
       e.store.assertEntryAuthority(mint, e.mode, authority);
+      if (Date.now() >= aiGuardExpiresAt) reject("AI_GUARD_PASS_EXPIRED");
     };
     const info = await run("CHEAP_FILTER", async () => {
       try {
@@ -212,19 +214,26 @@ export async function oneShotEntry(
 
     e.store.pipelineEvent("COMMON_PIPELINE_PASS", mint, { attemptId });
     const guard = await run("CODEX_GUARD", async () => {
-      const d = await e.chartLearning.decide(
-        candidate,
-        history,
-        market,
-        e.mode,
-      );
+      const d = await e.codexAIGuard.evaluate({
+        candidate, history, market, mode: e.mode, attemptId,
+        maxAgeMs: e.settings.maxSnapshotAgeMs,
+        maxPriceMovePercent: e.settings.maxDecisionPriceMovePercent,
+        context: { security, intelligence, capitalFlow: flow, tokenExecution },
+      }, async () => {
+        assertAuthority();
+        const fresh = normalizeMarket(await e.gmgn.info(mint, 0, { priority: 0, consumer: "ai-guard-revalidation" }));
+        let authorityValid = true;
+        try { assertAuthority(); } catch { authorityValid = false; }
+        return { market: fresh, authorityValid };
+      });
+      aiGuardExpiresAt = d.expiresAt;
       e.attempts.summary("codexGuard", d);
       e.store.pipelineEvent("CODEX_" + d.action, mint, {
         attemptId,
         decisionId: d.id,
-        reason: d.reason,
+        reason: d.summary,
       });
-      if (d.action !== "PASS") reject("CODEX_" + d.action + ": " + d.reason);
+      if (d.action !== "PASS") reject("CODEX_" + d.action + ": " + d.summary);
       return d;
     });
     e.attempts.summary("codexGuardDecisionId", guard.id);

@@ -15,6 +15,7 @@ import {
   securityRaw,
   settings,
   WALLET,
+  fixtureCodex,
 } from "./fixtures.js";
 import { fakeKronos, fixtureQuotes } from "./kronos-fixtures.js";
 export const now = Math.floor(Date.now() / 60000) * 60000;
@@ -93,6 +94,7 @@ export function setup(
     gmgn: p.gmgn,
     rpc,
     kronos,
+    codex: fixtureCodex(),
     demoQuotes: fixtureQuotes(),
   });
   store.discover({ ...recentCandidate(), createdAt: now - 3600000 });
@@ -225,6 +227,7 @@ export function mockExecutionCase(
     rpc,
     execution,
     kronos: options.kronos ?? fakeKronos(),
+    codex: fixtureCodex(),
   });
   if (fail === "OWNERSHIP")
     store.savePosition({

@@ -3,6 +3,7 @@ import { chartId, type ChartStore } from "./chart-store.js";
 import { reasoningSchema, type ReasoningRuntime } from "./codex-runtime.js";
 import { CHART_POLICY, type LearningRule } from "./chart-features.js";
 import { sqliteAtomic } from "./learning-database.js";
+import { ChartKnowledgeRepository } from "./chart-knowledge.js";
 
 export const CHART_ANALYSIS_VERSION = "chart-learning-v4";
 const MAX_BATCH = 20;
@@ -134,6 +135,14 @@ export class ChartAnalyzer {
       .all(caseId);
     if (!replay) throw Error("LEARNING_CASE_REPLAY_UNAVAILABLE");
     const caseData = JSON.parse(String(learningCase.payload));
+    const cohort = this.charts.db.prepare("SELECT c.position_id,c.mint,c.mode,c.account_id,c.realized_pnl_pct,c.payload,r.payload replay FROM chart_learning_cases c JOIN chart_replays r ON r.position_id=c.position_id WHERE c.status='CLOSED' AND c.position_id<>? AND c.mint<>? AND c.mode=? AND c.account_id=? ORDER BY c.updated_at DESC LIMIT 30")
+      .all(caseId, (learningCase as any).mint, (learningCase as any).mode, (learningCase as any).account_id)
+      .map((row: any) => {
+        const payload = JSON.parse(String(row.payload)), replayData = JSON.parse(String(row.replay));
+        const peerEvents = this.charts.db.prepare("SELECT e.kind,e.at,e.payload FROM chart_case_evidence ce JOIN chart_events e ON ce.evidence_type='EVENT' AND ce.evidence_id=e.id WHERE ce.case_id=? AND ce.available_at<=? ORDER BY e.at LIMIT 40")
+          .all(String(row.position_id), now).map((event: any) => ({ kind: String(event.kind), at: Number(event.at), event: JSON.parse(String(event.payload)) }));
+        return { caseId: String(row.position_id), mint: String(row.mint), mode: String(row.mode), simulated: payload.simulated === true, realizedPnlPct: row.realized_pnl_pct === null ? null : Number(row.realized_pnl_pct), mfePct: replayData.maximumFavorableExcursion ?? null, maePct: replayData.maximumAdverseExcursion ?? null, eventSamples: peerEvents };
+      });
     return {
       case: { ...caseData, buyConfirmedAt: Number((learningCase as any).buy_confirmed_at), sellConfirmedAt: caseData.sellConfirmedAt ?? null },
       replay: JSON.parse(replay.payload),
@@ -142,6 +151,8 @@ export class ChartAnalyzer {
       decisions,
       events: evidence,
       followups,
+      cohort,
+      cohortCaseIds: cohort.map((item: any) => item.caseId),
       policy: CHART_POLICY,
       dataAvailabilityCutoff: now,
     };
@@ -199,6 +210,28 @@ export class ChartAnalyzer {
             contradictoryEventIds: result.contradictoryEventIds,
           };
           this.charts.saveRule(rule);
+        }
+        if (result.knowledgeHypothesis) {
+          const knowledge = new ChartKnowledgeRepository(this.charts.db);
+          const allowedCases = new Set([job.case_id, ...context.cohortCaseIds]);
+          const supportCases = result.knowledgeHypothesis.supportingCaseIds;
+          const contradictoryCases = result.knowledgeHypothesis.contradictoryCaseIds;
+          if ([...supportCases, ...contradictoryCases].some((caseId) => !allowedCases.has(caseId)) || !supportCases.length || supportCases.some((caseId) => contradictoryCases.includes(caseId))) throw Error("CODEX_KNOWLEDGE_CASE_REFERENCE_INVALID");
+          knowledge.createDraft({
+            id: "KN-" + chartId(job.case_id, id, result.knowledgeHypothesis.title).slice(0, 20),
+            title: result.knowledgeHypothesis.title,
+            category: result.knowledgeHypothesis.category,
+            applicableStage: result.knowledgeHypothesis.applicableStage,
+            description: result.knowledgeHypothesis.description,
+            marketContext: result.knowledgeHypothesis.marketContext,
+            observedBehaviors: result.knowledgeHypothesis.observedBehaviors,
+            variations: result.knowledgeHypothesis.variations,
+            supportingIndicators: result.knowledgeHypothesis.supportingIndicators,
+            counterexamples: result.knowledgeHypothesis.counterexamples,
+            invalidationConditions: result.knowledgeHypothesis.invalidationConditions,
+            supportingCaseIds: supportCases,
+            contradictoryCaseIds: contradictoryCases,
+          });
         }
         this.updateCollectionReadiness(job.case_id, analyzedAt);
       });

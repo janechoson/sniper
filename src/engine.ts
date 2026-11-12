@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ChartLearning } from "./chart-learning.js";
+import { CodexAIGuard } from "./codex-ai-guard.js";
 import { ExitCoordinator } from "./exit-coordinator.js";
 import type { ReasoningRuntime } from "./codex-runtime.js";
 import { homedir } from "node:os";
@@ -85,6 +86,7 @@ export class Engine {
     generation: number;
   }>;
   readonly chartLearning: ChartLearning;
+  readonly codexAIGuard: CodexAIGuard;
   readonly exitCoordinator: ExitCoordinator;
   readonly kronos: KronosDecisionStrategy;
   private kronosJobs = new Map<string, Promise<void>>();
@@ -197,6 +199,7 @@ export class Engine {
     this.chartLearning =
       providers?.learning ??
       new ChartLearning(store, this.gmgn, providers?.codex);
+    this.codexAIGuard = new CodexAIGuard(store.learningDb, this.chartLearning.runtime);
     this.exitCoordinator = new ExitCoordinator(store);
     this.rpc = providers?.rpc ?? new Solana();
     this.executor = new Executor(
@@ -389,6 +392,7 @@ export class Engine {
   async stop() {
     this.stopping = true;
     this.running = false;
+    await this.codexAIGuard.stop();
     this.kronos.stop();
     if (this.timer) clearTimeout(this.timer);
     if (this.exitTimer) clearInterval(this.exitTimer);

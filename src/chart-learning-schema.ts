@@ -91,6 +91,25 @@ CREATE TABLE IF NOT EXISTS chart_case_decisions (
  action TEXT NOT NULL, simulated INTEGER NOT NULL, payload TEXT NOT NULL,
  PRIMARY KEY(position_id,decision_id));
 CREATE INDEX IF NOT EXISTS chart_case_decisions_time ON chart_case_decisions(position_id,at);
+CREATE TABLE IF NOT EXISTS chart_knowledge_versions (
+ id TEXT NOT NULL, version INTEGER NOT NULL, category TEXT NOT NULL,
+ applicable_stage TEXT NOT NULL CHECK(applicable_stage IN ('PRE_BUY','POST_BUY')),
+ status TEXT NOT NULL CHECK(status IN ('DRAFT','VALIDATED','REJECTED')),
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(id,version));
+CREATE INDEX IF NOT EXISTS chart_knowledge_stage_status ON chart_knowledge_versions(applicable_stage,status,updated_at);
+CREATE TABLE IF NOT EXISTS chart_knowledge_validations (
+ id TEXT PRIMARY KEY, knowledge_id TEXT NOT NULL, knowledge_version INTEGER NOT NULL,
+ at INTEGER NOT NULL, training_case_ids TEXT NOT NULL, validation_case_ids TEXT NOT NULL,
+ metrics TEXT NOT NULL, payload TEXT NOT NULL,
+ FOREIGN KEY(knowledge_id,knowledge_version) REFERENCES chart_knowledge_versions(id,version));
+CREATE TABLE IF NOT EXISTS chart_ai_guard_decisions (
+ id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, mint TEXT NOT NULL, mode TEXT NOT NULL,
+ at INTEGER NOT NULL, action TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+ queue_wait_ms INTEGER NOT NULL, runtime_outcome TEXT NOT NULL,
+ model TEXT, prompt_version TEXT NOT NULL, knowledge_revision INTEGER NOT NULL,
+ input_hash TEXT NOT NULL, output_hash TEXT, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chart_ai_guard_decisions_recent ON chart_ai_guard_decisions(at DESC);
 ${[
   "chart_candles",
   "chart_events",
@@ -102,6 +121,9 @@ ${[
   "chart_event_outcomes",
   "chart_replays",
   "chart_validations",
+  "chart_knowledge_versions",
+  "chart_knowledge_validations",
+  "chart_ai_guard_decisions",
 ]
   .map(
     (t) => `
@@ -116,6 +138,9 @@ ${[
   "chart_replays",
   "chart_followups",
   "chart_validations",
+  "chart_knowledge_versions",
+  "chart_knowledge_validations",
+  "chart_ai_guard_decisions",
 ]
   .map(
     (t) => `
@@ -126,5 +151,6 @@ BEGIN SELECT RAISE(ABORT,'Immutable chart history'); END;`,
 INSERT OR IGNORE INTO migrations VALUES(17,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(19,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(20,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(21,unixepoch());
 COMMIT;
 `;
