@@ -444,10 +444,11 @@ export async function mount(ctx) {
         range = Math.max(max - min, Math.abs(max) * 0.00001, Number.EPSILON),
         volumes = candles.map((c) => c.volumeUsd ?? 0),
         maxVolume = Math.max(...volumes, 0),
-        stepX = plotWidth / candles.length,
-        candleWidth = Math.max(2, Math.min(10, stepX * 0.62)),
+        stepX = plotWidth / (chartWindow + 1),
+        candleWidth = Math.max(2, Math.min(9, stepX * 0.62)),
         y = (price) => top + ((max - price) / range) * plotHeight;
-      chartGeometry = { candles, left, plotRight, plotBottom, plotWidth, plotHeight, stepX, top, width, height };
+      const dataLeft = plotRight - stepX * candles.length;
+      chartGeometry = { candles, left, dataLeft, plotRight, plotBottom, plotWidth, plotHeight, stepX, top, width, height };
       const grid = window.getComputedStyle(document.documentElement).getPropertyValue("--rk-border-soft").trim() || "#e8ddc8";
       context.font = "11px system-ui, sans-serif";
       context.textBaseline = "middle";
@@ -465,7 +466,7 @@ export async function mount(ctx) {
       }
       const volumeBase = height - bottom;
       candles.forEach((candle, index) => {
-        const x = left + stepX * (index + 0.5),
+        const x = plotRight - stepX * (candles.length - index - 0.5),
           up = candle.close >= candle.open,
           color = up ? "#16a765" : "#d83b3b",
           bodyTop = Math.min(y(candle.open), y(candle.close)),
@@ -519,7 +520,7 @@ export async function mount(ctx) {
         context.lineTo(plotRight, cy);
         context.stroke();
         context.setLineDash([]);
-        const index = Math.max(0, Math.min(candles.length - 1, Math.floor((cx - left) / stepX)));
+        const index = Math.max(0, Math.min(candles.length - 1, Math.floor((cx - chartGeometry.dataLeft) / stepX)));
         const selected = candles[index];
         tooltip.textContent = new Date(selected.at).toLocaleString("vi-VN") + "\nO " + chartPrice(selected.open) + "  H " + chartPrice(selected.high) + "\nL " + chartPrice(selected.low) + "  C " + chartPrice(selected.close) + "\nVol " + (selected.volumeUsd === null ? "N/A" : formatCompactUsd(selected.volumeUsd));
         tooltip.style.left = Math.min(width - 190, Math.max(4, cx + 10)) + "px";

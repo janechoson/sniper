@@ -7235,3 +7235,27 @@ body > main > #notice:not(.system-pause) {
   .terminal-overview > .scanner-recent { grid-row: 4; }
   .terminal-overview > .overview-positions { grid-row: 5; }
 }
+
+/* Bound chart and neighboring panels so scanner growth cannot resize the canvas. */
+.terminal-overview > .scanner-recent,
+.terminal-overview > .current-token,
+.terminal-overview > .kronos-evaluation { align-self: start; min-height: 0; }
+.terminal-overview > .scanner-recent { height: auto; align-self: stretch; overflow: hidden; }
+.terminal-overview > .kronos-evaluation { height: 440px; overflow-y: auto; }
+.terminal-overview > .current-token { min-height: 0; }
+.terminal-chart-panel { min-height: 0; align-self: start; }
+.chart-canvas-wrap { height: 440px; min-height: 0; max-height: 440px; flex: 0 0 440px; }
+#scannerRecentList { min-height: 0; max-height: none; overflow-y: auto; }
+@media (max-width:1250px) and (min-width:761px) {
+  .terminal-overview > .scanner-recent { height: auto; align-self: stretch; }
+  .terminal-overview > .kronos-evaluation { height: auto; max-height: 300px; }
+  .chart-canvas-wrap { height: 360px; max-height: 360px; flex-basis: 360px; }
+}
+@media (max-width:760px) {
+  .terminal-overview > .scanner-recent { height: 300px; }
+  .terminal-overview > .kronos-evaluation { height: auto; max-height: none; overflow: visible; }
+  .chart-canvas-wrap { height: 300px; max-height: 300px; flex-basis: 300px; }
+}
+@media (max-width:480px) {
+  .chart-canvas-wrap { height: 280px; max-height: 280px; flex-basis: 280px; }
+}
