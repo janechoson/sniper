@@ -13,6 +13,7 @@ import {
   type RuntimeUsage,
 } from "./codex-runtime.js";
 import { ChartAnalyzer } from "./chart-analyzer.js";
+import { ChartValidationEngine } from "./chart-validation-engine.js";
 import type { Store } from "./store.js";
 import type { Gmgn } from "./gmgn.js";
 import { parseMarketHistory, type MarketHistory } from "./market-history.js";
@@ -24,6 +25,7 @@ export class ChartLearning {
   readonly runtime: ReasoningRuntime;
   readonly charts: ChartStore;
   readonly analyzer: ChartAnalyzer;
+  readonly validation: ChartValidationEngine;
   private active?: Promise<void>;
   private positionJobs = new Map<string, Promise<void>>();
   private positionDue = new Map<string, number>();
@@ -70,10 +72,11 @@ export class ChartLearning {
       .prepare("UPDATE chart_jobs SET state='CANCELLED',error='LEGACY_AUTOMATIC_ANALYSIS_DISABLED' WHERE state IN ('PENDING','RUNNING')")
       .run();
     this.analyzer = new ChartAnalyzer(this.charts, this.runtime);
+    this.validation = new ChartValidationEngine(store.learningDb, this.runtime);
   }
   startIndependent() {
     if (!this.timer)
-      this.timer = setInterval(() => this.pump("demo", false), 5000);
+      this.timer = setInterval(() => { this.pump("demo", false); this.analyzer.pump(); this.validation.pump(); }, 5000);
   }
   private validatedRules(at: number) {
     const revision = Number(
@@ -98,6 +101,7 @@ export class ChartLearning {
         lastError: this.lastError,
       },
       analyzer: { ...this.analyzer.status(), runtime: this.runtime.status() },
+      validation: this.validation.status(),
       observerEnabled: !!this.timer && !this.stopped,
       observationActive: !!this.active,
       positionJobs: this.positionJobs.size,
@@ -778,6 +782,7 @@ export class ChartLearning {
     await this.active;
     await Promise.all(this.positionJobs.values());
     await this.analyzer.stop();
+    await this.validation.stop();
   }
   drainOutboxes(now = Date.now()) {
     if (!this.store.sharedLearning) return;

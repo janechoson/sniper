@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { env } from "../src/config.js";
 import { Engine } from "../src/engine.js";
 import { startServer } from "../src/server.js";
+import { ChartKnowledgeRepository } from "../src/chart-knowledge.js";
 import { position, provider } from "./fixtures.js";
 
 test("dashboard routes isolate read models and never eagerly aggregate other pages", async (t) => {
@@ -86,8 +87,8 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         const result = await (await fetch(base + "/api/chart-learning")).json();
         assert.equal(result.overview.scope.mode, "SHARED");
         assert.equal(result.overview.candleCount, 0);
-        assert.equal(result.status.analyzer.mode, "MANUAL");
-        assert.equal(result.analysisStatus.manualOnly, true);
+        assert.equal(result.status.analyzer.mode, "DISABLED");
+        assert.equal(result.analysisStatus.automaticEnabled, false);
         assert.deepEqual(result.learningCases, []);
         assert.deepEqual(result.rules, []);
         assert.deepEqual(result.decisions, []);
@@ -111,6 +112,11 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
           body: JSON.stringify({ caseId: "missing" }),
         });
         assert.equal(allowed.status, 409);
+        const repo=new ChartKnowledgeRepository(app!.engine.store.learningDb),draft=repo.createDraft({id:"KN-API",title:"API fixture pattern",category:"DISTRIBUTION",applicableStage:"PRE_BUY",description:"Independent dashboard control fixture.",marketContext:"test",observedBehaviors:["fading volume"],variations:[],supportingIndicators:[],counterexamples:[],invalidationConditions:[],supportingCaseIds:[],contradictoryCaseIds:[]});
+        const rejected=await fetch(`${base}/api/chart-learning/knowledge/${draft.id}/reject`,{method:"POST",headers:{origin:base,"content-type":"application/json","x-csrf-token":shell.csrf},body:JSON.stringify({version:draft.version,reason:"API lifecycle test"})});
+        assert.equal(rejected.status,202);
+        const detail=await fetch(`${base}/api/chart-learning/knowledge/${draft.id}`);
+        assert.equal(detail.status,200);assert.equal((await detail.json()).knowledge.validationStatus,"REJECTED");
       },
     );
     await t.test(

@@ -4,6 +4,7 @@ import { reasoningSchema, type ReasoningRuntime } from "./codex-runtime.js";
 import { CHART_POLICY, type LearningRule } from "./chart-features.js";
 import { sqliteAtomic } from "./learning-database.js";
 import { ChartKnowledgeRepository } from "./chart-knowledge.js";
+import { env } from "./config.js";
 
 export const CHART_ANALYSIS_VERSION = "chart-learning-v4";
 const MAX_BATCH = 20;
@@ -12,6 +13,8 @@ const MAX_BATCH = 20;
 export class ChartAnalyzer {
   private queue: string[] = [];
   private active?: Promise<void>;
+  private autoActive?: Promise<void>;
+  private stopped = false;
 
   constructor(
     private charts: ChartStore,
@@ -22,7 +25,57 @@ export class ChartAnalyzer {
         "UPDATE chart_analysis_jobs SET state='FAILED',completed_at=?,error='INTERRUPTED_MANUAL_REQUEST_RETRY_REQUIRED' WHERE state='RUNNING'",
       )
       .run(Date.now());
+    charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=CASE WHEN attempt_count+1>=3 THEN 'DEAD_LETTER' ELSE 'RETRY_WAIT' END,attempt_count=attempt_count+1,next_attempt_at=?,last_error='INTERRUPTED_RESTART_RECOVERY' WHERE state='RUNNING'").run(Date.now()+30000);
   }
+
+  pump(now=Date.now()) {
+    if(!env.AUTO_CHART_LEARNING_ENABLED||this.stopped||this.autoActive)return;
+    this.scheduleEligible(now);
+    const row=this.charts.db.prepare("SELECT id FROM chart_auto_learning_jobs WHERE state IN ('PENDING','RETRY_WAIT') AND next_attempt_at<=? AND eligible_at+?<=? ORDER BY eligible_at LIMIT 1").get(now,env.AUTO_CHART_LEARNING_DELAY_MS,now) as {id:string}|undefined;
+    if(!row)return;
+    this.autoActive=this.runAutomatic(row.id).finally(()=>{this.autoActive=undefined;});
+  }
+
+  private scheduleEligible(now:number) {
+    const cases=this.charts.db.prepare("SELECT c.position_id,c.status,s.status collection_status,s.updated_at,s.data_quality FROM chart_learning_cases c JOIN chart_case_collection s ON s.case_id=c.position_id WHERE c.status='CLOSED' AND s.status IN ('READY_FOR_ANALYSIS','INCOMPLETE') ORDER BY s.updated_at LIMIT 100").all() as any[];
+    for(const row of cases){
+      if(row.collection_status==="INCOMPLETE"&&!env.AUTO_CHART_LEARNING_ALLOW_INCOMPLETE)continue;
+      const caseId=String(row.position_id), count=Number(this.charts.db.prepare("SELECT count(*) n FROM chart_case_evidence WHERE case_id=? AND evidence_type='CANDLE'").get(caseId)!.n);
+      if(count<env.AUTO_CHART_LEARNING_MIN_CANDLES)continue;
+      const exists=this.charts.db.prepare("SELECT 1 FROM chart_auto_learning_jobs WHERE case_id=? AND analysis_version=?").get(caseId,CHART_ANALYSIS_VERSION);
+      if(exists)continue;
+      const eligibleAt=Number(row.updated_at)||now, id=randomUUID();
+      this.charts.db.prepare("INSERT OR IGNORE INTO chart_auto_learning_jobs(id,case_id,analysis_version,requested_at,eligible_at,state,next_attempt_at) VALUES(?,?,?,?,?,'PENDING',?)").run(id,caseId,CHART_ANALYSIS_VERSION,now,eligibleAt,eligibleAt+env.AUTO_CHART_LEARNING_DELAY_MS);
+    }
+  }
+
+  private async runAutomatic(id:string) {
+    const job=this.charts.db.prepare("SELECT * FROM chart_auto_learning_jobs WHERE id=? AND state IN ('PENDING','RETRY_WAIT')").get(id) as any;
+    if(!job)return;
+    const attempt=Number(job.attempt_count)+1,started=Date.now();
+    this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='RUNNING',attempt_count=?,started_at=?,last_error=NULL WHERE id=?").run(attempt,started,id);
+    let analysisJobId=String(job.analysis_job_id??"");
+    try {
+      const existing=analysisJobId?this.charts.db.prepare("SELECT id,state FROM chart_analysis_jobs WHERE id=?").get(analysisJobId) as any:undefined;
+      if(!existing||existing.state!=='PENDING'){
+        analysisJobId=randomUUID();
+        this.charts.db.prepare("INSERT INTO chart_analysis_jobs(id,case_id,requested_by,requested_at,state,analysis_version,retry_count) VALUES(?,?, 'AUTO_CHART_LEARNING',?,'PENDING',?,?)").run(analysisJobId,job.case_id,started,job.analysis_version,attempt-1);
+      }
+      this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET analysis_job_id=? WHERE id=?").run(analysisJobId,id);
+      await this.executeOne(analysisJobId);
+      const result=this.charts.db.prepare("SELECT state,error FROM chart_analysis_jobs WHERE id=?").get(analysisJobId) as any;
+      if(result?.state==='COMPLETED')this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='COMPLETED',completed_at=?,last_error=NULL WHERE id=?").run(Date.now(),id);
+      else {
+        const message=String(result?.error??"AUTO_ANALYSIS_FAILED"), transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed|RESOURCE_BUDGET/.test(message), retry=transient&&attempt<3;
+        this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',Date.now()+Math.min(300000,30000*2**(attempt-1)),retry?null:Date.now(),message,id);
+      }
+    } catch(error) {
+      const message=error instanceof Error?error.message:"AUTO_ANALYSIS_FAILED", transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed|RESOURCE_BUDGET/.test(message),retry=transient&&attempt<3;
+      this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',Date.now()+Math.min(300000,30000*2**(attempt-1)),retry?null:Date.now(),message,id);
+    }
+  }
+
+  retryAutomatic(id:string){const row=this.charts.db.prepare("SELECT state FROM chart_auto_learning_jobs WHERE id=?").get(id) as {state:string}|undefined;if(!row)throw Error("AUTO_LEARNING_JOB_NOT_FOUND");if(row.state!=='DEAD_LETTER')throw Error("AUTO_LEARNING_JOB_NOT_RETRYABLE");this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='PENDING',attempt_count=0,next_attempt_at=?,completed_at=NULL,last_error=NULL WHERE id=?").run(Date.now()+env.AUTO_CHART_LEARNING_DELAY_MS,id);return this.charts.db.prepare("SELECT * FROM chart_auto_learning_jobs WHERE id=?").get(id);}
 
   request(caseIds: string[], requestedBy = "LOCAL_OPERATOR") {
     if (!Array.isArray(caseIds) || caseIds.length < 1 || caseIds.length > MAX_BATCH)
@@ -151,6 +204,8 @@ export class ChartAnalyzer {
       decisions,
       events: evidence,
       followups,
+      collection: this.charts.db.prepare("SELECT status,data_quality,payload FROM chart_case_collection WHERE case_id=?").get(caseId),
+      missingEvidence: (followups as any[]).filter((f)=>String(f.state)!=="COLLECTED").map((f)=>({horizon:Number(f.horizon),state:String(f.state),error:f.error??null})),
       cohort,
       cohortCaseIds: cohort.map((item: any) => item.caseId),
       policy: CHART_POLICY,
@@ -217,7 +272,7 @@ export class ChartAnalyzer {
           const supportCases = result.knowledgeHypothesis.supportingCaseIds;
           const contradictoryCases = result.knowledgeHypothesis.contradictoryCaseIds;
           if ([...supportCases, ...contradictoryCases].some((caseId) => !allowedCases.has(caseId)) || !supportCases.length || supportCases.some((caseId) => contradictoryCases.includes(caseId))) throw Error("CODEX_KNOWLEDGE_CASE_REFERENCE_INVALID");
-          knowledge.createDraft({
+          try { knowledge.createDraft({
             id: "KN-" + chartId(job.case_id, id, result.knowledgeHypothesis.title).slice(0, 20),
             title: result.knowledgeHypothesis.title,
             category: result.knowledgeHypothesis.category,
@@ -231,7 +286,9 @@ export class ChartAnalyzer {
             invalidationConditions: result.knowledgeHypothesis.invalidationConditions,
             supportingCaseIds: supportCases,
             contradictoryCaseIds: contradictoryCases,
-          });
+          }); } catch(error) {
+            if(!(error instanceof Error)||!error.message.startsWith("KNOWLEDGE_SUPPRESSED_BY_USER"))throw error;
+          }
         }
         this.updateCollectionReadiness(job.case_id, analyzedAt);
       });
@@ -260,7 +317,9 @@ export class ChartAnalyzer {
   }
 
   async stop() {
+    this.stopped=true;
     await this.active;
+    await this.autoActive;
   }
 
   job(id: string) {
@@ -272,6 +331,8 @@ export class ChartAnalyzer {
       this.charts.db.prepare("SELECT state,count(*) n FROM chart_analysis_jobs GROUP BY state").all()
         .map((row: any) => [String(row.state).toLowerCase(), Number(row.n)]),
     );
-    return { mode: "MANUAL", active: Boolean(this.active), jobs: counts };
+    const automatic=Object.fromEntries(this.charts.db.prepare("SELECT state,count(*) n FROM chart_auto_learning_jobs GROUP BY state").all().map((row:any)=>[String(row.state).toLowerCase(),Number(row.n)]));
+    const next=this.charts.db.prepare("SELECT min(eligible_at+?) at FROM chart_auto_learning_jobs WHERE state IN ('PENDING','RETRY_WAIT')").get(env.AUTO_CHART_LEARNING_DELAY_MS) as {at:number|null};
+    return { mode: env.AUTO_CHART_LEARNING_ENABLED?"AUTOMATIC":"DISABLED", enabled:env.AUTO_CHART_LEARNING_ENABLED, active: Boolean(this.active||this.autoActive), jobs: counts, automaticJobs:automatic, nextEligibleAt:next.at, delayMs:env.AUTO_CHART_LEARNING_DELAY_MS, maxConcurrency:1 };
   }
 }

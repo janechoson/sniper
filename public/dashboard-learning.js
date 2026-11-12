@@ -213,30 +213,13 @@ export async function mount(ctx) {
     eventSearch = window.sessionStorage.getItem("chart-learning-search") || "",
     eventPage = 0,
     chartWindow = 60,
-    selectionRequest = 0,
-    selectedCases = new Set();
+    selectionRequest = 0;
   const read = (path, id) =>
     ctx.get(
       "/api/chart-learning" +
         path +
         (id ? "?id=" + encodeURIComponent(id) : ""),
     );
-  document.getElementById("analyzeSelectedCases").addEventListener("click", async () => {
-    if (!selectedCases.size) return;
-    try {
-      await ctx.post("/api/chart-learning/analyze-batch", { caseIds: [...selectedCases].slice(0, 20) });
-      selectedCases.clear();
-      data = await read("");
-      renderHealth(); renderCaseList();
-    } catch (error) { ctx.error(error); }
-  });
-  document.getElementById("analyzeReadyCases").addEventListener("click", async () => {
-    try {
-      await ctx.post("/api/chart-learning/analyze-batch", { ready: true });
-      data = await read("");
-      renderHealth(); renderCaseList();
-    } catch (error) { ctx.error(error); }
-  });
   const shortMint = (mint) =>
     mint && mint.length > 18 ? mint.slice(0, 7) + "…" + mint.slice(-7) : mint || "N/A";
   const metricValue = (value, suffix = "") =>
@@ -249,7 +232,7 @@ export async function mount(ctx) {
       analysis = data.analysisStatus || {};
     const guard = data.aiGuardStatus || {}, latest = guard.latest || {};
     document.getElementById("aiGuardState").textContent = guard.enabled ? (guard.active ? "Đang suy luận" : "Bật · fail closed") : "Tắt · từ chối BUY";
-    document.getElementById("aiGuardRuntime").textContent = `${guard.runtime?.state || "N/A"} · timeout ${guard.timeoutMs || 8000}ms · concurrency ${guard.concurrency || 1} · fail ${guard.failPolicy || "BLOCK"} · cold start ${guard.coldStartPolicy || "UNCERTAIN"}`;
+    document.getElementById("aiGuardRuntime").textContent = `${guard.runtime?.state || "N/A"} · inference timeout ${guard.timeoutMs || 8000}ms · PASS TTL ${guard.passTtlMs || 15000}ms (bị chặn theo tuổi evidence) · concurrency ${guard.concurrency || 1} · fail ${guard.failPolicy || "BLOCK"} · cold start ${guard.coldStartPolicy || "UNCERTAIN"}`;
     document.getElementById("aiGuardLatest").textContent = latest.action || "Chưa có đánh giá";
     document.getElementById("aiGuardLatency").textContent = latest.id ? `${latest.durationMs}ms total · queue ${latest.queueWaitMs}ms · p50/p95/p99 ${guard.latencyMs?.p50 ?? "N/A"}/${guard.latencyMs?.p95 ?? "N/A"}/${guard.latencyMs?.p99 ?? "N/A"}ms · ${latest.summary || latest.runtimeOutcome}` : "Chưa có mẫu latency thực tế";
     document.getElementById("aiGuardKnowledge").textContent = String(guard.validatedKnowledgeCount ?? 0);
@@ -268,7 +251,7 @@ export async function mount(ctx) {
     document.getElementById("learningCollectorDetail").textContent = status.collector?.lastError || "Tự thu thập sau BUY đã xác nhận · gồm theo dõi sau SELL";
     const providerLabel =
       runtime.state === "READY"
-          ? "MANUAL · Codex sẵn sàng"
+          ? "AUTO · Codex sẵn sàng"
         : runtime.state === "MISSING_OPENAI_API_KEY"
           ? "Chưa cấu hình OpenAI API"
           : runtime.lastError === "CODEX_HTTP_429"
@@ -281,17 +264,17 @@ export async function mount(ctx) {
       runtime.lastError || runtime.model || runtime.state || "";
     document.getElementById("learningProviderDetail").textContent = runtime.lastError
       ? `Lỗi gần nhất: ${runtime.lastError}`
-      : `Chỉ chạy khi được yêu cầu · phân tích case gần nhất: ${analysis.lastAnalyzedAt ? time(analysis.lastAnalyzedAt) : "chưa có"}`;
-    document.getElementById("learningQueueHealth").textContent = `${analysis.ready ?? 0} sẵn sàng · ${analysis.pending ?? 0} chờ · ${analysis.running ?? 0} chạy`;
-    document.getElementById("learningQueueHealth").title = "Codex không chạy tự động";
-    document.getElementById("learningQueueDetail").textContent = `${analysis.analyzed ?? 0} đã phân tích · ${analysis.failed ?? 0} lỗi · ${analysis.incomplete ?? 0} dữ liệu thiếu`;
-    document.getElementById("learningValidation").textContent = data.overview.validatedRules
-      ? `${data.overview.validatedRules} rule đã kiểm chứng`
-      : "Chưa có rule đạt kiểm chứng";
-    document.getElementById("learningValidationDetail").textContent = `${data.overview.rejectedRules ?? 0} bị từ chối · ${data.overview.retiredRules ?? 0} đã nghỉ`;
+      : `Tự phân tích case đã đủ điều kiện · gần nhất: ${analysis.lastAnalyzedAt ? time(analysis.lastAnalyzedAt) : "chưa có"}`;
+    const auto = data.autoLearningStatus || {};
+    document.getElementById("learningQueueHealth").textContent = `${auto.enabled ? "AUTO" : "TẮT"} · ${auto.automaticJobs?.pending ?? 0} chờ · ${auto.automaticJobs?.running ?? 0} chạy`;
+    document.getElementById("learningQueueHealth").title = `Delay tối thiểu ${auto.delayMs ?? 30000}ms · một job mỗi case/version`;
+    document.getElementById("learningQueueDetail").textContent = `${auto.automaticJobs?.completed ?? 0} xong · ${auto.automaticJobs?.retry_wait ?? 0} retry · ${auto.automaticJobs?.dead_letter ?? 0} dead letter · kế tiếp ${auto.nextEligibleAt ? time(auto.nextEligibleAt) : "chưa xếp lịch"}`;
+    document.getElementById("learningValidation").textContent = `${data.aiGuardStatus?.validatedKnowledgeCount ?? 0} knowledge đang hoạt động`;
+    const drift=data.validationStatus?.drift||{};
+    document.getElementById("learningValidationDetail").textContent = `Holdout tự động · drift ${drift.sample_count ?? 0} case / ${drift.dangerous_count ?? 0} rủi ro · ngưỡng ${drift.minCases ?? 10} case`;
     document.getElementById("learningStatus").textContent =
       `Shared Learning · ${data.overview.policy} · dữ liệu thị trường dùng chung giữa DEMO/LIVE`;
-    document.getElementById("learningCaseStatus").textContent = `Collector: ${status.collector?.state || "RUNNING"} · Analyzer: MANUAL · Ready ${analysis.ready ?? 0} · Analyzed ${analysis.analyzed ?? 0} · Pending ${analysis.pending ?? 0} · Running ${analysis.running ?? 0} · Failed ${analysis.failed ?? 0}`;
+    document.getElementById("learningCaseStatus").textContent = `Collector: ${status.collector?.state || "RUNNING"} · Auto Learning: ${auto.enabled ? "ON" : "OFF"} · delay ${auto.delayMs ?? 30000}ms · ${auto.automaticJobs?.pending ?? 0} pending / ${auto.automaticJobs?.running ?? 0} running / ${auto.automaticJobs?.dead_letter ?? 0} dead letter · validation: ${data.validationStatus?.jobs?.pending ?? 0} pending / ${data.validationStatus?.jobs?.running ?? 0} running`;
   }
   function renderCaseList() {
     const list = document.getElementById("learningCaseList"), cases = data?.learningCases || [];
@@ -299,21 +282,10 @@ export async function mount(ctx) {
     if (!cases.length) list.append(el("p", "Chưa có vị thế BUY đủ điều kiện cho Learning."));
     for (const item of cases) {
       const row = el("div", undefined, "learning-case-row");
-      if (item.collectionStatus === "READY_FOR_ANALYSIS") {
-        const check = el("input");
-        check.type = "checkbox";
-        check.checked = selectedCases.has(item.caseId);
-        check.setAttribute("aria-label", `Chọn case ${shortMint(item.mint)}`);
-        check.addEventListener("change", () => {
-          if (check.checked) selectedCases.add(item.caseId); else selectedCases.delete(item.caseId);
-          document.getElementById("analyzeSelectedCases").disabled = selectedCases.size === 0;
-        });
-        row.append(check);
-      } else row.append(el("span", "·", "muted"));
-      row.append(el("strong", shortMint(item.mint)), el("small", `${item.mode.toUpperCase()} · ${item.positionStatus} · ${item.collectionStatus}`), el("small", `PnL ${metricValue(item.realizedPnlPct, "%")} · post-SELL ${item.followupsCollected}/4`), el("small", `Codex: ${item.analysisStatus || "NOT_ANALYZED"}`));
-      if (item.analysisStatus === "FAILED" && item.analysisJobId)
+      row.append(el("strong", shortMint(item.mint)), el("small", `${item.mode.toUpperCase()} · ${item.positionStatus} · ${item.collectionStatus}`), el("small", `PnL ${metricValue(item.realizedPnlPct, "%")} · post-SELL ${item.followupsCollected}/4`), el("small", `Auto analysis: ${item.autoLearningState || "WAITING_FOR_ELIGIBILITY"}${item.eligibleAt ? ` · eligible ${time(item.eligibleAt)}` : ""}`));
+      if (item.autoLearningState === "DEAD_LETTER" && item.autoLearningJobId)
         row.append(button("Retry Failed", async () => {
-          try { await ctx.post(`/api/chart-learning/analysis-jobs/${encodeURIComponent(item.analysisJobId)}/retry`, {}); data = await read(""); renderHealth(); renderCaseList(); }
+          try { await ctx.post(`/api/chart-learning/auto-learning-jobs/${encodeURIComponent(item.autoLearningJobId)}/retry`, {}); data = await read(""); renderHealth(); renderCaseList(); }
           catch (error) { ctx.error(error); }
         }));
       if (item.analysisStatus === "COMPLETED") {
@@ -330,9 +302,6 @@ export async function mount(ctx) {
       }
       list.append(row);
     }
-    document.getElementById("analyzeSelectedCases").disabled = selectedCases.size === 0;
-    document.getElementById("analyzeReadyCases").textContent = `Analyze Ready Cases (${data?.analysisStatus?.ready ?? 0})`;
-    document.getElementById("analyzeReadyCases").disabled = Number(data?.analysisStatus?.ready ?? 0) === 0;
   }
   function renderKnowledge() {
     const list = document.getElementById("semanticKnowledgeList");
@@ -340,23 +309,28 @@ export async function mount(ctx) {
     for (const item of data?.knowledge || []) {
       const row = el("div", undefined, "learning-case-row");
       row.append(el("strong", item.title), el("small", `${item.category} · ${item.applicableStage} · v${item.version} · ${item.validationStatus}`), el("small", item.description));
-      if (item.validationStatus === "DRAFT") row.append(button("Validate on independent cases", async () => {
-        const value = window.prompt("Nhập ít nhất 3 closed case ID, phân tách bằng dấu phẩy. Các case phải khác token và không overlap dữ liệu training.");
-        if (!value) return;
-        const validationCaseIds = value.split(",").map((id) => id.trim()).filter(Boolean);
-        if (!window.confirm("Xác nhận đã xem xét kết quả holdout độc lập và promote knowledge này?")) return;
-        try { await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/validate`, { version: item.version, validationCaseIds, approved: true }); data = await read(""); renderHealth(); renderKnowledge(); }
-        catch (error) { ctx.error(error); }
-      }));
-      if (item.validationStatus === "DRAFT") row.append(button("Reject DRAFT", async () => {
-        const reason = window.prompt("Lý do từ chối semantic knowledge này?");
-        if (!reason) return;
-        try { await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/reject`, { version: item.version, reason }); data = await read(""); renderHealth(); renderKnowledge(); }
-        catch (error) { ctx.error(error); }
-      }));
-      list.append(row);
+      const report=item.latestValidation, metrics=report?.metrics;
+      if (report) {
+        const summary = metrics
+          ? `TP ${metrics.TP} / FP ${metrics.FP} / TN ${metrics.TN} / FN ${metrics.FN} · P ${metricValue(metrics.precision)} · R ${metricValue(metrics.recall)} · F1 ${metricValue(metrics.f1)} · FPR ${metricValue(metrics.falsePositiveRate)} · abstain ${metricValue(metrics.abstentionRate)} · holdout ${report.independentMintCount ?? metrics.sampleCount}`
+          : (report.qualityGate?.failures || []).join(", ") || "Đang chờ dữ liệu độc lập";
+        row.append(el("small", `Validation ${report.lifecycleState || item.validationStatus} · ${summary}`));
+      }
+      if(item.controlReason)row.append(el("small",`${item.controlAction}: ${item.controlReason}`));
+      const act=async(action,ask=true)=>{let reason="User intervention";if(ask){const supplied=window.prompt(`Lý do ${action} knowledge này?`);if(!supplied)return;reason=supplied;}if(action==="delete"&&!window.confirm("Xóa mềm knowledge này? Có thể khôi phục từ dashboard."))return;try{await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/${action}`,{version:item.version,reason});data=await read("");renderHealth();renderKnowledge();}catch(error){ctx.error(error);}};
+      const controls=document.createElement("div");controls.className="learning-case-actions";
+      controls.append(button("Chi tiết",async()=>{try{const detail=await read(`/knowledge/${encodeURIComponent(item.id)}`),panel=document.createElement("pre");panel.className="learning-knowledge-detail";panel.textContent=JSON.stringify(detail,null,2);row.append(panel);}catch(error){ctx.error(error);}}));
+      if(item.validationStatus!=="DELETED"){
+        controls.append(button("Tắt",()=>act("disable")));
+        controls.append(button("Từ chối",()=>act("reject")));
+        controls.append(button("Xóa mềm",()=>act("delete")));
+      }
+      controls.append(button("Khôi phục",()=>act("restore")));
+      list.append(row);row.append(controls);
     }
     if (!list.childElementCount) list.append(el("p", "Chưa có semantic knowledge."));
+    const jobs=document.getElementById("validationJobList");
+    if(jobs){jobs.replaceChildren();for(const item of data?.validationJobs||[]){let report=item.report;try{if(typeof report==="string")report=JSON.parse(report)}catch{report=null}const card=el("div",undefined,"learning-case-row");card.append(el("strong",`${item.knowledge_id} · v${item.knowledge_version}`),el("small",`${item.state} · ${time(item.requested_at)} · attempt ${item.attempt_count}`));if(report?.metrics)card.append(el("small",`TP ${report.metrics.TP} · FP ${report.metrics.FP} · TN ${report.metrics.TN} · FN ${report.metrics.FN} · Precision ${metricValue(report.metrics.precision)} · Recall ${metricValue(report.metrics.recall)} · Specificity ${metricValue(report.metrics.specificity)} · FPR ${metricValue(report.metrics.falsePositiveRate)} · FNR ${metricValue(report.metrics.falseNegativeRate)} · F1 ${metricValue(report.metrics.f1)} · coverage ${metricValue(report.metrics.coverage)} · abstention ${metricValue(report.metrics.abstentionRate)}`));jobs.append(card);}if(!jobs.childElementCount)jobs.append(el("p","Chưa có holdout replay."));}
   }
   function renderEventList() {
     const list = document.getElementById("learningEventList"),
@@ -508,7 +482,7 @@ export async function mount(ctx) {
     table.append(body);
     wrap.append(table);
     root.replaceChildren(
-    el("p", `Manual Codex Analysis · tối đa ${rows.length} job gần nhất. Không có job nào tự chạy khi tải trang.`, "learning-list-note"),
+    el("p", `Automatic Codex Learning · tối đa ${rows.length} job gần nhất.`, "learning-list-note"),
       el("label", "Lọc trạng thái "),
     );
     const select = document.createElement("select");
@@ -783,7 +757,7 @@ export async function mount(ctx) {
     "SELL History",
     "Decisions",
     "Timeline",
-    "Analysis Jobs",
+    "Auto Learning Jobs",
     "Replay Validation",
   ])
     {
@@ -797,7 +771,7 @@ export async function mount(ctx) {
   await ctx.poll(async () => {
     data = await read("");
     if (!ctx.active()) return;
-    if (tab === "Analysis Jobs") data.jobs = await read("/analysis-jobs");
+    if (tab === "Auto Learning Jobs") data.jobs = await read("/auto-learning-jobs");
     renderHealth();
     renderCaseList();
     renderKnowledge();

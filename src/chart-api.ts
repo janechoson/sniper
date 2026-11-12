@@ -12,6 +12,9 @@ function caseRows(engine: Engine) {
       (SELECT count(*) FROM chart_case_followups f WHERE f.case_id=c.position_id AND f.state IN ('PENDING','FAILED')) followupsPending,
       (SELECT j.state FROM chart_analysis_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) analysisStatus,
       (SELECT j.id FROM chart_analysis_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) analysisJobId,
+      (SELECT j.id FROM chart_auto_learning_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) autoLearningJobId,
+      (SELECT j.state FROM chart_auto_learning_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) autoLearningState,
+      (SELECT j.eligible_at FROM chart_auto_learning_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) eligibleAt,
       (SELECT j.completed_at FROM chart_analysis_jobs j WHERE j.case_id=c.position_id AND j.state='COMPLETED' ORDER BY j.completed_at DESC LIMIT 1) lastAnalysisAt
      FROM chart_learning_cases c JOIN chart_case_collection s ON s.case_id=c.position_id
      ORDER BY c.learning_started_at DESC LIMIT 200`,
@@ -21,15 +24,15 @@ function caseRows(engine: Engine) {
 export function chartLearningCommand(engine: Engine, url: URL, body: unknown) {
   if (!body || typeof body !== "object") throw Error("INVALID_ANALYSIS_REQUEST");
   const input = body as Record<string, unknown>;
-  const validateKnowledge = url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)\/validate$/);
-  if (validateKnowledge) {
-    if (!Number.isInteger(input.version) || !Array.isArray(input.validationCaseIds) || !input.validationCaseIds.every((id) => typeof id === "string")) throw Error("INVALID_KNOWLEDGE_VALIDATION_REQUEST");
-    return new ChartKnowledgeRepository(engine.store.learningDb).validateDraft(decodeURIComponent(validateKnowledge[1]!), Number(input.version), input.validationCaseIds as string[], input.approved === true);
-  }
-  const rejectKnowledge = url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)\/reject$/);
-  if (rejectKnowledge) {
-    if (!Number.isInteger(input.version) || typeof input.reason !== "string") throw Error("INVALID_KNOWLEDGE_REJECTION_REQUEST");
-    return new ChartKnowledgeRepository(engine.store.learningDb).rejectDraft(decodeURIComponent(rejectKnowledge[1]!), Number(input.version), input.reason);
+  const knowledgeControl = url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)\/(disable|reject|delete|restore)$/);
+  if (knowledgeControl) {
+    if (!Number.isInteger(input.version)) throw Error("INVALID_KNOWLEDGE_CONTROL_REQUEST");
+    const repo=new ChartKnowledgeRepository(engine.store.learningDb),id=decodeURIComponent(knowledgeControl[1]!),version=Number(input.version),reason=typeof input.reason==="string"?input.reason:"User intervention";
+    const action=knowledgeControl[2];
+    if(action==="disable")return repo.disable(id,version,reason);
+    if(action==="reject")return repo.reject(id,version,reason);
+    if(action==="delete")return repo.delete(id,version,reason);
+    return repo.restore(id,version,reason);
   }
   if (url.pathname === "/api/chart-learning/analyze") {
     if (typeof input.caseId !== "string") throw Error("LEARNING_CASE_ID_REQUIRED");
@@ -46,6 +49,8 @@ export function chartLearningCommand(engine: Engine, url: URL, body: unknown) {
   }
   const retry = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)\/retry$/);
   if (retry) return engine.chartLearning.analyzer.retry(decodeURIComponent(retry[1]!));
+  const retryAuto = url.pathname.match(/^\/api\/chart-learning\/auto-learning-jobs\/([^/]+)\/retry$/);
+  if (retryAuto) return engine.chartLearning.analyzer.retryAutomatic(decodeURIComponent(retryAuto[1]!));
   throw Error("CHART_COMMAND_NOT_FOUND");
 }
 
@@ -85,6 +90,8 @@ function eventReviews(
 
 /** Read-only bounded projections. Mode/account is server authority, not a query parameter. */
 export function chartLearningView(engine: Engine, url: URL) {
+  const knowledgeDetail=url.pathname.match(/^\/api\/chart-learning\/knowledge\/([^/]+)$/);
+  if(knowledgeDetail)return new ChartKnowledgeRepository(engine.store.learningDb).detail(decodeURIComponent(knowledgeDetail[1]!));
   if (url.pathname === "/api/chart-learning/knowledge") return new ChartKnowledgeRepository(engine.store.learningDb).all();
   if (engine.store.sharedLearning) return sharedLearningView(engine, url);
   const charts = engine.chartLearning.charts,
@@ -127,15 +134,19 @@ export function chartLearningView(engine: Engine, url: URL) {
       ),
       learningCases: caseRows(engine),
       analysisJobs: engine.chartLearning.analyzer.jobs(),
+      autoLearningJobs: engine.store.learningDb.prepare("SELECT * FROM chart_auto_learning_jobs ORDER BY requested_at DESC LIMIT 100").all(),
+      validationJobs: engine.chartLearning.validation.jobs(),
+      autoLearningStatus: engine.chartLearning.analyzer.status(),
+      validationStatus: engine.chartLearning.validation.status(),
       knowledge: new ChartKnowledgeRepository(db).all(),
       analysisStatus: {
-        manualOnly: true,
+        automaticEnabled: process.env.AUTO_CHART_LEARNING_ENABLED !== "false",
         ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),
         incomplete: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='INCOMPLETE'").get()!.n),
         analyzed: Number(db.prepare("SELECT count(DISTINCT case_id) n FROM chart_case_analyses").get()!.n),
-        pending: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='PENDING'").get()!.n),
-        running: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='RUNNING'").get()!.n),
-        failed: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='FAILED'").get()!.n),
+        pending: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state IN ('PENDING','RETRY_WAIT')").get()!.n),
+        running: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state='RUNNING'").get()!.n),
+        failed: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state='DEAD_LETTER'").get()!.n),
         lastAnalyzedAt: db.prepare("SELECT max(analyzed_at) n FROM chart_case_analyses").get()!.n ?? null,
       },
     };
@@ -279,6 +290,10 @@ export function chartLearningView(engine: Engine, url: URL) {
       }));
   if (url.pathname === "/api/chart-learning/analysis-jobs")
     return engine.chartLearning.analyzer.jobs(100);
+  if (url.pathname === "/api/chart-learning/auto-learning-jobs")
+    return engine.store.learningDb.prepare("SELECT * FROM chart_auto_learning_jobs ORDER BY requested_at DESC LIMIT 100").all();
+  if (url.pathname === "/api/chart-learning/validation-jobs")
+    return engine.chartLearning.validation.jobs(100);
   const manualJob = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)$/);
   if (manualJob)
     return engine.chartLearning.analyzer.job(decodeURIComponent(manualJob[1]!)) ?? { error: "ANALYSIS_JOB_NOT_FOUND" };
@@ -330,15 +345,19 @@ function sharedLearningView(engine: Engine, url: URL) {
       ),
       learningCases: caseRows(engine),
       analysisJobs: engine.chartLearning.analyzer.jobs(),
+      autoLearningJobs: db.prepare("SELECT * FROM chart_auto_learning_jobs ORDER BY requested_at DESC LIMIT 100").all(),
+      validationJobs: engine.chartLearning.validation.jobs(),
+      autoLearningStatus: engine.chartLearning.analyzer.status(),
+      validationStatus: engine.chartLearning.validation.status(),
       knowledge: new ChartKnowledgeRepository(db).all(),
       analysisStatus: {
-        manualOnly: true,
+        automaticEnabled: process.env.AUTO_CHART_LEARNING_ENABLED !== "false",
         ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),
         incomplete: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='INCOMPLETE'").get()!.n),
         analyzed: Number(db.prepare("SELECT count(DISTINCT case_id) n FROM chart_case_analyses").get()!.n),
-        pending: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='PENDING'").get()!.n),
-        running: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='RUNNING'").get()!.n),
-        failed: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='FAILED'").get()!.n),
+        pending: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state IN ('PENDING','RETRY_WAIT')").get()!.n),
+        running: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state='RUNNING'").get()!.n),
+        failed: Number(db.prepare("SELECT count(*) n FROM chart_auto_learning_jobs WHERE state='DEAD_LETTER'").get()!.n),
         lastAnalyzedAt: db.prepare("SELECT max(analyzed_at) n FROM chart_case_analyses").get()!.n ?? null,
       },
     };
@@ -354,6 +373,10 @@ function sharedLearningView(engine: Engine, url: URL) {
       }));
   if (url.pathname === "/api/chart-learning/analysis-jobs")
     return engine.chartLearning.analyzer.jobs(100);
+  if (url.pathname === "/api/chart-learning/auto-learning-jobs")
+    return db.prepare("SELECT * FROM chart_auto_learning_jobs ORDER BY requested_at DESC LIMIT 100").all();
+  if (url.pathname === "/api/chart-learning/validation-jobs")
+    return engine.chartLearning.validation.jobs(100);
   const manualJob = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)$/);
   if (manualJob)
     return engine.chartLearning.analyzer.job(decodeURIComponent(manualJob[1]!)) ?? { error: "ANALYSIS_JOB_NOT_FOUND" };

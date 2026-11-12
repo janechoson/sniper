@@ -110,6 +110,36 @@ CREATE TABLE IF NOT EXISTS chart_ai_guard_decisions (
  model TEXT, prompt_version TEXT NOT NULL, knowledge_revision INTEGER NOT NULL,
  input_hash TEXT NOT NULL, output_hash TEXT, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS chart_ai_guard_decisions_recent ON chart_ai_guard_decisions(at DESC);
+CREATE TABLE IF NOT EXISTS chart_auto_learning_jobs (
+ id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ analysis_version TEXT NOT NULL, requested_at INTEGER NOT NULL, eligible_at INTEGER NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('PENDING','RUNNING','RETRY_WAIT','COMPLETED','DEAD_LETTER','CANCELLED')),
+ attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, started_at INTEGER,
+ completed_at INTEGER, analysis_job_id TEXT, last_error TEXT,
+ UNIQUE(case_id,analysis_version));
+CREATE INDEX IF NOT EXISTS chart_auto_learning_due ON chart_auto_learning_jobs(state,next_attempt_at,eligible_at);
+CREATE TABLE IF NOT EXISTS chart_validation_jobs (
+ id TEXT PRIMARY KEY, knowledge_id TEXT NOT NULL, knowledge_version INTEGER NOT NULL,
+ draft_payload TEXT NOT NULL, dataset_case_ids TEXT NOT NULL, dataset_hash TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('PENDING','RUNNING','COMPLETED','FAILED','DEAD_LETTER')),
+ requested_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
+ attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
+ human_approved INTEGER NOT NULL DEFAULT 0, error TEXT, report TEXT,
+ UNIQUE(knowledge_id,knowledge_version,dataset_hash));
+CREATE INDEX IF NOT EXISTS chart_validation_jobs_due ON chart_validation_jobs(state,next_attempt_at);
+CREATE TABLE IF NOT EXISTS chart_knowledge_control_events (
+ id TEXT PRIMARY KEY, knowledge_id TEXT NOT NULL, knowledge_version INTEGER NOT NULL,
+ action TEXT NOT NULL CHECK(action IN ('DISABLE','REJECT','DELETE','RESTORE','SUSPEND')),
+ actor TEXT NOT NULL CHECK(actor IN ('USER','SYSTEM')), reason TEXT NOT NULL,
+ fingerprint TEXT NOT NULL, at INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chart_knowledge_control_lookup ON chart_knowledge_control_events(knowledge_id,at DESC);
+CREATE INDEX IF NOT EXISTS chart_knowledge_suppression_lookup ON chart_knowledge_control_events(fingerprint,at DESC);
+CREATE TABLE IF NOT EXISTS chart_knowledge_drift_cases (
+ knowledge_id TEXT NOT NULL, knowledge_version INTEGER NOT NULL, case_id TEXT NOT NULL,
+ decision_id TEXT NOT NULL, dangerous INTEGER NOT NULL CHECK(dangerous IN (0,1)),
+ observed_at INTEGER NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(knowledge_id,knowledge_version,case_id));
+CREATE INDEX IF NOT EXISTS chart_knowledge_drift_recent ON chart_knowledge_drift_cases(knowledge_id,knowledge_version,observed_at DESC);
 ${[
   "chart_candles",
   "chart_events",
@@ -124,6 +154,8 @@ ${[
   "chart_knowledge_versions",
   "chart_knowledge_validations",
   "chart_ai_guard_decisions",
+  "chart_knowledge_control_events",
+  "chart_knowledge_drift_cases",
 ]
   .map(
     (t) => `
@@ -141,6 +173,8 @@ ${[
   "chart_knowledge_versions",
   "chart_knowledge_validations",
   "chart_ai_guard_decisions",
+  "chart_knowledge_control_events",
+  "chart_knowledge_drift_cases",
 ]
   .map(
     (t) => `
@@ -152,5 +186,7 @@ INSERT OR IGNORE INTO migrations VALUES(17,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(19,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(20,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(21,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(22,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(23,unixepoch());
 COMMIT;
 `;

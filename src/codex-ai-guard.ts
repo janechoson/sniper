@@ -9,6 +9,7 @@ import { ChartKnowledgeRepository } from "./chart-knowledge.js";
 type GuardOutput = Omit<AIGuardResponse, "action"> & { action: AIGuardResponse["action"] | "ERROR" };
 export type AIGuardDecision = GuardOutput & {
   id: string; mint: string; mode: Mode; attemptId: string; at: number; expiresAt: number;
+  inferenceDeadlineAt: number; evaluatedAt: number; decisionExpiresAt: number; marketEvidenceCutoffAt: number;
   model: string | null; promptVersion: string; knowledgeRevision: number;
   inputHash: string; outputHash: string | null; durationMs: number; queueWaitMs: number;
   runtimeOutcome: string;
@@ -25,17 +26,17 @@ const bounded = (value: unknown, chars: number) => {
   catch { return null; }
 };
 export class CodexAIGuard {
-  private active = false;
+  private activeCount = 0;
   private startedAt = 0;
-  private activeController?: AbortController;
+  private activeControllers = new Set<AbortController>();
   private stopped = false;
   constructor(private db: DatabaseSync, private runtime: ReasoningRuntime) {}
 
   async evaluate(input: GuardInput, revalidate: () => Promise<GuardRevalidation>): Promise<AIGuardDecision> {
     const requestedAt = Date.now(), id = randomUUID(), knowledge = new ChartKnowledgeRepository(this.db), knowledgeRevision = knowledge.revision();
     let inputPayload: unknown = null, inputHash = sha(null), outputHash: string | null = null, response: GuardOutput | null = null;
-    let outcome = "AI_GUARD_RUNTIME_UNAVAILABLE", durationMs = 0, queueWaitMs = 0, claimed = false, abort: AbortController | undefined, inference: Promise<unknown> | undefined, timerId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutMs = Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), maxAgeMs = Math.max(1000, input.maxAgeMs);
+    let outcome = "AI_GUARD_RUNTIME_UNAVAILABLE", durationMs = 0, queueWaitMs = 0, claimed = false, abort: AbortController | undefined, inference: Promise<unknown> | undefined, timerId: ReturnType<typeof setTimeout> | undefined, evaluatedAt = requestedAt, decisionExpiresAt = requestedAt;
+    const timeoutMs = Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), passTtlMs = Number(process.env.AI_GUARD_PASS_TTL_MS ?? 15000), maxAgeMs = Math.max(1000, input.maxAgeMs);
     const cutoff = Date.now();
     const fail = (reason: string) => ({
       action: "ERROR" as const, riskLevel: "HIGH" as const, confidence: 0, summary: reason,
@@ -44,8 +45,7 @@ export class CodexAIGuard {
     try {
       if (process.env.AI_GUARD_ENABLED === "false") throw Error("AI_GUARD_DISABLED");
       if (this.stopped) throw Error("AI_GUARD_SHUTDOWN");
-      if (this.active) throw Error("AI_GUARD_BUSY");
-      this.active = true; claimed = true; this.startedAt = Date.now(); queueWaitMs = this.startedAt - requestedAt;
+      this.activeCount++; claimed = true; this.startedAt = Date.now();
       if (typeof this.runtime.analyzeGuard !== "function") throw Error("AI_GUARD_RUNTIME_UNAVAILABLE");
       if (input.history.status !== "AVAILABLE" || input.history.freshness !== "FRESH" || input.history.fetchedAt > cutoff || cutoff - input.history.fetchedAt > maxAgeMs || input.market.price.state !== "KNOWN" || input.market.at > cutoff || cutoff - input.market.at > maxAgeMs)
         throw Error("AI_GUARD_STALE_INPUT");
@@ -73,8 +73,8 @@ export class CodexAIGuard {
       const encoded = JSON.stringify(inputPayload);
       if (encoded.length > 48000) throw Error("AI_GUARD_INPUT_TOO_LARGE");
       abort = new AbortController();
-      this.activeController = abort;
-      inference = this.runtime.analyzeGuard(inputPayload, abort.signal);
+      this.activeControllers.add(abort);
+      inference = this.runtime.analyzeGuard(inputPayload, abort.signal, (wait)=>{queueWaitMs=wait;});
       const timeout = new Promise<never>((_resolve, reject) => { timerId = setTimeout(() => { abort?.abort(); reject(Error("AI_GUARD_TIMEOUT")); }, timeoutMs); });
       const raw = await Promise.race([inference, timeout]);
       response = aiGuardResponseSchema.parse(raw);
@@ -95,10 +95,15 @@ export class CodexAIGuard {
         if (policy === "BLOCK") response = { ...response, action: "BLOCK", riskLevel: "HIGH", summary: `Cold start: no validated PRE_BUY knowledge exists. ${response.summary}`.slice(0, 1200), uncertaintyReasons: [...response.uncertaintyReasons, "No validated PRE_BUY knowledge exists; cold-start policy is BLOCK"].slice(0, 20) };
       }
       const post = await revalidate();
+      const activeKnowledge=knowledge.validatedPreBuy(),activeKeys=new Set(activeKnowledge.map((item)=>`${item.id}:${item.version}`));
+      if(knowledge.revision()!==knowledgeRevision||response.matchedKnowledge.some((match)=>!activeKeys.has(`${match.knowledgeId}:${match.version}`)))throw Error("AI_GUARD_KNOWLEDGE_REVISION_CHANGED");
       const currentAt = Date.now(), originalPrice = input.market.price.value, currentPrice = post.market.price.state === "KNOWN" ? post.market.price.value : null;
       if (!post.authorityValid) throw Error("AI_GUARD_AUTHORITY_CHANGED");
       if (!currentPrice || post.market.at > currentAt || currentAt - post.market.at > maxAgeMs || currentAt - input.history.fetchedAt > maxAgeMs) throw Error("AI_GUARD_STALE_AFTER_INFERENCE");
       if (Math.abs(currentPrice / originalPrice - 1) * 100 > input.maxPriceMovePercent) throw Error("AI_GUARD_MARKET_CHANGED");
+      evaluatedAt = currentAt;
+      decisionExpiresAt = Math.min(evaluatedAt + passTtlMs, input.market.at + maxAgeMs, input.history.fetchedAt + maxAgeMs, post.market.at + maxAgeMs);
+      if(decisionExpiresAt<=evaluatedAt)throw Error("AI_GUARD_NO_PASS_VALIDITY_REMAINS");
       outputHash = sha(response);
       outcome = "COMPLETED";
     } catch (error) {
@@ -109,16 +114,16 @@ export class CodexAIGuard {
     } finally {
       if (timerId) clearTimeout(timerId);
       if (claimed) {
-        if (outcome === "AI_GUARD_TIMEOUT" && inference) void inference.then(() => { this.active = false; }, () => { this.active = false; });
-        else this.active = false;
-        this.activeController = undefined;
+        this.activeCount=Math.max(0,this.activeCount-1);
+        if (outcome === "AI_GUARD_TIMEOUT" && inference && abort) void inference.then(() => this.activeControllers.delete(abort!), () => this.activeControllers.delete(abort!));
+        else if(abort)this.activeControllers.delete(abort);
       }
     }
     durationMs = Date.now() - requestedAt;
     const action = outcome === "COMPLETED" && response ? response.action : "ERROR";
     const decision: AIGuardDecision = {
       ...(response ?? fail(outcome)), id, mint: input.candidate.mint, mode: input.mode, attemptId: input.attemptId,
-      at: requestedAt, expiresAt: requestedAt + timeoutMs, model: this.runtime.status().model || null,
+      at: requestedAt, expiresAt: decisionExpiresAt, inferenceDeadlineAt: requestedAt + timeoutMs, evaluatedAt, decisionExpiresAt, marketEvidenceCutoffAt: cutoff, model: this.runtime.status().model || null,
       promptVersion: AI_GUARD_PROMPT_VERSION, knowledgeRevision, inputHash, outputHash, durationMs, queueWaitMs,
       runtimeOutcome: outcome,
     };
@@ -133,7 +138,8 @@ export class CodexAIGuard {
     const timeouts = Number(this.db.prepare("SELECT count(*) n FROM chart_ai_guard_decisions WHERE runtime_outcome LIKE '%TIMEOUT%'").get()!.n);
     const durations = this.db.prepare("SELECT duration_ms FROM chart_ai_guard_decisions ORDER BY at DESC LIMIT 1000").all().map((row: any) => Number(row.duration_ms)).sort((a, b) => a - b);
     const percentile = (p: number) => durations.length ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * p) - 1)]! : null;
-    return { enabled: process.env.AI_GUARD_ENABLED !== "false", runtime: this.runtime.status(), active: this.active, queued: 0, timeoutMs: Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), concurrency: 1, maxAttempts: 1, failPolicy: "BLOCK", coldStartPolicy: process.env.AI_GUARD_COLD_START_POLICY ?? "UNCERTAIN", latest: latest ? JSON.parse(latest.payload) : null, timeoutCount: timeouts, errorCount: errors, validatedKnowledgeCount: knowledge.validatedPreBuy().length, knowledgeRevision: knowledge.revision(), latencyMs: { sampleCount: durations.length, p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99) } };
+    const scheduler = this.runtime.status().scheduler as any;
+    return { enabled: process.env.AI_GUARD_ENABLED !== "false", runtime: this.runtime.status(), active: this.activeCount>0, activeCount:this.activeCount, queued: Number(scheduler?.queuedByPriority?.guard ?? 0), timeoutMs: Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000), passTtlMs: Number(process.env.AI_GUARD_PASS_TTL_MS ?? 15000), concurrency: 1, maxAttempts: 1, failPolicy: "BLOCK", coldStartPolicy: process.env.AI_GUARD_COLD_START_POLICY ?? "UNCERTAIN", latest: latest ? JSON.parse(latest.payload) : null, timeoutCount: timeouts, errorCount: errors, validatedKnowledgeCount: knowledge.validatedPreBuy().length, knowledgeRevision: knowledge.revision(), latencyMs: { sampleCount: durations.length, p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99) } };
   }
-  async stop() { this.stopped = true; this.activeController?.abort(); }
+  async stop() { this.stopped = true; for(const controller of this.activeControllers)controller.abort(); }
 }

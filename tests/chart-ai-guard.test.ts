@@ -84,22 +84,29 @@ test("cold-start default changes model PASS to UNCERTAIN but still records its m
     assert.match(result.summary, /Cold start/);
   } finally { await g.stop(); store.close(); if (previous === undefined) delete process.env.AI_GUARD_COLD_START_POLICY; else process.env.AI_GUARD_COLD_START_POLICY = previous; }
 });
-test("semantic knowledge validation writes a new immutable version and rejects same-mint holdout leakage", () => {
-  const store = new Store(":memory:"), repo = new ChartKnowledgeRepository(store.db), now = Date.now();
-  const seedCase = (id: string, mint: string, at: number, pnl: number) => store.db.prepare("INSERT INTO chart_learning_cases(position_id,mint,mode,account_id,buy_confirmed_at,learning_started_at,entry_price_usd,entry_quantity,status,entry_snapshot_id,exit_snapshot_id,realized_pnl_lamports,realized_pnl_pct,created_at,updated_at,payload) VALUES(?,?,'demo','fixture',?,?,1,'1','CLOSED',NULL,NULL,'0',?,?,?,?)")
-    .run(id, mint, at, at, pnl, at, at, JSON.stringify({ positionId: id, mint, closedAt: at + 600000 }));
+test("PASS TTL begins after completed evaluation and is independently bounded by evidence freshness", async()=>{
+  const previousTimeout=process.env.AI_GUARD_TIMEOUT_MS,previousTtl=process.env.AI_GUARD_PASS_TTL_MS;
+  process.env.AI_GUARD_TIMEOUT_MS="1000";process.env.AI_GUARD_PASS_TTL_MS="20000";
+  const store=new Store(":memory:");let start=0;
+  const g=new CodexAIGuard(store.learningDb,fakeRuntime(async(payload)=>{await new Promise((resolve)=>setTimeout(resolve,35));return response(payload);}));
+  try{
+    const input=guardInput();input.maxAgeMs=300000;start=Date.now();
+    const result=await evaluate(g,input);
+    assert.equal(result.action,"PASS");assert.ok(result.evaluatedAt>=start+25);
+    assert.equal(result.inferenceDeadlineAt,result.at+1000);
+    assert.ok(result.decisionExpiresAt>result.inferenceDeadlineAt);
+    assert.ok(result.decisionExpiresAt<=result.evaluatedAt+20000);
+    assert.ok(result.decisionExpiresAt<=input.history.fetchedAt+input.maxAgeMs);
+    assert.equal(result.expiresAt,result.decisionExpiresAt);
+    assert.ok(result.marketEvidenceCutoffAt<=result.evaluatedAt);
+  }finally{store.close();if(previousTimeout===undefined)delete process.env.AI_GUARD_TIMEOUT_MS;else process.env.AI_GUARD_TIMEOUT_MS=previousTimeout;if(previousTtl===undefined)delete process.env.AI_GUARD_PASS_TTL_MS;else process.env.AI_GUARD_PASS_TTL_MS=previousTtl;}
+});
+test("legacy sample-count promotion endpoint is disabled without replay report", () => {
+  const store = new Store(":memory:"), repo = new ChartKnowledgeRepository(store.db);
   try {
-    seedCase("train", "mint-training", now - 86400000, -20);
-    for (let i = 0; i < 3; i++) seedCase(`holdout-${i}`, `mint-holdout-${i}`, now - (i + 2) * 3 * 3600000, i * 5 - 5);
-    const draft = repo.createDraft({ ...baseKnowledge, supportingCaseIds: ["train"] });
-    const validated = repo.validateDraft(draft.id, draft.version, ["holdout-0", "holdout-1", "holdout-2"], true);
-    assert.equal(validated.version, 2);
-    assert.equal(validated.validationStatus, "VALIDATED");
-    assert.equal(repo.validatedPreBuy()[0]!.id, draft.id);
-    assert.equal(store.db.prepare("SELECT count(*) n FROM chart_knowledge_validations WHERE knowledge_id=?").get(draft.id)!.n, 1);
-    const other = repo.createDraft({ ...baseKnowledge, id: "KN-LEAK", supportingCaseIds: ["train"] });
-    seedCase("holdout-leak", "mint-training", now - 72000000, 5);
-    assert.throws(() => repo.validateDraft(other.id, other.version, ["holdout-leak", "holdout-0", "holdout-1"], true), /SAME_MINT/);
+    const draft = repo.createDraft({ ...baseKnowledge, supportingCaseIds: [] });
+    assert.throws(() => repo.validateDraft(draft.id, draft.version, ["one", "two", "three"], true), /AUTOMATIC_VALIDATION_ONLY/);
+    assert.equal(repo.validatedPreBuy().length, 0);
   } finally { store.close(); }
 });
 

@@ -104,15 +104,17 @@ test("semantic knowledge and AI audit migration is additive and idempotent acros
   const dir = mkdtempSync(join(tmpdir(), "chart-learning-migration-"));
   try {
     let db = openLearningDatabase(join(dir, "learning.sqlite"));
-    assert.ok(db.prepare("SELECT version FROM migrations WHERE version=21").get());
+    assert.ok(db.prepare("SELECT version FROM migrations WHERE version=22").get());
+    assert.ok(db.prepare("SELECT version FROM migrations WHERE version=23").get());
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_case_decisions'").get());
-    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions"])
+    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions", "chart_auto_learning_jobs", "chart_validation_jobs", "chart_knowledge_control_events", "chart_knowledge_drift_cases"])
       assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
     db.close();
     db = openLearningDatabase(join(dir, "learning.sqlite"));
-    assert.equal(db.prepare("SELECT count(*) n FROM migrations WHERE version=21").get()!.n, 1);
+    assert.equal(db.prepare("SELECT count(*) n FROM migrations WHERE version=22").get()!.n, 1);
+    assert.equal(db.prepare("SELECT count(*) n FROM migrations WHERE version=23").get()!.n, 1);
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_case_decisions'").get());
-    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions"])
+    for (const table of ["chart_knowledge_versions", "chart_knowledge_validations", "chart_ai_guard_decisions", "chart_auto_learning_jobs", "chart_validation_jobs", "chart_knowledge_control_events", "chart_knowledge_drift_cases"])
       assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
     db.close();
   } finally {
@@ -928,7 +930,7 @@ test("shared Learning DB manual analysis does not query execution tables from an
     const caseId = readyCase(c), accepted = c.analyzer.request([caseId]);
     for (let i = 0; i < 100 && c.analyzer.job(accepted.jobs[0]!.id)?.state !== "COMPLETED"; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.state, "COMPLETED", String(c.analyzer.job(accepted.jobs[0]!.id)?.error));
-    assert.equal(c.analyzer.status().mode, "MANUAL");
+    assert.equal(c.analyzer.status().mode, "DISABLED");
     assert.equal(db.prepare("SELECT count(*) n FROM chart_case_analyses WHERE case_id=?").get(caseId)!.n, 1);
   } finally { await c.stop(); demo.close(); live.close(); db.close(); }
 });

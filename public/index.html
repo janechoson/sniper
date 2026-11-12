@@ -511,13 +511,16 @@
             <article><span>Lỗi Guard</span><strong id="aiGuardErrors">0</strong><small id="aiGuardQueue"></small></article>
           </section>
           <p id="learningStatus" role="status"></p>
-          <section id="learningCaseControls" class="learning-case-controls" aria-label="Phân tích Learning Case thủ công">
-            <header><div><h3>Learning Cases</h3><p>Chart collection tự động · Codex analysis chỉ chạy khi bạn bấm.</p></div>
-              <div class="learning-case-actions"><button id="analyzeSelectedCases" type="button" disabled>Analyze Selected</button><button id="analyzeReadyCases" type="button">Analyze Ready Cases</button></div>
+          <section id="learningCaseControls" class="learning-case-controls" aria-label="Tự động học Learning Case">
+            <header><div><h3>Automatic Chart Learning</h3><p>Case đủ bằng chứng được xếp lịch tự động; Codex chạy sau thời gian chờ, không chạy theo từng lần lấy nến.</p></div>
             </header>
             <div id="learningCaseStatus" role="status"></div>
             <div id="learningCaseList" role="list"></div>
             <article id="learningCaseAnalysis" class="panel" hidden aria-live="polite"></article>
+          </section>
+          <section id="validationSummary" class="learning-case-controls" aria-label="Kết quả holdout replay">
+            <header><div><h3>Holdout Replay Validation</h3><p>Replay pre-BUY độc lập tự quyết định promotion; quality gates và drift monitor luôn hiển thị.</p></div></header>
+            <div id="validationJobList" role="list"></div>
           </section>
           <section id="semanticKnowledge" class="learning-case-controls" aria-label="Semantic trading knowledge">
             <header><div><h3>Semantic Knowledge</h3><p>DRAFT chỉ tác động Guard sau khi qua validation độc lập.</p></div></header>

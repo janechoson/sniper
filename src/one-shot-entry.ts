@@ -27,6 +27,8 @@ export async function oneShotEntry(
 ) {
   let owned: BuyOwnershipClaim | undefined;
   let aiGuardExpiresAt = Number.POSITIVE_INFINITY;
+  let aiGuardKnowledgeRevision: number | undefined;
+  let aiGuardPrice: number | undefined;
   try {
     let candidate = e.store.token(mint)!;
     const attemptId = e.attempts.current!.attemptId;
@@ -50,6 +52,8 @@ export async function oneShotEntry(
       if (e.entriesStopping) reject("ENGINE_STOPPING");
       e.store.assertEntryAuthority(mint, e.mode, authority);
       if (Date.now() >= aiGuardExpiresAt) reject("AI_GUARD_PASS_EXPIRED");
+      if (aiGuardKnowledgeRevision !== undefined && e.codexAIGuard.status().knowledgeRevision !== aiGuardKnowledgeRevision)
+        reject("AI_GUARD_KNOWLEDGE_REVISION_CHANGED");
     };
     const info = await run("CHEAP_FILTER", async () => {
       try {
@@ -226,7 +230,8 @@ export async function oneShotEntry(
         try { assertAuthority(); } catch { authorityValid = false; }
         return { market: fresh, authorityValid };
       });
-      aiGuardExpiresAt = d.expiresAt;
+      aiGuardExpiresAt = d.decisionExpiresAt;
+      aiGuardKnowledgeRevision = d.knowledgeRevision;
       e.attempts.summary("codexGuard", d);
       e.store.pipelineEvent("CODEX_" + d.action, mint, {
         attemptId,
@@ -234,6 +239,9 @@ export async function oneShotEntry(
         reason: d.summary,
       });
       if (d.action !== "PASS") reject("CODEX_" + d.action + ": " + d.summary);
+      const guardedPrice = market.price.state === "KNOWN" ? market.price.value : undefined;
+      if (guardedPrice === undefined) reject("CODEX_GUARD_MARKET_PRICE_UNKNOWN");
+      aiGuardPrice = guardedPrice;
       return d;
     });
     e.attempts.summary("codexGuardDecisionId", guard.id);
@@ -598,25 +606,30 @@ export async function oneShotEntry(
       )
         reject("PRE_SIGN_EVIDENCE_STALE");
     };
+    const finalValidation = async () => {
+      check();
+      const data = await e.gmgn.info(mint, 0, { priority: 0, consumer: "ai-guard-final-buy-revalidation" });
+      const latest = normalizeMarket(data), checkedAt = Date.now();
+      const latestPrice=latest.price.state === "KNOWN" ? latest.price.value : undefined;
+      if (latestPrice === undefined) reject("AI_GUARD_FINAL_MARKET_STALE");
+      if (latest.at > checkedAt || checkedAt-latest.at > e.settings.maxSnapshotAgeMs)
+        reject("AI_GUARD_FINAL_MARKET_STALE");
+      if (aiGuardPrice === undefined || latestPrice === undefined || Math.abs(latestPrice/aiGuardPrice-1)*100>e.settings.maxDecisionPriceMovePercent)
+        reject("AI_GUARD_FINAL_MARKET_CHANGED");
+      market = latest;
+      snapshot.market = latest;
+      check();
+      const ctx = await context(intent.id, owned!.id);
+      const latestRisk = e.risk.evaluate(snapshot, e.settings, ctx);
+      if (!latestRisk.allowed) reject(latestRisk.reason);
+      if (size(ctx.balance, BigInt(e.settings.feeReserveLamports), ctx.pending, e.settings).amount !== BigInt(intent.amount))
+        reject("EXACT_SIZE_CHANGED");
+    };
     const execution = await e.executor.execute(
       intent,
       e.settings,
       await e.solUsd().catch(() => "0"),
-      async () => {
-        check();
-        const ctx = await context(intent.id, owned!.id);
-        const r = e.risk.evaluate(snapshot, e.settings, ctx);
-        if (!r.allowed) reject(r.reason);
-        if (
-          size(
-            ctx.balance,
-            BigInt(e.settings.feeReserveLamports),
-            ctx.pending,
-            e.settings,
-          ).amount !== BigInt(intent.amount)
-        )
-          reject("EXACT_SIZE_CHANGED");
-      },
+      finalValidation,
       check,
       (stage: AttemptStage, status: StageStatus) =>
         e.attempts.update(stage, status),
