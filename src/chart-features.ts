@@ -100,6 +100,8 @@ export type RuleStatus =
   | "RETIRED";
 export interface LearningRule {
   createdAt?: number;
+  category?: "BUY_GUARD" | "SELL_GUARD" | "EXIT_OPTIMIZATION";
+  sourceCaseId?: string;
   id: string;
   version: number;
   at: number;

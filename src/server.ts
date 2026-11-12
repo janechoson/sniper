@@ -33,7 +33,7 @@ import { demoAccountView } from "./demo-account-view.js";
 import { discoveryContext } from "./discovery.js";
 import { Blocked } from "./domain.js";
 import { Engine } from "./engine.js";
-import { chartLearningView } from "./chart-api.js";
+import { chartLearningCommand, chartLearningView } from "./chart-api.js";
 import { DatabaseRegistry } from "./database-registry.js";
 import { migrateDatabases } from "./database-migration.js";
 import { ChartLearning } from "./chart-learning.js";
@@ -357,6 +357,8 @@ export async function startServer(
           url.pathname.startsWith("/api/chart-learning/"))
       )
         return reply(res, 200, chartLearningView(engine, url));
+      if (req.method === "POST" && url.pathname.startsWith("/api/chart-learning/"))
+        return reply(res, 202, chartLearningCommand(requestEngine, url, await readBody()));
       if (req.method === "GET" && url.pathname === "/api/status")
         return reply(res, 200, { ...((await fullStatus()) as object), csrf });
       if (req.method === "GET" && url.pathname === "/favicon.ico") {

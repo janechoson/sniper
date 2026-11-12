@@ -86,12 +86,31 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         const result = await (await fetch(base + "/api/chart-learning")).json();
         assert.equal(result.overview.scope.mode, "SHARED");
         assert.equal(result.overview.candleCount, 0);
+        assert.equal(result.status.analyzer.mode, "MANUAL");
+        assert.equal(result.analysisStatus.manualOnly, true);
+        assert.deepEqual(result.learningCases, []);
         assert.deepEqual(result.rules, []);
         assert.deepEqual(result.decisions, []);
         const decision = await (
           await fetch(base + "/api/chart-learning/decision?id=FAKE")
         ).json();
         assert.equal(decision.error, "DECISION_NOT_FOUND");
+        const denied = await fetch(base + "/api/chart-learning/analyze", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ caseId: "missing" }),
+        });
+        assert.equal(denied.status, 403);
+        const shell = await (await fetch(base + "/api/ui/shell")).json();
+        const allowed = await fetch(base + "/api/chart-learning/analyze", {
+          method: "POST",
+          headers: {
+            origin: base,
+            "content-type": "application/json",
+            "x-csrf-token": shell.csrf,
+          },
+          body: JSON.stringify({ caseId: "missing" }),
+        });
+        assert.equal(allowed.status, 409);
       },
     );
     await t.test(

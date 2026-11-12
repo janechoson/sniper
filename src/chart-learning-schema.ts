@@ -62,6 +62,29 @@ CREATE TABLE IF NOT EXISTS chart_case_evidence (
  available_at INTEGER NOT NULL,
  PRIMARY KEY(case_id,evidence_id,evidence_type));
 CREATE INDEX IF NOT EXISTS chart_case_evidence_evidence ON chart_case_evidence(evidence_id,evidence_type,available_at);
+CREATE TABLE IF NOT EXISTS chart_case_collection (
+ case_id TEXT PRIMARY KEY REFERENCES chart_learning_cases(position_id),
+ status TEXT NOT NULL CHECK(status IN ('COLLECTING','POSITION_CLOSED','POST_SELL_COLLECTING','READY_FOR_ANALYSIS','INCOMPLETE')),
+ last_collected_at INTEGER, last_candle_at INTEGER, data_quality TEXT NOT NULL DEFAULT 'UNKNOWN',
+ updated_at INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chart_case_followups (
+ case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ horizon INTEGER NOT NULL CHECK(horizon IN (5,15,30,60)), due_at INTEGER NOT NULL, next_attempt_at INTEGER NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('PENDING','COLLECTED','FAILED','EXPIRED')),
+ attempts INTEGER NOT NULL DEFAULT 0, collected_at INTEGER, payload TEXT, error TEXT,
+ PRIMARY KEY(case_id,horizon));
+CREATE INDEX IF NOT EXISTS chart_case_followups_due ON chart_case_followups(state,due_at);
+CREATE TABLE IF NOT EXISTS chart_analysis_jobs (
+ id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ requested_by TEXT NOT NULL, requested_at INTEGER NOT NULL, state TEXT NOT NULL CHECK(state IN ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED')),
+ started_at INTEGER, completed_at INTEGER, analysis_version TEXT NOT NULL,
+ runtime_model TEXT, error TEXT, retry_count INTEGER NOT NULL DEFAULT 0, result TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS chart_analysis_jobs_one_active_case ON chart_analysis_jobs(case_id) WHERE state IN ('PENDING','RUNNING');
+CREATE INDEX IF NOT EXISTS chart_analysis_jobs_state ON chart_analysis_jobs(state,requested_at);
+CREATE TABLE IF NOT EXISTS chart_case_analyses (
+ id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES chart_learning_cases(position_id),
+ job_id TEXT NOT NULL UNIQUE REFERENCES chart_analysis_jobs(id), analyzed_at INTEGER NOT NULL,
+ analysis_version TEXT NOT NULL, runtime_model TEXT, result TEXT NOT NULL);
 ${[
   "chart_candles",
   "chart_events",

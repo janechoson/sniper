@@ -7094,3 +7094,25 @@ body > main > header {
 body > main > #notice:not(.system-pause) {
   display: none;
 }
+#learningCaseControls {
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--border, #e4d9c7);
+  border-radius: 14px;
+  background: var(--panel, #fffaf1);
+}
+#learningCaseControls > header,
+.learning-case-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#learningCaseControls > header { justify-content: space-between; flex-wrap: wrap; }
+#learningCaseControls h3,
+#learningCaseControls p { margin: 0 0 6px; }
+.learning-case-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#learningCaseStatus { margin: 8px 0; color: var(--muted, #687386); }
+#learningCaseList { display: grid; gap: 6px; max-height: 360px; overflow: auto; }
+.learning-case-row { padding: 8px; border-bottom: 1px solid var(--border, #e4d9c7); flex-wrap: wrap; }
+.learning-case-row small { color: var(--muted, #687386); }
+.learning-case-row input { width: auto; }

@@ -24,7 +24,7 @@ import { ChartLearning } from "../src/chart-learning.js";
 import { Store } from "../src/store.js";
 import { migrateDatabases, verify } from "../src/database-migration.js";
 import { ModeManager } from "../src/mode-manager.js";
-import { position, provider, candidate, info } from "./fixtures.js";
+import { position, provider, candidate, info, seedEntryAccounting } from "./fixtures.js";
 import { candles } from "./one-shot-fixtures.js";
 import { normalizeMarket } from "../src/gmgn.js";
 import { parseMarketHistory } from "../src/market-history.js";
@@ -116,6 +116,29 @@ test("shared market observations deduplicate both-mode windows and dashboards ha
     clean(dir);
   }
 });
+test("shared collector updates eligible DEMO and LIVE cases for the same mint without Codex", async () => {
+  const dir = directory(); let r: DatabaseRegistry | undefined, c: ChartLearning | undefined;
+  try {
+    r = new DatabaseRegistry(dir);
+    const g = provider(async (args) => args[1] === "kline" ? candles(60) : undefined);
+    let calls = 0;
+    c = new ChartLearning(r.demo, g.gmgn, {
+      status: () => ({ state: "MISSING_OPENAI_API_KEY", model: "fixture", promptVersion: "test" }),
+      analyze: async () => { calls++; throw Error("collector must not invoke Codex"); },
+    }, [r.demo, r.live]);
+    for (const [store, mode] of [[r.demo,"demo"],[r.live,"live"]] as const) {
+      const p = { ...position(), mode, mint: candidate().mint, state: "OPEN" as const };
+      store.savePosition(p); seedEntryAccounting(store,p);
+      assert.equal(c.registerBoughtPosition(p), true);
+    }
+    c.pump("demo", false); await (c as any).active;
+    assert.equal(calls, 0);
+    const rows = r.learning.prepare("SELECT case_id,count(*) n FROM chart_case_evidence WHERE evidence_type='SNAPSHOT' GROUP BY case_id").all();
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((row:any)=>Number(row.n)>=1));
+  } finally { await c?.stop(); r?.close(); clean(dir); }
+});
+
 test("pre-buy shared observations are excluded from Learning and never touch financial state", async () => {
   const dir = directory();
   let r: DatabaseRegistry | undefined;

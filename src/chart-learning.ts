@@ -9,22 +9,21 @@ import {
 import { ChartStore, chartId, type ChartDecision } from "./chart-store.js";
 import {
   CodexRuntime,
-  reasoningSchema,
   type ReasoningRuntime,
   type RuntimeUsage,
-  type ReasoningResult,
 } from "./codex-runtime.js";
+import { ChartAnalyzer } from "./chart-analyzer.js";
 import type { Store } from "./store.js";
 import type { Gmgn } from "./gmgn.js";
 import { parseMarketHistory, type MarketHistory } from "./market-history.js";
 import { createTradeReplay } from "./chart-replay.js";
-import { validateLearningRule } from "./chart-validation.js";
 import { sqliteAtomic } from "./learning-database.js";
 import { tradeAccounting } from "./trade-accounting.js";
 
 export class ChartLearning {
   readonly runtime: ReasoningRuntime;
   readonly charts: ChartStore;
+  readonly analyzer: ChartAnalyzer;
   private active?: Promise<void>;
   private positionJobs = new Map<string, Promise<void>>();
   private positionDue = new Map<string, number>();
@@ -65,12 +64,11 @@ export class ChartLearning {
         },
       });
     this.charts = new ChartStore(store);
-    // One engine owns the database lock. Incomplete inference has no authority.
-    store.learningDb
-      .prepare(
-        "UPDATE chart_jobs SET state='PENDING',error='RESTART_RECOVERY' WHERE state='RUNNING'",
-      )
+    // Preserve legacy automatic analysis records for audit, but never execute them.
+    this.charts.db
+      .prepare("UPDATE chart_jobs SET state='CANCELLED',error='LEGACY_AUTOMATIC_ANALYSIS_DISABLED' WHERE state IN ('PENDING','RUNNING')")
       .run();
+    this.analyzer = new ChartAnalyzer(this.charts, this.runtime);
   }
   startIndependent() {
     if (!this.timer)
@@ -92,23 +90,18 @@ export class ChartLearning {
   }
   status() {
     return {
-      runtime: this.runtime.status(),
+      collector: {
+        state: this.stopped ? "PAUSED" : this.lastError ? "ERROR" : this.timer || this.active ? "RUNNING" : "READY",
+        active: !!this.active,
+        positionJobs: this.positionJobs.size,
+        lastError: this.lastError,
+      },
+      analyzer: { ...this.analyzer.status(), runtime: this.runtime.status() },
       observerEnabled: !!this.timer && !this.stopped,
       observationActive: !!this.active,
       positionJobs: this.positionJobs.size,
       lastError: this.lastError,
     };
-  }
-  private checkReferences(result: ReasoningResult, rules: LearningRule[]) {
-    if (result.ruleIds.some((id) => !rules.some((r) => r.id === id)))
-      throw Error("CODEX_FABRICATED_RULE");
-    const support = new Set(rules.flatMap((r) => r.supportingEventIds));
-    const contrary = new Set(rules.flatMap((r) => r.contradictoryEventIds));
-    if (
-      result.supportingEventIds.some((id) => !support.has(id)) ||
-      result.contradictoryEventIds.some((id) => !contrary.has(id))
-    )
-      throw Error("CODEX_FABRICATED_EVIDENCE");
   }
   private sourceFor(mode: Mode) {
     return this.sources.find((source) => source.mode === mode) ?? this.store;
@@ -162,6 +155,11 @@ export class ChartLearning {
             now,
             JSON.stringify(payload),
           );
+        this.charts.db
+          .prepare(
+            "INSERT OR IGNORE INTO chart_case_collection(case_id,status,data_quality,updated_at,payload) VALUES(?,'COLLECTING','UNKNOWN',?,?)",
+          )
+          .run(p.id, now, JSON.stringify({ simulated: buy.evidence?.simulated === true || p.mode === "demo" }));
         this.charts.linkCaseEvidence(
           p.id,
           buy.id,
@@ -180,6 +178,11 @@ export class ChartLearning {
         }
       | undefined;
     if (!current) return null;
+    this.charts.db
+      .prepare(
+        "INSERT OR IGNORE INTO chart_case_collection(case_id,status,data_quality,updated_at,payload) VALUES(?,?,'UNKNOWN',?,?)",
+      )
+      .run(p.id, p.state === "CLOSED" ? "POSITION_CLOSED" : "COLLECTING", now, JSON.stringify({ legacyCase: true }));
     if (p.state === "CLOSED" && current.status !== "CLOSED") {
       const accounting = tradeAccounting(
         p,
@@ -197,7 +200,7 @@ export class ChartLearning {
       sqliteAtomic(this.charts.db, () => {
         this.charts.db
           .prepare(
-            "UPDATE chart_learning_cases SET status='CLOSED',exit_snapshot_id=?,realized_pnl_lamports=?,realized_pnl_pct=?,updated_at=?,payload=json_set(payload,'$.closedAt',?,'$.exitExecutionId',?,'$.accounting',?) WHERE position_id=?",
+            "UPDATE chart_learning_cases SET status='CLOSED',exit_snapshot_id=?,realized_pnl_lamports=?,realized_pnl_pct=?,updated_at=?,payload=json_set(payload,'$.closedAt',?,'$.exitExecutionId',?,'$.accounting',?,'$.exitPriceUsd',?) WHERE position_id=?",
           )
           .run(
             exit?.id ?? null,
@@ -207,6 +210,7 @@ export class ChartLearning {
             p.closedAt ?? now,
             exit?.id ?? null,
             JSON.stringify(accounting),
+            JSON.stringify(exit?.accounting?.priceUsd ?? null),
             p.id,
           );
         if (exit)
@@ -219,6 +223,7 @@ export class ChartLearning {
           );
       });
     }
+    if (p.state === "CLOSED") this.schedulePostSell(p, now);
     return {
       positionId: p.id,
       entryAt,
@@ -226,18 +231,31 @@ export class ChartLearning {
       buy,
     };
   }
-  private addCaseReview(p: Position, now: number) {
-    const replay = createTradeReplay(new ChartStore(this.sourceFor(p.mode)), p, now);
-    this.charts.job("CASE_REVIEW", p.id, replay, p.mode, now);
+  private schedulePostSell(p: Position, now: number) {
+    const closedAt = p.closedAt ?? now;
+    sqliteAtomic(this.charts.db, () => {
+      this.charts.db
+        .prepare("UPDATE chart_case_collection SET status='POST_SELL_COLLECTING',updated_at=? WHERE case_id=? AND status IN ('COLLECTING','POSITION_CLOSED','POST_SELL_COLLECTING')")
+        .run(now, p.id);
+      for (const horizon of [5, 15, 30, 60])
+        this.charts.db
+          .prepare("INSERT OR IGNORE INTO chart_case_followups(case_id,horizon,due_at,next_attempt_at,state) VALUES(?,?,?,?, 'PENDING')")
+          .run(p.id, horizon, closedAt + horizon * 60000, closedAt + horizon * 60000);
+    });
   }
   registerBoughtPosition(
     p: Position,
     h?: MarketHistory,
     market?: Market,
+    entryEvidence?: { guardDecision?: ChartDecision; kronosDecision?: unknown; riskSnapshot?: unknown },
     now = Date.now(),
   ) {
     const learningCase = this.ensureCase(p, now);
     if (!learningCase) return false;
+    if (entryEvidence)
+      this.charts.db
+        .prepare("UPDATE chart_learning_cases SET payload=json_set(payload,'$.entryEvidence',json(?)),updated_at=? WHERE position_id=?")
+        .run(JSON.stringify(entryEvidence), now, p.id);
     if (h && !learningCase.snapshotId) {
       const snapshotId = this.charts.ingest(
         p.mint,
@@ -260,6 +278,11 @@ export class ChartLearning {
           "UPDATE chart_learning_cases SET entry_snapshot_id=coalesce(entry_snapshot_id,?),updated_at=? WHERE position_id=?",
         )
         .run(snapshotId, now, p.id);
+      this.charts.db
+        .prepare(
+          "UPDATE chart_case_collection SET last_collected_at=?,last_candle_at=max(coalesce(last_candle_at,0),?),data_quality=?,updated_at=? WHERE case_id=?",
+        )
+        .run(now, h.candles.at(-1)?.at ?? 0, h.candles.length ? "AVAILABLE" : "INCOMPLETE", now, p.id);
     }
     this.charts.watch(
       p.mint,
@@ -268,17 +291,17 @@ export class ChartLearning {
       "POST_BUY_POSITION:" + p.id,
       now,
     );
-    if (h) this.addCaseReview(p, now);
     return true;
   }
   scheduleBoughtPosition(
     p: Position,
     h: MarketHistory,
     market: Market,
+    entryEvidence?: { guardDecision?: ChartDecision; kronosDecision?: unknown; riskSnapshot?: unknown },
   ) {
     setImmediate(() => {
       try {
-        this.registerBoughtPosition(p, h, market);
+        this.registerBoughtPosition(p, h, market, entryEvidence);
       } catch (error) {
         this.lastError =
           error instanceof Error ? error.message : "CHART_LEARNING_START_FAILED";
@@ -409,7 +432,7 @@ export class ChartLearning {
         if (!this.stopped) onDecision(d);
       })
       .catch(() => {
-        this.lastError = "CODEX_POSITION_ANALYSIS_FAILED";
+        this.lastError = "CHART_POSITION_COLLECTION_FAILED";
       })
       .finally(() => this.positionJobs.delete(p.id));
     this.positionJobs.set(p.id, job);
@@ -455,10 +478,10 @@ export class ChartLearning {
         this.charts.db
           .prepare("INSERT OR IGNORE INTO chart_replays VALUES(?,?,?,?,?)")
           .run(p.id, p.mode, replay.accountId, now, JSON.stringify(replay));
-        this.charts.job("TRADE_REVIEW", p.id, replay, p.mode, now);
       }
     this.followups(mode, now);
     if (criticalBusy) return;
+    if (await this.collectPostSellOne(now)) return;
     const row = this.charts.db
       .prepare(
         this.store.sharedLearning
@@ -477,9 +500,11 @@ export class ChartLearning {
         };
       const cases = this.charts.db
         .prepare(
-          "SELECT position_id, buy_confirmed_at FROM chart_learning_cases WHERE mint=? AND mode=? AND account_id=? AND status='OPEN' ORDER BY learning_started_at",
+          this.store.sharedLearning
+            ? "SELECT position_id, buy_confirmed_at FROM chart_learning_cases WHERE mint=? AND status='OPEN' ORDER BY learning_started_at"
+            : "SELECT position_id, buy_confirmed_at FROM chart_learning_cases WHERE mint=? AND mode=? AND account_id=? AND status='OPEN' ORDER BY learning_started_at",
         )
-        .all(mint, mode, account) as { position_id: string; buy_confirmed_at: number }[];
+        .all(...(this.store.sharedLearning ? [mint] : [mint, mode, account])) as { position_id: string; buy_confirmed_at: number }[];
       if (!cases.length) {
         this.charts.db
           .prepare(
@@ -497,6 +522,7 @@ export class ChartLearning {
         const h = parseMarketHistory(raw, c);
         if (h.freshness !== "FRESH" || h.status !== "AVAILABLE")
           throw Error("CHART_HISTORY_UNAVAILABLE");
+        const collectedAt = Math.max(now, h.fetchedAt);
         for (const learningCase of cases) {
           const snapshotId = this.charts.ingest(
             mint,
@@ -506,20 +532,22 @@ export class ChartLearning {
               entryAt: learningCase.buy_confirmed_at,
               phase: "POST_BUY_OBSERVATION",
             },
-            now,
+            collectedAt,
           );
           this.charts.linkCaseEvidence(
             learningCase.position_id,
             snapshotId,
             "SNAPSHOT",
             "POST_BUY_OBSERVATION",
-            now,
+            collectedAt,
           );
+          this.charts.db
+            .prepare("UPDATE chart_case_collection SET last_collected_at=?,last_candle_at=max(coalesce(last_candle_at,0),?),data_quality='AVAILABLE',updated_at=? WHERE case_id=?")
+            .run(collectedAt, h.candles.at(-1)?.at ?? 0, collectedAt, learningCase.position_id);
         }
         for (const e of this.charts.events(100).filter((e) => e.mint === mint && e.kind !== "CONTROL")) {
           for (const learningCase of cases)
-            this.charts.linkCaseEvidence(learningCase.position_id, e.id, "EVENT", "POST_BUY_OBSERVATION", now);
-          this.charts.job("EVENT_REVIEW", e.id, e, mode);
+            this.charts.linkCaseEvidence(learningCase.position_id, e.id, "EVENT", "POST_BUY_OBSERVATION", collectedAt);
         }
         this.charts.db
           .prepare(
@@ -548,37 +576,91 @@ export class ChartLearning {
       }
     }
     if (this.stopped) return;
-    await this.runJob(mode, now);
     if (now - this.maintenanceAt > 3600000) {
       this.maintenanceAt = now;
       this.charts.db
         .prepare("DELETE FROM chart_observation_queue WHERE until_at<?")
         .run(now);
-      // Referenced candles/events remain available for historical decisions.
-      this.charts.db
-        .prepare(
-          `DELETE FROM chart_snapshots WHERE at<? AND id NOT IN (SELECT snapshot_id FROM chart_decisions)`,
-        )
-        .run(now - 7 * 86400000);
-      this.charts.db
-        .prepare(
-          `DELETE FROM chart_events WHERE at<? AND id NOT IN (SELECT event_id FROM chart_rule_evidence) AND id NOT IN (SELECT event_id FROM chart_event_outcomes)`,
-        )
-        .run(now - 90 * 86400000);
-      this.charts.db
-        .prepare(
-          `DELETE FROM chart_candles WHERE at<? AND NOT EXISTS (SELECT 1 FROM chart_events e WHERE e.mint=chart_candles.mint AND chart_candles.at BETWEEN e.at-3600000 AND e.at+3600000)`,
-        )
-        .run(now - 30 * 86400000);
       for (const id of this.positionDue.keys())
         if (!this.store.managedPositions(mode).some((p) => p.id === id))
           this.positionDue.delete(id);
     }
   }
+  private async collectPostSellOne(now: number) {
+    const followup = this.charts.db.prepare(
+      "SELECT f.*,c.mint,c.mode,c.account_id,c.buy_confirmed_at,c.payload case_payload FROM chart_case_followups f JOIN chart_learning_cases c ON c.position_id=f.case_id WHERE f.state='PENDING' AND f.due_at<=? AND f.next_attempt_at<=? ORDER BY f.due_at LIMIT 1",
+    ).get(now, now) as any;
+    if (!followup) return false;
+    const caseId = String(followup.case_id), horizon = Number(followup.horizon);
+    const dueAt = Number(followup.due_at), casePayload = JSON.parse(String(followup.case_payload));
+    if (now > dueAt + 30 * 60000) {
+      this.finishPostSell(caseId, horizon, "EXPIRED", now, null, "FOLLOWUP_DATA_WINDOW_EXPIRED");
+      return true;
+    }
+    const source = this.sourceFor(followup.mode as Mode);
+    let observedCoverage: number | null = null;
+    const candidate = source.token(String(followup.mint)) ?? {
+      mint: String(followup.mint), source: "POST_SELL_FOLLOWUP", discoveredAt: Number(followup.buy_confirmed_at),
+    };
+    try {
+      const raw = await this.gmgn.marketHistory(candidate, 60000, {
+        priority: 4, consumer: "chart-learning-post-sell-followup",
+      });
+      if (this.stopped) return true;
+      const history = parseMarketHistory(raw, candidate);
+      if (history.status !== "AVAILABLE" || history.freshness !== "FRESH")
+        throw Error("CHART_HISTORY_UNAVAILABLE");
+      const collectedAt = Math.max(now, history.fetchedAt);
+      const closedAt = Number(casePayload.closedAt ?? dueAt - horizon * 60000);
+      this.charts.ingest(String(followup.mint), history, {
+        positionId: caseId, entryAt: Number(followup.buy_confirmed_at),
+        phase: "POST_SELL_FOLLOWUP", postSellAt: closedAt, horizon,
+      }, collectedAt);
+      const candles = history.candles.filter((c) => c.at >= closedAt && c.at <= collectedAt && c.at < closedAt + (horizon + 1) * 60000);
+      const coverage = Math.min(1, candles.length / horizon);
+      observedCoverage = coverage;
+      if (coverage < 0.8) throw Error("POST_SELL_FOLLOWUP_INSUFFICIENT_COVERAGE");
+      const exitPrice = Number(casePayload.exitPriceUsd ?? casePayload.accounting?.averageExitPriceUsd ?? 0);
+      const close = candles.at(-1)!;
+      const outcome = {
+        horizon, scheduledAt: dueAt, collectedAt, coverage,
+        candleCount: candles.length, firstCandleAt: candles[0]!.at, lastCandleAt: close.at,
+        closeReturnPct: exitPrice > 0 ? (close.close / exitPrice - 1) * 100 : null,
+        mfePct: exitPrice > 0 ? (Math.max(...candles.map((c) => c.high)) / exitPrice - 1) * 100 : null,
+        maePct: exitPrice > 0 ? (Math.min(...candles.map((c) => c.low)) / exitPrice - 1) * 100 : null,
+        source: "GMGN_KLINE_1M", simulated: casePayload.simulated === true,
+      };
+      this.finishPostSell(caseId, horizon, "COLLECTED", collectedAt, outcome, null);
+      this.charts.linkCaseEvidence(caseId, `${caseId}:${horizon}m`, "OUTCOME", "OUTCOME", collectedAt);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "POST_SELL_FOLLOWUP_FAILED";
+      if (now >= dueAt + 30 * 60000)
+        this.finishPostSell(caseId, horizon, "EXPIRED", now, { coverage: observedCoverage, source: "GMGN_KLINE_1M" }, message);
+      else
+        this.charts.db.prepare("UPDATE chart_case_followups SET attempts=attempts+1,next_attempt_at=?,payload=?,error=? WHERE case_id=? AND horizon=?")
+          .run(now + 120000, JSON.stringify({ coverage: observedCoverage, source: "GMGN_KLINE_1M" }), message, caseId, horizon);
+      this.charts.db.prepare("UPDATE chart_case_collection SET data_quality='INCOMPLETE',updated_at=? WHERE case_id=?")
+        .run(now, caseId);
+    }
+    return true;
+  }
+
+  private finishPostSell(caseId: string, horizon: number, state: string, now: number, payload: unknown, error: string | null) {
+    sqliteAtomic(this.charts.db, () => {
+      this.charts.db.prepare("UPDATE chart_case_followups SET state=?,attempts=attempts+1,collected_at=?,payload=?,error=? WHERE case_id=? AND horizon=?")
+        .run(state, now, payload === null ? null : JSON.stringify(payload), error, caseId, horizon);
+      const remaining = Number(this.charts.db.prepare("SELECT count(*) n FROM chart_case_followups WHERE case_id=? AND state='PENDING'").get(caseId)!.n);
+      if (!remaining) {
+        const incomplete = Number(this.charts.db.prepare("SELECT count(*) n FROM chart_case_followups WHERE case_id=? AND state<>'COLLECTED'").get(caseId)!.n) > 0;
+        this.charts.db.prepare("UPDATE chart_case_collection SET status=?,data_quality=?,updated_at=?,payload=json_set(payload,'$.followupsComplete',true) WHERE case_id=?")
+          .run(incomplete ? "INCOMPLETE" : "READY_FOR_ANALYSIS", incomplete ? "INCOMPLETE" : "COMPLETE", now, caseId);
+      }
+    });
+  }
   private followups(mode: Mode, now: number) {
     for (const event of this.charts
       .events(200)
-      .filter((e) => e.kind !== "CONTROL" && now - e.at < 90 * 60000)) {
+      .filter((e) => e.kind !== "CONTROL" && now - e.at < 90 * 60000 && this.charts.db.prepare("SELECT 1 FROM chart_case_evidence ce JOIN chart_learning_cases lc ON lc.position_id=ce.case_id WHERE ce.evidence_type='EVENT' AND ce.evidence_id=? LIMIT 1").get(e.id))) {
       for (const horizon of [5, 15, 30, 60]) {
         if (
           now < event.at + (horizon + 1) * 60000 ||
@@ -613,18 +695,11 @@ export class ChartLearning {
         this.charts.db
           .prepare("INSERT OR IGNORE INTO chart_event_outcomes VALUES(?,?,?,?)")
           .run(event.id, horizon, now, JSON.stringify(result));
-        this.charts.job(
-          "EVENT_FOLLOWUP",
-          event.id + ":" + horizon,
-          { event, outcome: result },
-          mode,
-          now,
-        );
       }
     }
     for (const d of this.charts
       .decisions(mode, 200)
-      .filter((d) => ["BLOCK", "PASS", "SELL"].includes(d.action))) {
+      .filter((d) => ["BLOCK", "PASS", "SELL"].includes(d.action) && d.positionId && this.charts.db.prepare("SELECT 1 FROM chart_learning_cases WHERE position_id=?").get(d.positionId))) {
       for (const minutes of [5, 15, 30, 60]) {
         if (now < d.at + minutes * 60000 || !d.inputPriceUsd) continue;
         if (
@@ -675,174 +750,12 @@ export class ChartLearning {
       }
     }
   }
-  private async runJob(mode: Mode, now: number) {
-    const availability = this.runtime.status();
-    if (
-      availability.state.startsWith("MISSING") ||
-      availability.active ||
-      Number(availability.nextAvailableAt ?? 0) > Date.now()
-    )
-      return;
-    const job = this.charts.db
-      .prepare(
-        this.store.sharedLearning
-          ? "SELECT * FROM chart_jobs WHERE state='PENDING' AND due<=? ORDER BY CASE kind WHEN 'TRADE_REVIEW' THEN 0 WHEN 'EVENT_FOLLOWUP' THEN 1 ELSE 2 END,at LIMIT 1"
-          : "SELECT * FROM chart_jobs WHERE mode=? AND account_id=? AND state='PENDING' AND due<=? ORDER BY CASE kind WHEN 'TRADE_REVIEW' THEN 0 WHEN 'EVENT_FOLLOWUP' THEN 1 ELSE 2 END,at LIMIT 1",
-      )
-      .get(
-        ...(this.store.sharedLearning
-          ? [now]
-          : [mode, this.charts.account(mode), now]),
-      );
-    if (!job) return;
-    this.charts.db
-      .prepare(
-        "UPDATE chart_jobs SET state='RUNNING',attempts=attempts+1 WHERE id=?",
-      )
-      .run(String(job.id));
-    try {
-      const payload = JSON.parse(String(job.payload));
-      const result = reasoningSchema.parse(
-        await this.runtime.analyze({
-          analysisDepth: job.kind === "DEEP_REVIEW" ? "DEEP" : "STANDARD",
-          task: job.kind,
-          payload,
-          events: this.charts.events(8),
-          rules: this.charts.rules(),
-          policy: CHART_POLICY,
-        }),
-      );
-      if (result.action !== "REVIEW")
-        throw Error("CODEX_REVIEW_ACTION_REQUIRED");
-      const available = this.charts
-        .events(20000)
-        .filter((e) => e.availableAt <= now);
-      const ids = new Set(available.map((e) => e.id));
-      if (
-        [...result.supportingEventIds, ...result.contradictoryEventIds].some(
-          (id) => !ids.has(id),
-        )
-      )
-        throw Error("CODEX_FABRICATED_REVIEW_EVIDENCE");
-      if (
-        result.hypothesis &&
-        result.supportingEventIds.length &&
-        result.hypothesis.behaviors.length
-      ) {
-        const h = result.hypothesis;
-        const rule: LearningRule = {
-          id: "LR-" + chartId(h.behaviors, h.window, h.action).slice(0, 16),
-          version: 1,
-          at: Date.now(),
-          createdAt: Date.now(),
-          name: h.name,
-          description: h.description,
-          status: h.behaviors.every((b) =>
-            [
-              "SLOW_RISE",
-              "RAPID_RISE",
-              "DECLINE",
-              "WEAKENING_VOLUME",
-              "MOMENTUM_EXHAUSTION",
-              "DRAWDOWN",
-              "VOLATILITY_EXPANSION",
-            ].includes(b),
-          )
-            ? "DRAFT"
-            : "REJECTED",
-          behaviors: h.behaviors,
-          window: Number(h.window),
-          action: h.action,
-          invalidation: h.invalidation,
-          supportingEventIds: result.supportingEventIds,
-          contradictoryEventIds: result.contradictoryEventIds,
-        };
-        if (!this.charts.rules().some((r) => r.id === rule.id))
-          this.charts.saveRule(rule);
-        if (rule.contradictoryEventIds.length && job.kind !== "DEEP_REVIEW")
-          this.charts.job(
-            "DEEP_REVIEW",
-            rule.id + ":" + rule.version,
-            rule,
-            mode,
-            Date.now(),
-          );
-      }
-      // Full model/prompt/usage metadata is saved with the immutable job result.
-      this.charts.db
-        .prepare(
-          "UPDATE chart_jobs SET state='COMPLETED',result=?,error=NULL WHERE id=?",
-        )
-        .run(
-          JSON.stringify({
-            analysis: result,
-            runtime: this.runtime.status(),
-            at: Date.now(),
-          }),
-          String(job.id),
-        );
-      for (const rule of this.charts
-        .rules()
-        .filter((r) =>
-          ["DRAFT", "OBSERVING", "VALIDATING", "VALIDATED"].includes(r.status),
-        )) {
-        const next = {
-          ...rule,
-          version: rule.version + 1,
-          createdAt: rule.createdAt ?? rule.at,
-        };
-        if (rule.status === "DRAFT") {
-          this.charts.saveRule({
-            ...next,
-            status: "OBSERVING",
-            at: Date.now(),
-          });
-          continue;
-        }
-        const v = validateLearningRule(this.charts, next);
-        if (rule.status === "OBSERVING" && v.validation.matched >= 20) {
-          this.charts.saveRule({
-            ...next,
-            status: "VALIDATING",
-            at: Date.now(),
-          });
-          continue;
-        }
-        if (rule.status === "VALIDATING" && v.passed)
-          this.charts.saveRule({
-            ...next,
-            status: "VALIDATED",
-            at: Date.now(),
-            validationId: v.id,
-          });
-        else if (
-          v.validation.matched >= 20 &&
-          v.testing.matched >= 20 &&
-          v.validation.precision < 0.35 &&
-          v.testing.precision < 0.35
-        )
-          this.charts.saveRule({
-            ...next,
-            status: rule.status === "VALIDATED" ? "RETIRED" : "REJECTED",
-            at: Date.now(),
-          });
-      }
-    } catch (error) {
-      this.charts.db
-        .prepare("UPDATE chart_jobs SET state=?,due=?,error=? WHERE id=?")
-        .run(
-          Number(job.attempts) >= 2 ? "FAILED" : "PENDING",
-          now + 60000 * 2 ** Number(job.attempts),
-          error instanceof Error ? error.message : "CODEX_JOB_FAILED",
-          String(job.id),
-        );
-    }
-  }
   async stop() {
     if (this.timer) clearInterval(this.timer);
     this.stopped = true;
     await this.active;
     await Promise.all(this.positionJobs.values());
+    await this.analyzer.stop();
   }
   drainOutboxes(now = Date.now()) {
     if (!this.store.sharedLearning) return;
@@ -920,13 +833,6 @@ export class ChartLearning {
                 now,
                 JSON.stringify(replay),
               );
-            this.charts.job(
-              "TRADE_REVIEW",
-              payload.id,
-              replay,
-              payload.mode,
-              now,
-            );
           }
         }
       });

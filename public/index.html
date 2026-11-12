@@ -505,6 +505,14 @@
             <article><span>Rule Validation</span><strong id="learningValidation">Đang kiểm tra</strong><small id="learningValidationDetail"></small></article>
           </section>
           <p id="learningStatus" role="status"></p>
+          <section id="learningCaseControls" class="learning-case-controls" aria-label="Phân tích Learning Case thủ công">
+            <header><div><h3>Learning Cases</h3><p>Chart collection tự động · Codex analysis chỉ chạy khi bạn bấm.</p></div>
+              <div class="learning-case-actions"><button id="analyzeSelectedCases" type="button" disabled>Analyze Selected</button><button id="analyzeReadyCases" type="button">Analyze Ready Cases</button></div>
+            </header>
+            <div id="learningCaseStatus" role="status"></div>
+            <div id="learningCaseList" role="list"></div>
+            <article id="learningCaseAnalysis" class="panel" hidden aria-live="polite"></article>
+          </section>
           <section id="learningOverview" aria-label="Chỉ số học"></section>
           <details id="learningMoreStats"><summary>Chi tiết thống kê</summary><div id="learningSecondaryStats"></div></details>
           <nav id="learningTabs" aria-label="Learning sections"></nav>

@@ -2,6 +2,42 @@ import type { Engine } from "./engine.js";
 import type { ChartEvent } from "./chart-store.js";
 import { env } from "./config.js";
 
+function caseRows(engine: Engine) {
+  return engine.chartLearning.charts.db.prepare(
+    `SELECT c.position_id caseId,c.mint,c.mode,c.buy_confirmed_at entryAt,c.learning_started_at,
+      c.status positionStatus,c.realized_pnl_pct realizedPnlPct,
+      s.status collectionStatus,s.data_quality dataQuality,s.last_collected_at lastCollectedAt,
+      (SELECT count(*) FROM chart_case_followups f WHERE f.case_id=c.position_id AND f.state='COLLECTED') followupsCollected,
+      (SELECT count(*) FROM chart_case_followups f WHERE f.case_id=c.position_id AND f.state IN ('PENDING','FAILED')) followupsPending,
+      (SELECT j.state FROM chart_analysis_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) analysisStatus,
+      (SELECT j.id FROM chart_analysis_jobs j WHERE j.case_id=c.position_id ORDER BY j.requested_at DESC LIMIT 1) analysisJobId,
+      (SELECT j.completed_at FROM chart_analysis_jobs j WHERE j.case_id=c.position_id AND j.state='COMPLETED' ORDER BY j.completed_at DESC LIMIT 1) lastAnalysisAt
+     FROM chart_learning_cases c JOIN chart_case_collection s ON s.case_id=c.position_id
+     ORDER BY c.learning_started_at DESC LIMIT 200`,
+  ).all();
+}
+
+export function chartLearningCommand(engine: Engine, url: URL, body: unknown) {
+  if (!body || typeof body !== "object") throw Error("INVALID_ANALYSIS_REQUEST");
+  const input = body as Record<string, unknown>;
+  if (url.pathname === "/api/chart-learning/analyze") {
+    if (typeof input.caseId !== "string") throw Error("LEARNING_CASE_ID_REQUIRED");
+    return engine.chartLearning.analyzer.request([input.caseId]);
+  }
+  if (url.pathname === "/api/chart-learning/analyze-batch") {
+    const ids = input.ready === true
+      ? engine.chartLearning.analyzer.readyCaseIds(20)
+      : Array.isArray(input.caseIds) && input.caseIds.every((id) => typeof id === "string")
+        ? input.caseIds as string[]
+        : [];
+    if (!ids.length) throw Error("NO_READY_CASES_SELECTED");
+    return engine.chartLearning.analyzer.request(ids);
+  }
+  const retry = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)\/retry$/);
+  if (retry) return engine.chartLearning.analyzer.retry(decodeURIComponent(retry[1]!));
+  throw Error("CHART_COMMAND_NOT_FOUND");
+}
+
 function eventReviews(
   db: Engine["store"]["learningDb"],
   events: ChartEvent[],
@@ -76,6 +112,18 @@ export function chartLearningView(engine: Engine, url: URL) {
       backtests: rows(
         "SELECT payload FROM chart_validations WHERE json_extract(payload,'$.kind')='WALK_FORWARD_COMPARISON' ORDER BY at DESC LIMIT 20",
       ),
+      learningCases: caseRows(engine),
+      analysisJobs: engine.chartLearning.analyzer.jobs(),
+      analysisStatus: {
+        manualOnly: true,
+        ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),
+        incomplete: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='INCOMPLETE'").get()!.n),
+        analyzed: Number(db.prepare("SELECT count(DISTINCT case_id) n FROM chart_case_analyses").get()!.n),
+        pending: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='PENDING'").get()!.n),
+        running: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='RUNNING'").get()!.n),
+        failed: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='FAILED'").get()!.n),
+        lastAnalyzedAt: db.prepare("SELECT max(analyzed_at) n FROM chart_case_analyses").get()!.n ?? null,
+      },
     };
   if (url.pathname === "/api/chart-learning/rule")
     return {
@@ -215,6 +263,11 @@ export function chartLearningView(engine: Engine, url: URL) {
         ...row,
         result: row.result ? JSON.parse(String(row.result)) : null,
       }));
+  if (url.pathname === "/api/chart-learning/analysis-jobs")
+    return engine.chartLearning.analyzer.jobs(100);
+  const manualJob = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)$/);
+  if (manualJob)
+    return engine.chartLearning.analyzer.job(decodeURIComponent(manualJob[1]!)) ?? { error: "ANALYSIS_JOB_NOT_FOUND" };
   return { error: "CHART_ROUTE_NOT_FOUND" };
 }
 
@@ -260,6 +313,18 @@ function sharedLearningView(engine: Engine, url: URL) {
       backtests: rows(
         "SELECT payload FROM chart_validations WHERE json_extract(payload,'$.kind')='WALK_FORWARD_COMPARISON' ORDER BY at DESC LIMIT 20",
       ),
+      learningCases: caseRows(engine),
+      analysisJobs: engine.chartLearning.analyzer.jobs(),
+      analysisStatus: {
+        manualOnly: true,
+        ready: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='READY_FOR_ANALYSIS'").get()!.n),
+        incomplete: Number(db.prepare("SELECT count(*) n FROM chart_case_collection WHERE status='INCOMPLETE'").get()!.n),
+        analyzed: Number(db.prepare("SELECT count(DISTINCT case_id) n FROM chart_case_analyses").get()!.n),
+        pending: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='PENDING'").get()!.n),
+        running: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='RUNNING'").get()!.n),
+        failed: Number(db.prepare("SELECT count(*) n FROM chart_analysis_jobs WHERE state='FAILED'").get()!.n),
+        lastAnalyzedAt: db.prepare("SELECT max(analyzed_at) n FROM chart_case_analyses").get()!.n ?? null,
+      },
     };
   if (url.pathname === "/api/chart-learning/jobs")
     return db
@@ -271,6 +336,11 @@ function sharedLearningView(engine: Engine, url: URL) {
         ...row,
         result: row.result ? JSON.parse(String(row.result)) : null,
       }));
+  if (url.pathname === "/api/chart-learning/analysis-jobs")
+    return engine.chartLearning.analyzer.jobs(100);
+  const manualJob = url.pathname.match(/^\/api\/chart-learning\/analysis-jobs\/([^/]+)$/);
+  if (manualJob)
+    return engine.chartLearning.analyzer.job(decodeURIComponent(manualJob[1]!)) ?? { error: "ANALYSIS_JOB_NOT_FOUND" };
   if (url.pathname === "/api/chart-learning/rule")
     return {
       versions: rows(

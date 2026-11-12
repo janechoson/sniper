@@ -196,6 +196,28 @@ test("pre-buy Guard is read-only while explicit Learning ingestion stays immutab
     s.close();
   }
 });
+test("Learning Cases require a confirmed BUY and OPEN position, are idempotent per position", async () => {
+  const s = new Store(":memory:"), c = new ChartLearning(s, provider().gmgn, runtime());
+  try {
+    const first = { ...position(), mode: "demo" as const, state: "OPEN" as const };
+    s.savePosition(first);
+    assert.equal(c.registerBoughtPosition(first), false);
+    const intent = { id: randomUUID(), key: randomUUID(), positionId: first.id, mode: "demo" as const, mint: first.mint, side: "BUY" as const, amount: first.costLamports, provider: "JUPITER" as const, createdAt: Date.now(), expiresAt: Date.now()+60000, snapshotHash: "fixture", reason: "pending fixture" };
+    s.execution({ id: "pending-"+first.id, intent, state: "PENDING_CONFIRMATION", at: Date.now() });
+    assert.equal(c.registerBoughtPosition(first), false);
+    s.execution({ id: "failed-"+first.id, intent: { ...intent, id: randomUUID() }, state: "FAILED", at: Date.now() });
+    assert.equal(c.registerBoughtPosition(first), false);
+    assert.equal(Number(c.charts.db.prepare("SELECT count(*) n FROM chart_learning_cases").get()!.n), 0);
+    seedEntryAccounting(s, first);
+    assert.equal(c.registerBoughtPosition(first), true);
+    assert.equal(c.registerBoughtPosition(first), true);
+    const second = { ...first, id: randomUUID() };
+    s.savePosition(second);
+    seedEntryAccounting(s, second);
+    assert.equal(c.registerBoughtPosition(second), true);
+    assert.equal(Number(c.charts.db.prepare("SELECT count(*) n FROM chart_learning_cases WHERE mint=?").get(first.mint)!.n), 2);
+  } finally { await c.stop(); s.close(); }
+});
 test("no history and unvalidated/contradictory evidence PASS; invalid data is explicitly ERROR", async () => {
   const s = new Store(":memory:"),
     g = provider();
@@ -787,6 +809,7 @@ test("market event recovery outcomes use only completed observed candles and are
     h.candles[25]!.low = h.candles[25]!.open * 0.55;
     c.charts.ingest(MINT, h);
     const event = c.charts.events().find((e) => e.kind === "RUG_30")!;
+    c.charts.linkCaseEvidence(readyCase(c), event.id, "EVENT", "POST_BUY_OBSERVATION", event.availableAt);
     (c as any).followups("demo", Date.now());
     (c as any).followups("demo", Date.now());
     const rows = s.db
@@ -800,62 +823,101 @@ test("market event recovery outcomes use only completed observed candles and are
   }
 });
 
-test("completed research jobs generate evidence-linked DRAFT hypotheses without promoting them", async () => {
+function readyCase(c: ChartLearning, id = randomUUID()) {
+  const at = Date.now() - 2 * 3600000, accountId = c.charts.account("demo");
+  c.charts.db.prepare("INSERT INTO chart_learning_cases(position_id,mint,mode,account_id,buy_confirmed_at,learning_started_at,entry_price_usd,entry_quantity,status,entry_snapshot_id,exit_snapshot_id,realized_pnl_lamports,realized_pnl_pct,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,1,'100','CLOSED',NULL,NULL,'-10',-10,?,?,?)")
+    .run(id, MINT, "demo", accountId, at, at, at, at, JSON.stringify({positionId:id,mint:MINT,mode:"demo",closedAt:at+60000,simulated:true}));
+  c.charts.db.prepare("INSERT INTO chart_case_collection(case_id,status,data_quality,updated_at,payload) VALUES(?,'READY_FOR_ANALYSIS','COMPLETE',?, '{}')").run(id, at);
+  c.charts.db.prepare("INSERT INTO chart_replays VALUES(?,?,?,?,?)").run(id,"demo",accountId,at,JSON.stringify({positionId:id,mint:MINT,entryAt:at,closedAt:at+60000,fills:[]}));
+  return id;
+}
+test("closed case retains 5/15/30/60 post-SELL collection and persists real coverage", async () => {
+  const s = new Store(":memory:"), g = provider(async (args) => args[1] === "kline" ? candles(60) : undefined), c = new ChartLearning(s, g.gmgn, runtime());
+  try {
+    const caseId = readyCase(c), now = Date.now(), closedAt = now - 5 * 60000;
+    s.db.prepare("UPDATE chart_learning_cases SET payload=? WHERE position_id=?")
+      .run(JSON.stringify({positionId:caseId,mint:MINT,mode:"demo",closedAt,exitPriceUsd:0.9,simulated:true}), caseId);
+    s.db.prepare("UPDATE chart_case_collection SET status='POSITION_CLOSED' WHERE case_id=?").run(caseId);
+    (c as any).schedulePostSell({ id: caseId, closedAt }, now);
+    assert.deepEqual(s.db.prepare("SELECT horizon FROM chart_case_followups WHERE case_id=? ORDER BY horizon").all(caseId).map((r:any)=>Number(r.horizon)), [5,15,30,60]);
+    s.db.prepare("UPDATE chart_case_followups SET due_at=?,next_attempt_at=? WHERE case_id=? AND horizon=5")
+      .run(now - 1000, now - 1000, caseId);
+    assert.equal(await (c as any).collectPostSellOne(now), true);
+    const result = s.db.prepare("SELECT state,payload,error FROM chart_case_followups WHERE case_id=? AND horizon=5").get(caseId)!;
+    assert.equal(result.state, "COLLECTED", String(result.error));
+    assert.ok(JSON.parse(String(result.payload)).coverage >= 0.8);
+    assert.equal(s.db.prepare("SELECT status FROM chart_case_collection WHERE case_id=?").get(caseId)!.status, "POST_SELL_COLLECTING");
+  } finally { await c.stop(); s.close(); }
+});
+test("collector pump never invokes Codex; post-BUY-only evidence cannot create a hindsight BUY rule", async () => {
   const s = new Store(":memory:");
-  let response: Partial<ReasoningResult> = {};
-  const c = new ChartLearning(s, provider().gmgn, {
-    status: () => runtime().status(),
-    analyze: async () => runtime(response).analyze({}),
-  });
+  let calls = 0;
+  let response: Partial<ReasoningResult> = {
+    action: "REVIEW",
+    reason: "Fixture analysis",
+    supportingEventIds: [],
+    contradictoryEventIds: [],
+    hypothesis: { name: "Regression hypothesis", description: "Unproven", behaviors: ["SLOW_RISE"], window: "15", action: "BLOCK", invalidation: "Volume recovers" },
+  };
+  const r = runtime(response);
+  r.analyze = async () => { calls++; return runtime(response).analyze({}); };
+  const c = new ChartLearning(s, provider().gmgn, r);
   try {
     const h = history();
     h.candles[25]!.low = h.candles[25]!.open * 0.55;
-    c.charts.ingest(MINT, h);
-    const event = c.charts.events().find((e) => e.kind === "RUG_30")!,
-      contrary = c.charts.events().find((e) => e.kind === "CONTROL")!;
-    response = {
-      action: "REVIEW",
-      supportingEventIds: [event.id],
-      contradictoryEventIds: [contrary.id],
-      hypothesis: {
-        name: "Regression hypothesis",
-        description: "Unproven fixture behavior",
-        behaviors: ["SLOW_RISE"],
-        window: "15",
-        action: "BLOCK",
-        invalidation: "Participation strengthens",
-      },
-    };
-    const job = c.charts.job("EVENT_REVIEW", event.id, event, "demo");
-    await (c as any).runJob("demo", Date.now());
-    assert.equal(
-      s.db.prepare("SELECT state FROM chart_jobs WHERE id=?").get(job)!.state,
-      "COMPLETED",
-    );
-    const rules = c.charts.rules();
-    assert.equal(rules.length, 1);
-    assert.equal(rules[0]!.status, "OBSERVING");
-    assert.deepEqual(rules[0]!.supportingEventIds, [event.id]);
-    assert.deepEqual(rules[0]!.contradictoryEventIds, [contrary.id]);
+    const snapshot = c.charts.ingest(MINT, h), event = c.charts.events().find((e) => e.kind === "RUG_30")!;
+    response = { ...response, supportingEventIds: [event.id] };
+    const caseId = readyCase(c);
+    c.charts.linkCaseEvidence(caseId, event.id, "EVENT", "POST_BUY_OBSERVATION", event.availableAt);
+    c.charts.linkCaseEvidence(caseId, chartId(MINT,"GMGN_KLINE_1M",h.candles[0]!.at), "CANDLE", "POST_BUY_OBSERVATION", event.availableAt);
+    c.charts.job("EVENT_REVIEW", event.id, event, "demo");
+    c.pump("demo", false);
+    await (c as any).active;
+    assert.equal(calls, 0);
+    const accepted = c.analyzer.request([caseId]);
+    const duplicate = c.analyzer.request([caseId]);
+    assert.equal(accepted.jobs.length, 1);
+    assert.equal(duplicate.jobs[0]!.id, accepted.jobs[0]!.id);
+    for (let i = 0; i < 100 && c.analyzer.job(accepted.jobs[0]!.id)?.state !== "COMPLETED"; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(calls, 1);
+    assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.state, "COMPLETED");
+    assert.equal(c.charts.rules().length, 0);
+    assert.equal(c.charts.db.prepare("SELECT state FROM chart_jobs WHERE kind='EVENT_REVIEW'").get()!.state, "PENDING");
+    assert.ok(snapshot);
   } finally {
     await c.stop();
     s.close();
   }
 });
-test("restart returns interrupted analysis to PENDING without creating a decision", async () => {
+test("manual analysis quota errors are persisted and never retry automatically", async () => {
+  const s = new Store(":memory:"), r = runtime(), c = new ChartLearning(s, provider().gmgn, r);
+  let calls = 0;
+  r.analyze = async () => { calls++; throw Error("CODEX_RESOURCE_BUDGET_EXHAUSTED"); };
+  try {
+    const caseId = readyCase(c), accepted = c.analyzer.request([caseId]);
+    for (let i = 0; i < 100 && c.analyzer.job(accepted.jobs[0]!.id)?.state !== "FAILED"; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(calls, 1);
+    assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.error, "CODEX_RESOURCE_BUDGET_EXHAUSTED");
+    assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.state, "FAILED");
+  } finally { await c.stop(); s.close(); }
+});
+test("restart marks interrupted manual analysis failed and never resumes it", async () => {
   const s = new Store(":memory:"),
     charts = new ChartStore(s);
-  const job = charts.job("EVENT_REVIEW", "restart", { fixture: true }, "demo");
-  s.db
-    .prepare("UPDATE chart_jobs SET state='RUNNING',attempts=1 WHERE id=?")
-    .run(job);
+  const c = new ChartLearning(s, provider().gmgn, runtime()), caseId = readyCase(c);
+  const job = randomUUID();
+  s.db.prepare("INSERT INTO chart_analysis_jobs(id,case_id,requested_by,requested_at,state,started_at,analysis_version) VALUES(?,?,?,?,'RUNNING',?,'test')")
+    .run(job, caseId, "test", Date.now(), Date.now());
+  await c.stop();
   const worker = new ChartLearning(s, provider().gmgn, runtime());
   try {
     const row = s.db
-      .prepare("SELECT state,error FROM chart_jobs WHERE id=?")
+      .prepare("SELECT state,error FROM chart_analysis_jobs WHERE id=?")
       .get(job)!;
-    assert.equal(row.state, "PENDING");
-    assert.equal(row.error, "RESTART_RECOVERY");
+    assert.equal(row.state, "FAILED");
+    assert.equal(row.error, "INTERRUPTED_MANUAL_REQUEST_RETRY_REQUIRED");
     assert.equal(charts.decisions("demo").length, 0);
   } finally {
     await worker.stop();

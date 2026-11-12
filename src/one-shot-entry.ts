@@ -621,7 +621,11 @@ export async function oneShotEntry(
         .find((p) => p.id === intent.positionId && p.state === "OPEN");
       if (!bought)
         reject("POSITION_NOT_RECONCILED");
-      e.chartLearning.scheduleBoughtPosition(bought!, history, market);
+      e.chartLearning.scheduleBoughtPosition(bought!, history, market, {
+        guardDecision: guard,
+        kronosDecision: kronos,
+        riskSnapshot: snapshot,
+      });
     });
     e.attempts.strategy(attemptId, strategy, {
       execution: "CONFIRMED",

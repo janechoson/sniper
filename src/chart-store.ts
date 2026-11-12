@@ -66,20 +66,21 @@ export class ChartStore {
     );
     const caseContext =
       context && typeof context === "object"
-        ? (context as { positionId?: string; entryAt?: number })
+      ? (context as { positionId?: string; entryAt?: number; phase?: string; postSellAt?: number })
         : {};
     sqliteAtomic(this.db, () => {
       const insert = this.db.prepare(
         "INSERT OR IGNORE INTO chart_candles VALUES(?,?,?,?,?,?)",
       );
       for (const c of rows) {
-        const id = chartId(mint, h.source, c.at);
+        const id = chartId(mint, h.source, c.at),
+          observedAt = Math.max(c.at + 60000, Math.min(now, h.fetchedAt));
         insert.run(
           id,
           mint,
           h.source,
           c.at,
-          now,
+          observedAt,
           JSON.stringify({ ...c, complete: true, source: h.source }),
         );
         // A revision is never allowed to silently change evidence already used.
@@ -98,10 +99,12 @@ export class ChartStore {
             caseContext.positionId,
             id,
             "CANDLE",
-            c.at < (caseContext.entryAt ?? now)
-              ? "PRE_BUY_CONTEXT"
-              : "POST_BUY_OBSERVATION",
-            now,
+            caseContext.phase === "POST_SELL_FOLLOWUP" && c.at >= (caseContext.postSellAt ?? Infinity)
+              ? "OUTCOME"
+              : c.at < (caseContext.entryAt ?? now)
+                ? "PRE_BUY_CONTEXT"
+                : "POST_BUY_OBSERVATION",
+            observedAt,
           );
         const drop = rugDrop(c),
           rise = (c.high / c.open - 1) * 100;
@@ -150,7 +153,7 @@ export class ChartStore {
             mint,
             kind,
             at: c.at,
-            availableAt: now,
+            availableAt: observedAt,
             candleId: id,
             candle: c,
             dropPercent: drop,
@@ -166,16 +169,18 @@ export class ChartStore {
           };
           this.db
             .prepare("INSERT OR IGNORE INTO chart_events VALUES(?,?,?,?,?,?,?)")
-            .run(event.id, mint, kind, c.at, now, id, JSON.stringify(event));
+            .run(event.id, mint, kind, c.at, observedAt, id, JSON.stringify(event));
           if (caseContext.positionId)
             this.linkCaseEvidence(
               caseContext.positionId,
               event.id,
               "EVENT",
-              c.at < (caseContext.entryAt ?? now)
-                ? "PRE_BUY_CONTEXT"
-                : "POST_BUY_OBSERVATION",
-              now,
+              caseContext.phase === "POST_SELL_FOLLOWUP" && c.at >= (caseContext.postSellAt ?? Infinity)
+                ? "OUTCOME"
+                : c.at < (caseContext.entryAt ?? now)
+                  ? "PRE_BUY_CONTEXT"
+                  : "POST_BUY_OBSERVATION",
+              observedAt,
             );
         }
       }

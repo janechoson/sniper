@@ -213,41 +213,53 @@ export async function mount(ctx) {
     eventSearch = window.sessionStorage.getItem("chart-learning-search") || "",
     eventPage = 0,
     chartWindow = 60,
-    selectionRequest = 0;
+    selectionRequest = 0,
+    selectedCases = new Set();
   const read = (path, id) =>
     ctx.get(
       "/api/chart-learning" +
         path +
         (id ? "?id=" + encodeURIComponent(id) : ""),
     );
+  document.getElementById("analyzeSelectedCases").addEventListener("click", async () => {
+    if (!selectedCases.size) return;
+    try {
+      await ctx.post("/api/chart-learning/analyze-batch", { caseIds: [...selectedCases].slice(0, 20) });
+      selectedCases.clear();
+      data = await read("");
+      renderHealth(); renderCaseList();
+    } catch (error) { ctx.error(error); }
+  });
+  document.getElementById("analyzeReadyCases").addEventListener("click", async () => {
+    try {
+      await ctx.post("/api/chart-learning/analyze-batch", { ready: true });
+      data = await read("");
+      renderHealth(); renderCaseList();
+    } catch (error) { ctx.error(error); }
+  });
   const shortMint = (mint) =>
     mint && mint.length > 18 ? mint.slice(0, 7) + "…" + mint.slice(-7) : mint || "N/A";
   const metricValue = (value, suffix = "") =>
     value === null || value === undefined || !Number.isFinite(Number(value))
       ? "N/A"
       : Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 }) + suffix;
-  const jobCount = (state) =>
-    Number(data?.overview?.jobs?.find((j) => j.state === state)?.n ?? 0);
   function renderHealth() {
     const status = data.status || {},
-      runtime = status.runtime || {},
-      provider = runtime.lastError || status.lastError || "",
-      pending = jobCount("PENDING");
+      runtime = status.analyzer?.runtime || status.runtime || {},
+      analysis = data.analysisStatus || {};
     const collector = document.getElementById("learningCollector");
-    collector.textContent = !status.observerEnabled
+    collector.textContent = status.collector?.state === "PAUSED"
       ? "Tạm dừng"
-      : provider === "CHART_MARKET_PROVIDER_UNAVAILABLE"
-        ? "Nguồn thị trường tạm lỗi"
-        : status.observationActive
+      : status.collector?.state === "ERROR"
+        ? "Collector gặp lỗi"
+        : status.collector?.active
           ? "Đang thu thập dữ liệu"
           : "Đang quan sát · cập nhật định kỳ";
-    collector.title = provider || "Quan sát thị trường dùng dữ liệu nến đã lưu";
-    document.getElementById("learningCollectorDetail").textContent = provider === "CHART_MARKET_PROVIDER_UNAVAILABLE" ? provider : "Collector độc lập với Codex";
+    collector.title = status.collector?.lastError || "Collector độc lập với Codex";
+    document.getElementById("learningCollectorDetail").textContent = status.collector?.lastError || "Tự thu thập sau BUY đã xác nhận · gồm theo dõi sau SELL";
     const providerLabel =
       runtime.state === "READY"
-        ? runtime.active
-          ? "Đang phân tích biểu đồ"
-          : "Codex sẵn sàng"
+          ? "MANUAL · Codex sẵn sàng"
         : runtime.state === "MISSING_OPENAI_API_KEY"
           ? "Chưa cấu hình OpenAI API"
           : runtime.lastError === "CODEX_HTTP_429"
@@ -258,28 +270,60 @@ export async function mount(ctx) {
     document.getElementById("learningProvider").textContent = providerLabel;
     document.getElementById("learningProvider").title =
       runtime.lastError || runtime.model || runtime.state || "";
-    const lastAnalysis = data.events
-      .filter((event) => event.analysisState === "COMPLETED" && event.analysisAt)
-      .sort((a, b) => b.analysisAt - a.analysisAt)[0];
     document.getElementById("learningProviderDetail").textContent = runtime.lastError
       ? `Lỗi gần nhất: ${runtime.lastError}`
-      : `Phân tích thành công gần nhất (100 event mới nhất): ${lastAnalysis ? time(lastAnalysis.analysisAt) : "chưa có"}`;
-    document.getElementById("learningQueueHealth").textContent = pending
-      ? `${pending.toLocaleString()} việc đang chờ · ${jobCount("RUNNING")} đang chạy`
-      : `${jobCount("RUNNING")} đang chạy · ${jobCount("FAILED")} lỗi`;
-    const oldestAt = Number(data.overview.oldestPendingAt),
-      oldestAge = Number.isFinite(oldestAt) ? Math.max(0, Date.now() - oldestAt) : null,
-      oldestLabel = oldestAge === null ? "" : oldestAge >= 3600000 ? `${Math.floor(oldestAge / 3600000)} giờ` : `${Math.floor(oldestAge / 60000)} phút`;
-    document.getElementById("learningQueueHealth").title = oldestAt
-      ? "Việc chờ lâu nhất từ: " + time(oldestAt)
-      : "Số việc hoàn tất: " + jobCount("COMPLETED");
-    document.getElementById("learningQueueDetail").textContent = `${jobCount("COMPLETED")} hoàn tất · ${jobCount("FAILED")} lỗi${oldestLabel ? ` · chờ lâu nhất ${oldestLabel}` : ""}`;
+      : `Chỉ chạy khi được yêu cầu · phân tích case gần nhất: ${analysis.lastAnalyzedAt ? time(analysis.lastAnalyzedAt) : "chưa có"}`;
+    document.getElementById("learningQueueHealth").textContent = `${analysis.ready ?? 0} sẵn sàng · ${analysis.pending ?? 0} chờ · ${analysis.running ?? 0} chạy`;
+    document.getElementById("learningQueueHealth").title = "Codex không chạy tự động";
+    document.getElementById("learningQueueDetail").textContent = `${analysis.analyzed ?? 0} đã phân tích · ${analysis.failed ?? 0} lỗi · ${analysis.incomplete ?? 0} dữ liệu thiếu`;
     document.getElementById("learningValidation").textContent = data.overview.validatedRules
       ? `${data.overview.validatedRules} rule đã kiểm chứng`
       : "Chưa có rule đạt kiểm chứng";
     document.getElementById("learningValidationDetail").textContent = `${data.overview.rejectedRules ?? 0} bị từ chối · ${data.overview.retiredRules ?? 0} đã nghỉ`;
     document.getElementById("learningStatus").textContent =
       `Shared Learning · ${data.overview.policy} · dữ liệu thị trường dùng chung giữa DEMO/LIVE`;
+    document.getElementById("learningCaseStatus").textContent = `Collector: ${status.collector?.state || "RUNNING"} · Analyzer: MANUAL · Ready ${analysis.ready ?? 0} · Analyzed ${analysis.analyzed ?? 0} · Pending ${analysis.pending ?? 0} · Running ${analysis.running ?? 0} · Failed ${analysis.failed ?? 0}`;
+  }
+  function renderCaseList() {
+    const list = document.getElementById("learningCaseList"), cases = data?.learningCases || [];
+    list.replaceChildren();
+    if (!cases.length) list.append(el("p", "Chưa có vị thế BUY đủ điều kiện cho Learning."));
+    for (const item of cases) {
+      const row = el("div", undefined, "learning-case-row");
+      if (item.collectionStatus === "READY_FOR_ANALYSIS") {
+        const check = el("input");
+        check.type = "checkbox";
+        check.checked = selectedCases.has(item.caseId);
+        check.setAttribute("aria-label", `Chọn case ${shortMint(item.mint)}`);
+        check.addEventListener("change", () => {
+          if (check.checked) selectedCases.add(item.caseId); else selectedCases.delete(item.caseId);
+          document.getElementById("analyzeSelectedCases").disabled = selectedCases.size === 0;
+        });
+        row.append(check);
+      } else row.append(el("span", "·", "muted"));
+      row.append(el("strong", shortMint(item.mint)), el("small", `${item.mode.toUpperCase()} · ${item.positionStatus} · ${item.collectionStatus}`), el("small", `PnL ${metricValue(item.realizedPnlPct, "%")} · post-SELL ${item.followupsCollected}/4`), el("small", `Codex: ${item.analysisStatus || "NOT_ANALYZED"}`));
+      if (item.analysisStatus === "FAILED" && item.analysisJobId)
+        row.append(button("Retry Failed", async () => {
+          try { await ctx.post(`/api/chart-learning/analysis-jobs/${encodeURIComponent(item.analysisJobId)}/retry`, {}); data = await read(""); renderHealth(); renderCaseList(); }
+          catch (error) { ctx.error(error); }
+        }));
+      if (item.analysisStatus === "COMPLETED") {
+        row.append(button("Xem phân tích", async () => {
+          try {
+            const result = await ctx.get(`/api/chart-learning/analysis-jobs/${encodeURIComponent(item.analysisJobId)}`);
+            const panel = document.getElementById("learningCaseAnalysis");
+            let analysis = result.result;
+            try { if (typeof analysis === "string") analysis = JSON.parse(analysis); } catch { /* Keep the stored result visible. */ }
+            panel.hidden = false;
+            panel.replaceChildren(el("h4", `Codex analysis · ${shortMint(item.mint)}`), pretty(analysis));
+          } catch (error) { ctx.error(error); }
+        }));
+      }
+      list.append(row);
+    }
+    document.getElementById("analyzeSelectedCases").disabled = selectedCases.size === 0;
+    document.getElementById("analyzeReadyCases").textContent = `Analyze Ready Cases (${data?.analysisStatus?.ready ?? 0})`;
+    document.getElementById("analyzeReadyCases").disabled = Number(data?.analysisStatus?.ready ?? 0) === 0;
   }
   function renderEventList() {
     const list = document.getElementById("learningEventList"),
@@ -418,18 +462,20 @@ export async function mount(ctx) {
     const body = el("tbody");
     for (const job of rows.filter((item) => filter === "ALL" || item.state === filter)) {
       const tr = el("tr"),
-        ref = [job.referenceKind, job.mint ? shortMint(job.mint) : ""].filter(Boolean).join(" · ") || shortMint(job.id);
-      for (const value of [job.kind, ref, job.state, time(job.at), String(job.attempts)]) tr.append(el("td", value));
+        ref = job.case_id ? shortMint(job.case_id) : [job.referenceKind, job.mint ? shortMint(job.mint) : ""].filter(Boolean).join(" · ") || shortMint(job.id);
+      for (const value of [job.kind || "CASE_ANALYSIS", ref, job.state, time(job.requested_at ?? job.at), String(job.retry_count ?? job.attempts ?? 0)]) tr.append(el("td", value));
+      let result = job.result;
+      try { if (typeof result === "string") result = JSON.parse(result); } catch { /* Keep text fallback. */ }
       const diagnostic = job.error
-        ? `${job.error}${job.state === "PENDING" && job.due ? " · thử lại sau " + time(job.due) : ""}`
-        : job.result?.analysis?.reason || "—";
+        ? job.error
+        : result?.reason || "—";
       tr.append(el("td", diagnostic));
       body.append(tr);
     }
     table.append(body);
     wrap.append(table);
     root.replaceChildren(
-      el("p", `Learning Queue · tối đa ${rows.length} job gần nhất. Lỗi provider và thời gian thử lại lấy từ job đã lưu.`, "learning-list-note"),
+    el("p", `Manual Codex Analysis · tối đa ${rows.length} job gần nhất. Không có job nào tự chạy khi tải trang.`, "learning-list-note"),
       el("label", "Lọc trạng thái "),
     );
     const select = document.createElement("select");
@@ -704,7 +750,7 @@ export async function mount(ctx) {
     "SELL History",
     "Decisions",
     "Timeline",
-    "Jobs",
+    "Analysis Jobs",
     "Replay Validation",
   ])
     {
@@ -718,19 +764,23 @@ export async function mount(ctx) {
   await ctx.poll(async () => {
     data = await read("");
     if (!ctx.active()) return;
-    if (tab === "Jobs") data.jobs = await read("/jobs");
+    if (tab === "Analysis Jobs") data.jobs = await read("/analysis-jobs");
     renderHealth();
+    renderCaseList();
     const o = data.overview,
+      a = data.analysisStatus || {},
       overview = document.getElementById("learningOverview");
     overview.replaceChildren();
     const cards = {
       "Market Events": o.marketEvents,
       RUG_30: o.rug30,
       Candles: o.candleCount,
-      "Charts analyzed": o.eventsAnalyzed ?? "N/A",
+      "Ready cases": a.ready ?? 0,
+      "Analyzed cases": a.analyzed ?? 0,
+      "Analysis pending": a.pending ?? 0,
+      "Analysis running": a.running ?? 0,
+      "Analysis failed": a.failed ?? 0,
       "Validated rules": o.validatedRules,
-      "Jobs pending": jobCount("PENDING"),
-      "Learning errors": jobCount("FAILED"),
     };
     for (const [name, count] of Object.entries(cards)) {
       const card = el("div", undefined, "learning-stat");
@@ -741,8 +791,7 @@ export async function mount(ctx) {
     secondary.replaceChildren();
     for (const [name, count] of Object.entries({
       "Chart windows": o.chartWindows ?? "N/A",
-      "Jobs running": jobCount("RUNNING"),
-      "Jobs completed": jobCount("COMPLETED"),
+      "Incomplete cases": a.incomplete ?? 0,
       "Rejected rules": o.rejectedRules ?? 0,
       "Retired rules": o.retiredRules ?? 0,
       "PASS decisions": o.decisions.PASS,
