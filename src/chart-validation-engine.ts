@@ -168,7 +168,8 @@ export class ChartValidationEngine {
       });
     }catch(error){
       const message=error instanceof Error?error.message:"VALIDATION_JOB_FAILED",attempts=Number(row.attempt_count)+1,transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed|CANCELLED/.test(message),retry=transient&&attempts<3;
-      this.db.prepare("UPDATE chart_validation_jobs SET state=?,next_attempt_at=?,completed_at=?,error=? WHERE id=?").run(retry?"PENDING":"DEAD_LETTER",Date.now()+Math.min(300000,30000*2**(attempts-1)),retry?null:Date.now(),message,id);
+      const retryAt=Math.max(Date.now()+Math.min(300000,30000*2**(attempts-1)),Number(this.runtime.status().nextAvailableAt??0));
+      this.db.prepare("UPDATE chart_validation_jobs SET state=?,next_attempt_at=?,completed_at=?,error=? WHERE id=?").run(retry?"PENDING":"DEAD_LETTER",retryAt,retry?null:Date.now(),message,id);
     }
   }
   approve(_knowledgeId:string,_version:number,_approved:boolean):never{throw Error("KNOWLEDGE_AUTOMATIC_PROMOTION_ONLY");}

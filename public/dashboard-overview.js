@@ -3,6 +3,8 @@ import {
   accountingSol,
   accountingFeeDetails,
   accountingEntryPrice,
+  normalizeM1Candles,
+  createChartSelection,
 } from "./dashboard-core.js";
 export async function mount(ctx) {
   /* Backend-driven overview. No simulated progress, countdown or trade path. */
@@ -49,7 +51,14 @@ export async function mount(ctx) {
       BUY: "BUY Decision",
       POSITION: "Position",
     };
-    let latest, status, sellAction, candidateKey;
+    let latest, status, sellAction;
+    const recentAttempts = new Map();
+    let currentBatchId = null;
+    const chartSelection = createChartSelection();
+    let chartWindow = 60,
+      chartGeometry = null,
+      crosshairX = null,
+      crosshairY = null;
     const selling = new Map();
     function avatar(token, central = false) {
       if (window.BOTTokenAvatar)
@@ -372,101 +381,296 @@ export async function mount(ctx) {
         time.hidden = false;
       }
     }
+    function chartPrice(value) {
+      if (!Number.isFinite(value)) return "N/A";
+      return value.toLocaleString("en-US", { maximumSignificantDigits: 8 });
+    }
+    function drawM1Chart(record) {
+      const canvas = $("m1Chart"),
+        wrap = $("chartCanvasWrap"),
+        overlay = $("chartOverlay"),
+        tooltip = $("chartTooltip"),
+        coverage = $("chartCoverage"),
+        context = canvas.getContext("2d");
+      if (!context) {
+        overlay.hidden = false;
+        overlay.textContent = "Không thể hiển thị chart trong trình duyệt này";
+        return;
+      }
+      const candles = normalizeM1Candles(record?.history?.candles, 60).slice(
+        -chartWindow,
+      );
+      const width = Math.max(320, wrap.clientWidth),
+        height = Math.max(260, wrap.clientHeight),
+        ratio = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      canvas.style.width = width + "px";
+      canvas.style.height = height + "px";
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = window.getComputedStyle(document.documentElement).getPropertyValue("--rk-surface-elevated").trim() || "#fffdf8";
+      context.fillRect(0, 0, width, height);
+      tooltip.hidden = true;
+      if (!candles.length) {
+        overlay.hidden = false;
+        overlay.textContent = "Chưa có dữ liệu nến M1";
+        coverage.textContent = "Chưa có dữ liệu nến M1";
+        chartGeometry = null;
+        return;
+      }
+      overlay.hidden = true;
+      coverage.textContent = candles.length + "/" + chartWindow + " nến M1 · " + candles.length + " phút";
+      if (candles.length < chartWindow)
+        coverage.textContent += " · lịch sử khả dụng chưa đủ";
+      if (record?.history?.fetchedAt) {
+        const fetchedAt = Number(record.history.fetchedAt);
+        const snapshotAge = Date.now() - fetchedAt;
+        coverage.textContent += snapshotAge > 60000 ? " · snapshot cũ" : " · snapshot " + new Date(fetchedAt).toLocaleTimeString("vi-VN");
+      }
+      const left = 12,
+        right = 70,
+        top = 12,
+        bottom = 34,
+        volumeHeight = Math.max(34, height * 0.2),
+        plotRight = width - right,
+        plotBottom = height - bottom - volumeHeight,
+        plotWidth = Math.max(20, plotRight - left),
+        plotHeight = Math.max(30, plotBottom - top),
+        highs = candles.map((c) => c.high),
+        lows = candles.map((c) => c.low),
+        min = Math.min(...lows),
+        max = Math.max(...highs),
+        range = Math.max(max - min, Math.abs(max) * 0.00001, Number.EPSILON),
+        volumes = candles.map((c) => c.volumeUsd ?? 0),
+        maxVolume = Math.max(...volumes, 0),
+        stepX = plotWidth / candles.length,
+        candleWidth = Math.max(2, Math.min(10, stepX * 0.62)),
+        y = (price) => top + ((max - price) / range) * plotHeight;
+      chartGeometry = { candles, left, plotRight, plotBottom, plotWidth, plotHeight, stepX, top, width, height };
+      const grid = window.getComputedStyle(document.documentElement).getPropertyValue("--rk-border-soft").trim() || "#e8ddc8";
+      context.font = "11px system-ui, sans-serif";
+      context.textBaseline = "middle";
+      for (let i = 0; i <= 4; i++) {
+        const gy = top + (plotHeight * i) / 4,
+          price = max - (range * i) / 4;
+        context.strokeStyle = grid;
+        context.beginPath();
+        context.moveTo(left, gy);
+        context.lineTo(plotRight, gy);
+        context.stroke();
+        context.fillStyle = "#655f55";
+        context.textAlign = "left";
+        context.fillText(chartPrice(price), plotRight + 7, gy);
+      }
+      const volumeBase = height - bottom;
+      candles.forEach((candle, index) => {
+        const x = left + stepX * (index + 0.5),
+          up = candle.close >= candle.open,
+          color = up ? "#16a765" : "#d83b3b",
+          bodyTop = Math.min(y(candle.open), y(candle.close)),
+          bodyHeight = Math.max(1, Math.abs(y(candle.open) - y(candle.close)));
+        context.strokeStyle = color;
+        context.fillStyle = color;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(x, y(candle.high));
+        context.lineTo(x, y(candle.low));
+        context.stroke();
+        context.fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight);
+        if (candle.volumeUsd !== null && maxVolume > 0) {
+          const barHeight = (candle.volumeUsd / maxVolume) * (volumeHeight - 7);
+          context.globalAlpha = 0.6;
+          context.fillRect(x - candleWidth / 2, volumeBase - barHeight, candleWidth, barHeight);
+          context.globalAlpha = 1;
+        }
+        if (index === 0 || index === candles.length - 1 || index % Math.ceil(candles.length / 6) === 0) {
+          const date = new Date(candle.at);
+          context.fillStyle = "#655f55";
+          context.textAlign = "center";
+          context.fillText(date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), x, height - 13);
+        }
+      });
+      const current = val(record?.market?.price) ?? candles.at(-1)?.close;
+      if (Number.isFinite(current)) {
+        const cy = y(current);
+        context.strokeStyle = "#159c56";
+        context.setLineDash([3, 3]);
+        context.beginPath();
+        context.moveTo(left, cy);
+        context.lineTo(plotRight, cy);
+        context.stroke();
+        context.setLineDash([]);
+        context.fillStyle = "#159c56";
+        context.fillRect(plotRight + 2, cy - 9, right - 4, 18);
+        context.fillStyle = "white";
+        context.textAlign = "left";
+        context.fillText(chartPrice(current), plotRight + 5, cy);
+      }
+      if (crosshairX !== null && chartGeometry) {
+        const cx = Math.max(left, Math.min(plotRight, crosshairX));
+        context.strokeStyle = "#7b6c58";
+        context.setLineDash([2, 3]);
+        context.beginPath();
+        context.moveTo(cx, top);
+        context.lineTo(cx, volumeBase);
+        const cy = Math.max(top, Math.min(volumeBase, crosshairY ?? top));
+        context.moveTo(left, cy);
+        context.lineTo(plotRight, cy);
+        context.stroke();
+        context.setLineDash([]);
+        const index = Math.max(0, Math.min(candles.length - 1, Math.floor((cx - left) / stepX)));
+        const selected = candles[index];
+        tooltip.textContent = new Date(selected.at).toLocaleString("vi-VN") + "\nO " + chartPrice(selected.open) + "  H " + chartPrice(selected.high) + "\nL " + chartPrice(selected.low) + "  C " + chartPrice(selected.close) + "\nVol " + (selected.volumeUsd === null ? "N/A" : formatCompactUsd(selected.volumeUsd));
+        tooltip.style.left = Math.min(width - 190, Math.max(4, cx + 10)) + "px";
+        tooltip.style.top = "8px";
+        tooltip.hidden = false;
+      }
+    }
+    function renderChartToken(record) {
+      const content = $("terminalToken");
+      content.replaceChildren();
+      if (!record) {
+        content.append(node("h3", "Chưa có token"));
+        drawM1Chart(null);
+        return;
+      }
+      const { attempt: a, token: t, market: m } = record,
+        history = normalizeM1Candles(record.history?.candles, 60),
+        identity = node("div", undefined, "chart-token-identity"),
+        details = node("div");
+      details.append(node("h3", a.symbol || t.symbol || "Token"));
+      const mint = node("button", short(a.mint), "mint-copy");
+      mint.title = a.mint;
+      mint.onclick = () => window.navigator.clipboard?.writeText(a.mint).catch(() => {});
+      details.append(mint);
+      const badges = node("div", undefined, "terminal-badges");
+      badges.append(node("span", t.source || a.source || "N/A"), node("span", "Solana · SOL"));
+      details.append(badges);
+      identity.append(avatar({ ...t, mint: a.mint, symbol: a.symbol }, true), details);
+      const metrics = node("div", undefined, "chart-token-metrics"),
+        extra = record.metrics || {},
+        previous = val(m.windows?.["1m"]?.startPrice),
+        priceMetric = metric("Price", usd(val(m.price)));
+      if (previous > 0 && val(m.price) !== null) {
+        const change = (val(m.price) / previous - 1) * 100;
+        priceMetric.append(node("small", (change >= 0 ? "+" : "") + change.toFixed(1) + "% · 1m", change >= 0 ? "positive" : "negative"));
+      }
+      metrics.append(
+        priceMetric,
+        metric("Market Cap", formatCompactUsd(val(m.marketCap))),
+        metric("Liquidity", formatCompactUsd(val(m.liquidity))),
+        metric("Holders", number(extra.holders)),
+        metric("Txns", number(val(m.buys) !== null && val(m.sells) !== null ? val(m.buys) + val(m.sells) : extra.transactions)),
+      );
+      content.append(identity, metrics);
+      $("chartCoverage").title = record.history?.freshness === "STALE" ? "Dữ liệu nến cũ từ snapshot của bot" : "Nến M1 hiện có trong snapshot của bot";
+      if (record.history?.fetchedAt)
+        $("chartCoverage").title += " · cập nhật " + new Date(record.history.fetchedAt).toLocaleString("vi-VN");
+      if (record.history?.candles?.length && !history.length)
+        $("chartCoverage").textContent = "Dữ liệu M1 không hợp lệ";
+      drawM1Chart(record);
+    }
+    function renderBatchTokens(batchId, activeMint) {
+      const root = $("scannerRecentList"),
+        empty = $("scannerRecentEmpty"),
+        rows = [...recentAttempts.values()]
+          .filter((record) => record.batchId === batchId)
+          .sort((left, right) => (left.appearanceId ?? 0) - (right.appearanceId ?? 0));
+      root.replaceChildren();
+      empty.hidden = rows.length > 0;
+      for (const record of rows) {
+        const a = record.attempt,
+          token = record.token,
+          m = record.market,
+          button = node("button", undefined, "scanner-recent-row");
+        button.type = "button";
+        button.setAttribute("role", "option");
+        button.setAttribute("aria-selected", String(record.mint === chartSelection.selectedMint));
+        button.classList.toggle("is-active", record.mint === activeMint);
+        button.classList.toggle("is-selected", record.mint === chartSelection.selectedMint);
+        button.append(avatar({ ...token, mint: a.mint, symbol: a.symbol }));
+        const identity = node("span", undefined, "scanner-recent-identity");
+        identity.append(node("strong", a.symbol || token.symbol || short(a.mint)), node("small", short(a.mint)));
+        button.append(identity);
+        const values = node("span", undefined, "scanner-recent-values");
+        values.append(node("strong", usd(val(m.price))), node("small", a.result === "RUNNING" ? a.stage || "Đang quét" : a.result === "QUEUED" ? "Trong batch · chờ quét" : a.result || "Đã quét"));
+        const movement = val(m.windows?.["1m"]?.startPrice), price = val(m.price);
+        if (movement > 0 && price !== null) {
+          const change = (price / movement - 1) * 100;
+          values.lastChild.className = change >= 0 ? "positive" : "negative";
+          values.lastChild.textContent = (change >= 0 ? "+" : "") + change.toFixed(1) + "% · 1m";
+        }
+        button.append(values);
+        button.onclick = () => {
+          chartSelection.select(record.mint);
+          $("scannerAutoFollow").setAttribute("aria-pressed", "false");
+          $("scannerAutoFollow").textContent = "Thủ công";
+          renderBatchTokens(batchId, activeMint);
+          renderChartToken(record);
+        };
+        root.append(button);
+      }
+    }
     function renderCandidate(o) {
       renderBatch(o.batch);
       const a = o.attempt,
         t = a?.summaries?.token || o.token || {},
         m = a?.summaries?.market || {},
         h = a?.summaries?.history;
-      $("terminalScanCaption").dataset.state =
-        a?.result === "RUNNING" ? "running" : a ? "idle" : "waiting";
+      const batchId = o.batch?.id || a?.batchId || o.queue?.[0]?.batchId || null;
+      if (batchId && batchId !== currentBatchId) {
+        recentAttempts.clear();
+        currentBatchId = batchId;
+      }
+      $("terminalScanCaption").dataset.state = a?.result === "RUNNING" ? "running" : a ? "idle" : "waiting";
       $("terminalScanCaption").textContent = a
-        ? a.result === "RUNNING"
-          ? "Đang kiểm tra " + (a.symbol || short(a.mint)) + "…"
-          : a.result + " · Chờ token tiếp theo từ backend"
+        ? a.result === "RUNNING" ? "Đang kiểm tra " + (a.symbol || short(a.mint)) + " · " + (a.stage || "Đang quét") : a.result + " · Chờ token tiếp theo từ backend"
         : "Đang chờ GMGN Trending…";
       renderStrategyCards(a);
-      const nextKey = JSON.stringify([
-        a?.mint,
-        a?.symbol,
-        t,
-        m,
-        a?.summaries?.metrics,
-        h?.tokenAge == null ? null : Math.floor(h.tokenAge / 60000),
-      ]);
-      if (nextKey === candidateKey) return;
-      candidateKey = nextKey;
-      const content = $("terminalToken");
-      content.replaceChildren();
-      const identity = node("div", undefined, "terminal-identity"),
-        details = node("div");
-      details.append(node("h3", a?.symbol || "Chưa có token"));
-      const mint = node("button", short(a?.mint), "mint-copy");
-      mint.title = a?.mint || "";
-      mint.disabled = !a;
-      mint.onclick = () =>
-        window.navigator.clipboard?.writeText(a.mint).catch(() => {});
-      details.append(mint);
+      for (const queued of o.queue || []) {
+        if (!queued?.mint || (batchId && queued.batchId && queued.batchId !== batchId)) continue;
+        if (!recentAttempts.has(queued.mint)) {
+          recentAttempts.set(queued.mint, {
+            mint: queued.mint,
+            batchId: queued.batchId || batchId,
+            appearanceId: queued.appearanceId,
+            attempt: { ...queued, result: "QUEUED" },
+            token: queued.token || queued,
+            market: {},
+            metrics: {},
+            history: null,
+          });
+        }
+      }
       if (a?.mint) {
-        const link = node("a", "↗", "token-external-link");
-        link.href = "https://gmgn.ai/sol/token/" + encodeURIComponent(a.mint);
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.setAttribute("aria-label", "Mở token trên GMGN");
-        details.append(link);
+        const existing = recentAttempts.get(a.mint);
+        recentAttempts.delete(a.mint);
+        recentAttempts.set(a.mint, {
+          mint: a.mint,
+          batchId: a.batchId || batchId,
+          appearanceId: a.appearanceId || existing?.appearanceId,
+          attempt: { ...existing?.attempt, ...a },
+          token: { ...existing?.token, ...t },
+          market: m,
+          metrics: a.summaries?.metrics || {},
+          history: h || null,
+        });
       }
-      const badges = node("div", undefined, "terminal-badges");
-      badges.append(
-        node("span", t.source || a?.source || "N/A"),
-        node("span", "SOL"),
-        node(
-          "span",
-          "Age: " +
-            duration(
-              h?.tokenAge ?? (t.createdAt ? Date.now() - t.createdAt : null),
-            ),
-        ),
-      );
-      details.append(badges);
-      identity.append(
-        avatar({ ...o.token, ...t, mint: a?.mint, symbol: a?.symbol }, true),
-        details,
-      );
-      content.append(identity);
-      const metrics = node("div", undefined, "terminal-metrics");
-      const extra = a?.summaries?.metrics || {};
-      const priceMetric = metric("Price", usd(val(m.price))),
-        previousPrice = val(m.windows?.["1m"]?.startPrice);
-      if (previousPrice > 0 && val(m.price) !== null) {
-        const change = (val(m.price) / previousPrice - 1) * 100;
-        priceMetric.append(
-          node(
-            "small",
-            (change >= 0 ? "+" : "") + change.toFixed(1) + "% · 1m",
-            change >= 0 ? "positive" : "negative",
-          ),
-        );
+      while (recentAttempts.size > 250)
+        recentAttempts.delete(recentAttempts.keys().next().value);
+      const activeMint = a?.mint || null;
+      chartSelection.observe(activeMint);
+      const selectedMint = chartSelection.selectedMint;
+      const record = selectedMint ? recentAttempts.get(selectedMint) : null;
+      renderBatchTokens(batchId, activeMint);
+      const chartKey = record ? JSON.stringify([record.mint, record.market, record.history?.fetchedAt, record.history?.candles?.length, record.history?.candles?.at(-1)?.at, record.history?.candles?.at(-1)?.close, chartWindow]) : "empty:" + chartWindow;
+      if ($("terminalToken").dataset.chartKey !== chartKey) {
+        $("terminalToken").dataset.chartKey = chartKey;
+        renderChartToken(record);
+      } else if (record) {
+        drawM1Chart(record);
       }
-      metrics.append(
-        priceMetric,
-        metric("Market Cap", formatCompactUsd(val(m.marketCap))),
-        metric("Liquidity", formatCompactUsd(val(m.liquidity))),
-        metric("Volume 24h", formatCompactUsd(val(m.volume))),
-        metric("Holders", number(extra.holders)),
-        metric(
-          "Txns",
-          number(
-            val(m.buys) !== null && val(m.sells) !== null
-              ? val(m.buys) + val(m.sells)
-              : extra.transactions,
-          ),
-        ),
-        metric(
-          "Created",
-          t.createdAt ? new Date(t.createdAt).toLocaleString("vi-VN") : "N/A",
-        ),
-      );
-      content.append(metrics);
     }
     function renderPositions(o) {
       const positions = o.positions || [];
@@ -616,8 +820,30 @@ export async function mount(ctx) {
       renderCandidate(o);
       renderPositions(o);
     }
+    function redrawChart() {
+      drawM1Chart(chartSelection.selectedMint ? recentAttempts.get(chartSelection.selectedMint) : null);
+    }
+    function toggleAutoFollow() {
+      const following = chartSelection.toggle();
+      if (latest) renderCandidate(latest);
+      return following;
+    }
+    function setChartWindow(size) {
+      if (![15, 30, 60].includes(size)) return;
+      chartWindow = size;
+      if (latest) renderCandidate(latest);
+    }
+    function setCrosshair(x, y) {
+      crosshairX = x;
+      crosshairY = y;
+      redrawChart();
+    }
     return {
       update,
+      redrawChart,
+      toggleAutoFollow,
+      setChartWindow,
+      setCrosshair,
       formatters: { formatCompactUsd, formatSmallUsd },
       setSellAction: (f) => {
         sellAction = f;
@@ -644,7 +870,41 @@ export async function mount(ctx) {
     if (ctx.active()) await ctx.refresh();
   });
   ctx.onDispose(() => {
+    document.getElementById("m1Chart").onpointermove = null;
+    document.getElementById("m1Chart").onpointerleave = null;
     window.BOTOverview = undefined;
+  });
+  const followButton = document.getElementById("scannerAutoFollow");
+  followButton.onclick = () => {
+    const enabled = window.BOTOverview.toggleAutoFollow();
+    followButton.setAttribute("aria-pressed", String(enabled));
+    followButton.textContent = enabled ? "Auto" : "Thủ công";
+  };
+  for (const button of document.querySelectorAll("[data-chart-window]")) {
+    button.onclick = () => {
+      window.BOTOverview.setChartWindow(Number(button.dataset.chartWindow));
+      for (const option of document.querySelectorAll("[data-chart-window]"))
+        option.setAttribute("aria-pressed", String(option === button));
+      window.BOTOverview.redrawChart();
+    };
+  }
+  const chart = document.getElementById("m1Chart");
+  chart.onpointermove = (event) => {
+    const bounds = chart.getBoundingClientRect();
+    window.BOTOverview.setCrosshair(event.clientX - bounds.left, event.clientY - bounds.top);
+  };
+  chart.onpointerleave = () => {
+    window.BOTOverview.setCrosshair(null, null);
+  };
+  const resizeHandler = () => window.BOTOverview?.redrawChart();
+  window.addEventListener("resize", resizeHandler);
+  const resizeObserver = window.ResizeObserver
+    ? new window.ResizeObserver(resizeHandler)
+    : null;
+  resizeObserver?.observe(document.getElementById("chartCanvasWrap"));
+  ctx.onDispose(() => {
+    resizeObserver?.disconnect();
+    window.removeEventListener("resize", resizeHandler);
   });
   await ctx.poll(refresh, 1000);
 }

@@ -836,25 +836,31 @@ test("three walk-forward strategies use closed prefixes and explicit fees/slippa
     s.close();
   }
 });
-test("Codex token budget survives runtime reconstruction without making a request", async () => {
+test("Codex requests proceed when persisted usage exceeds former local quotas", async () => {
   let calls = 0;
   const used = {
     day: Math.floor(Date.now() / 86400000),
     dayTokens: 250000,
     hour: Math.floor(Date.now() / 3600000),
-    hourCalls: 1,
+    hourCalls: 30,
   };
   const r = new CodexRuntime(
     "fixture",
     "fixture",
     async () => {
       calls++;
-      throw Error("unexpected");
+      return new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: JSON.stringify({ action: "HOLD", reason: "fixture", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "fixture", hypothesis: null }) }] }], usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 } }), { status: 200 });
     },
     { read: () => used, write: () => {} },
   );
-  await assert.rejects(r.analyze({}), /RESOURCE_BUDGET/);
-  assert.equal(calls, 0);
+  await r.analyze({});
+  assert.equal(calls, 1);
+  assert.equal(r.status().usage.hourCalls, 31);
+  assert.equal(r.status().usage.totalCalls, 1);
+  assert.equal(r.status().usage.inputTokens, 12);
+  assert.equal(r.status().usage.outputTokens, 8);
+  assert.equal(r.status().usage.totalTokens, 20);
+  assert.equal(r.status().estimatedCost.configured, false);
 });
 
 test("market event recovery outcomes use only completed observed candles and are deduplicated", async () => {
@@ -981,16 +987,16 @@ test("collector pump never invokes Codex; post-BUY-only evidence cannot create a
     s.close();
   }
 });
-test("manual analysis quota errors are persisted and never retry automatically", async () => {
+test("manual analysis invalid responses are persisted and never retry automatically", async () => {
   const s = new Store(":memory:"), r = runtime(), c = new ChartLearning(s, provider().gmgn, r);
   let calls = 0;
-  r.analyze = async () => { calls++; throw Error("CODEX_RESOURCE_BUDGET_EXHAUSTED"); };
+  r.analyze = async () => { calls++; throw Error("CODEX_INVALID_RESPONSE"); };
   try {
     const caseId = readyCase(c), accepted = c.analyzer.request([caseId]);
     for (let i = 0; i < 100 && c.analyzer.job(accepted.jobs[0]!.id)?.state !== "FAILED"; i++)
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(calls, 1);
-    assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.error, "CODEX_RESOURCE_BUDGET_EXHAUSTED");
+    assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.error, "CODEX_INVALID_RESPONSE");
     assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.state, "FAILED");
   } finally { await c.stop(); s.close(); }
 });

@@ -66,12 +66,14 @@ export class ChartAnalyzer {
       const result=this.charts.db.prepare("SELECT state,error FROM chart_analysis_jobs WHERE id=?").get(analysisJobId) as any;
       if(result?.state==='COMPLETED')this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='COMPLETED',completed_at=?,last_error=NULL WHERE id=?").run(Date.now(),id);
       else {
-        const message=String(result?.error??"AUTO_ANALYSIS_FAILED"), transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed|RESOURCE_BUDGET/.test(message), retry=transient&&attempt<3;
-        this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',Date.now()+Math.min(300000,30000*2**(attempt-1)),retry?null:Date.now(),message,id);
+        const message=String(result?.error??"AUTO_ANALYSIS_FAILED"), transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed/.test(message), retry=transient&&attempt<3;
+        const retryAt=Math.max(Date.now()+Math.min(300000,30000*2**(attempt-1)),Number(this.runtime.status().nextAvailableAt??0));
+        this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',retryAt,retry?null:Date.now(),message,id);
       }
     } catch(error) {
-      const message=error instanceof Error?error.message:"AUTO_ANALYSIS_FAILED", transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed|RESOURCE_BUDGET/.test(message),retry=transient&&attempt<3;
-      this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',Date.now()+Math.min(300000,30000*2**(attempt-1)),retry?null:Date.now(),message,id);
+      const message=error instanceof Error?error.message:"AUTO_ANALYSIS_FAILED", transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed/.test(message),retry=transient&&attempt<3;
+      const retryAt=Math.max(Date.now()+Math.min(300000,30000*2**(attempt-1)),Number(this.runtime.status().nextAvailableAt??0));
+      this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',retryAt,retry?null:Date.now(),message,id);
     }
   }
 

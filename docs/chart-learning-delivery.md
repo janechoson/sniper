@@ -49,10 +49,11 @@ Set `OPENAI_API_KEY` and `CODEX_MODEL` in the backend environment. The verified
 runtime uses `gpt-6-luna`; this is a configured Responses API integration, not a
 reuse of ChatGPT CLI login tokens. It uses strict JSON schema, Zod validation,
 no tools, timeouts, one concurrent request, backoff, provider Retry-After, and
-persistent jobs. Defaults are 30 requests/hour and 250,000 reported tokens/day,
-persisted per mode/account, with a 60,000-character input limit. Actual token
-usage is accounted after each response, so a final request can exceed the soft
-token ceiling. Background reviews do not block the trading loop.
+persistent jobs. There is no local hourly request or daily token quota. Request,
+input/output/total token usage is retained for observability; estimated cost is
+shown when both per-million-token prices are configured. Inputs remain bounded
+to 60,000 characters to control request size. Background reviews do not block
+the trading loop.
 
 Official protocol reference:
 [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).

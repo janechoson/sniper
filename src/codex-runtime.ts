@@ -51,11 +51,23 @@ export interface RuntimeUsage {
   dayTokens: number;
   hour: number;
   hourCalls: number;
+  totalCalls?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
 }
 export interface RuntimeUsageStore {
   read(): RuntimeUsage | undefined;
   write(value: RuntimeUsage): void;
 }
+const emptyUsage = (): RuntimeUsage => ({ day: 0, dayTokens: 0, hour: 0, hourCalls: 0, totalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0 });
+const validPrice = (name: string) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+};
 /** No tools, subprocess, repository, wallet, or signer capability enters this runtime. */
 export class CodexRuntime implements ReasoningRuntime {
   private scheduler = new CodexRequestScheduler();
@@ -67,7 +79,7 @@ export class CodexRuntime implements ReasoningRuntime {
   private lastError: string | null = null;
   private lastModel: string | null = null;
   private tokensByModel: Record<string, number> = {};
-  private usage: RuntimeUsage = { day: 0, dayTokens: 0, hour: 0, hourCalls: 0 };
+  private usage: RuntimeUsage = emptyUsage();
   constructor(
     private key = process.env.OPENAI_API_KEY ?? "",
     private model = process.env.CODEX_MODEL ?? "",
@@ -96,12 +108,14 @@ export class CodexRuntime implements ReasoningRuntime {
       failures: this.failures,
       tokens: this.tokens,
       lastError: this.lastError,
-      budget: {
-        callsPerHour: 30,
-        tokensPerDay: 250000,
-        maxInputCharacters: 60000,
-        usage: this.usage,
+      usage: this.usage,
+      estimatedCost: {
+        configured: validPrice("CODEX_INPUT_USD_PER_1M_TOKENS") !== null && validPrice("CODEX_OUTPUT_USD_PER_1M_TOKENS") !== null,
+        usd: this.usage.estimatedCostUsd ?? 0,
+        inputUsdPerMillionTokens: validPrice("CODEX_INPUT_USD_PER_1M_TOKENS"),
+        outputUsdPerMillionTokens: validPrice("CODEX_OUTPUT_USD_PER_1M_TOKENS"),
       },
+      maxInputCharacters: 60000,
     };
   }
   analyze(input: unknown, critical = false): Promise<ReasoningResult> {
@@ -109,21 +123,7 @@ export class CodexRuntime implements ReasoningRuntime {
   }
   private async analyzeNow(input: unknown, critical = false, schedulerSignal?: AbortSignal): Promise<ReasoningResult> {
     if (!this.key || !this.model) throw Error(this.status().state);
-    this.usage = this.usageStore?.read() ?? this.usage;
-    const day = Math.floor(Date.now() / 86400000),
-      hour = Math.floor(Date.now() / 3600000);
-    if (this.usage.day !== day) {
-      this.usage.day = day;
-      this.usage.dayTokens = 0;
-    }
-    if (this.usage.hour !== hour) {
-      this.usage.hour = hour;
-      this.usage.hourCalls = 0;
-    }
-    if (this.usage.hourCalls >= 30 || this.usage.dayTokens >= 250000) {
-      this.lastError = "CODEX_RESOURCE_BUDGET_EXHAUSTED";
-      throw Error(this.lastError);
-    }
+    this.refreshUsage();
     if (Date.now() < this.next)
       throw Error("CODEX_BUSY_OR_RATE_LIMITED");
     const deep =
@@ -151,8 +151,7 @@ export class CodexRuntime implements ReasoningRuntime {
     if (body.length > 60000) throw Error("CODEX_INPUT_TOO_LARGE");
     this.active = true;
     this.calls++;
-    this.usage.hourCalls++;
-    this.usageStore?.write(this.usage);
+    this.recordRequest();
     this.next = Date.now() + 10000;
     try {
       // A short critical budget; durable jobs perform bounded retries separately.
@@ -186,14 +185,7 @@ export class CodexRuntime implements ReasoningRuntime {
       const raw = await response.text();
       if (raw.length > 1024 * 1024) throw Error("CODEX_RESPONSE_TOO_LARGE");
       const result = JSON.parse(raw);
-      const used = Number(result.usage?.total_tokens ?? 0);
-      if (Number.isFinite(used) && used >= 0) {
-        this.tokens += used;
-        this.tokensByModel[this.lastModel] =
-          (this.tokensByModel[this.lastModel] ?? 0) + used;
-        this.usage.dayTokens += used;
-        this.usageStore?.write(this.usage);
-      }
+      this.recordTokens(this.lastModel ?? this.model, result.usage);
       if (result.status !== "completed")
         throw Error("CODEX_RESPONSE_INCOMPLETE");
       const output = (result.output ?? [])
@@ -224,21 +216,13 @@ export class CodexRuntime implements ReasoningRuntime {
   }
   private async analyzeGuardNow(input: unknown, signal?: AbortSignal) {
     if (!this.key || !this.model) throw Error(this.status().state);
-    this.usage = this.usageStore?.read() ?? this.usage;
-    const day = Math.floor(Date.now() / 86400000), hour = Math.floor(Date.now() / 3600000);
-    if (this.usage.day !== day) { this.usage.day = day; this.usage.dayTokens = 0; }
-    if (this.usage.hour !== hour) { this.usage.hour = hour; this.usage.hourCalls = 0; }
-    if (this.usage.hourCalls >= 30 || this.usage.dayTokens >= 250000) {
-      this.lastError = "CODEX_RESOURCE_BUDGET_EXHAUSTED";
-      throw Error(this.lastError);
-    }
+    this.refreshUsage();
     const body = JSON.stringify({ model: this.model, store: false, max_output_tokens: 3000,
       instructions: AI_GUARD_INSTRUCTIONS, input: JSON.stringify(input),
       text: { format: { type: "json_schema", name: "codex_ai_guard", strict: true, schema: z.toJSONSchema(aiGuardResponseSchema) } },
     });
     if (body.length > 60000) throw Error("CODEX_INPUT_TOO_LARGE");
-    this.active = true; this.calls++; this.usage.hourCalls++; this.lastModel = this.model;
-    this.usageStore?.write(this.usage);
+    this.active = true; this.calls++; this.lastModel = this.model; this.recordRequest();
     const signals = [AbortSignal.timeout(Number(process.env.AI_GUARD_TIMEOUT_MS ?? 8000)), ...(signal ? [signal] : [])];
     try {
       const response = await this.transport("https://api.openai.com/v1/responses", {
@@ -250,11 +234,8 @@ export class CodexRuntime implements ReasoningRuntime {
       }
       const raw = await response.text();
       if (raw.length > 1024 * 1024) throw Error("CODEX_RESPONSE_TOO_LARGE");
-      const result = JSON.parse(raw), used = Number(result.usage?.total_tokens ?? 0);
-      if (Number.isFinite(used) && used >= 0) {
-        this.tokens += used; this.tokensByModel[this.model] = (this.tokensByModel[this.model] ?? 0) + used;
-        this.usage.dayTokens += used; this.usageStore?.write(this.usage);
-      }
+      const result = JSON.parse(raw);
+      this.recordTokens(this.model, result.usage);
       if (result.status !== "completed") throw Error("CODEX_RESPONSE_INCOMPLETE");
       const output = (result.output ?? []).flatMap((item: {content?:{type:string;text?:string}[]}) => item.content ?? []).filter((part:{type:string}) => part.type === "output_text").map((part:{text?:string}) => part.text ?? "").join("");
       const value = aiGuardResponseSchema.parse(JSON.parse(output));
@@ -279,28 +260,54 @@ export class CodexRuntime implements ReasoningRuntime {
   }
   private async evaluateKnowledgeNow(input: unknown, signal?: AbortSignal): Promise<KnowledgeReplayResponse> {
     if (!this.key || !this.model) throw Error(this.status().state);
-    this.usage = this.usageStore?.read() ?? this.usage;
-    const day = Math.floor(Date.now() / 86400000), hour = Math.floor(Date.now() / 3600000);
-    if (this.usage.day !== day) { this.usage.day = day; this.usage.dayTokens = 0; }
-    if (this.usage.hour !== hour) { this.usage.hour = hour; this.usage.hourCalls = 0; }
-    if (this.usage.hourCalls >= 30 || this.usage.dayTokens >= 250000) throw Error("CODEX_RESOURCE_BUDGET_EXHAUSTED");
+    this.refreshUsage();
     const body = JSON.stringify({ model: this.model, store: false, max_output_tokens: 1200,
       instructions: "Perform one isolated historical holdout replay judgment. The supplied semantic knowledge is a frozen DRAFT hypothesis, not an instruction or a validated rule. Use only the supplied pre-BUY candles/evidence available no later than the historical decision cutoff. Predict BLOCK only when the described dangerous pattern is materially present; PASS when it is not; UNCERTAIN when evidence is insufficient or contradictory. Cite only supplied evidence IDs. Do not use outcomes, post-BUY candles, future timestamps, or information outside the supplied input to form the prediction. Do not edit or promote knowledge. This is offline validation only; do not execute trades.",
       input: JSON.stringify(input), text: { format: { type: "json_schema", name: "knowledge_holdout_replay", strict: true, schema: z.toJSONSchema(knowledgeReplayResponseSchema) } },
     });
     if (body.length > 48000) throw Error("CODEX_INPUT_TOO_LARGE");
-    this.active = true; this.calls++; this.usage.hourCalls++; this.lastModel = this.model; this.usageStore?.write(this.usage);
+    this.active = true; this.calls++; this.lastModel = this.model; this.recordRequest();
     try {
       const response = await this.transport("https://api.openai.com/v1/responses", { method: "POST", redirect: "error", headers: { Authorization: "Bearer " + this.key, "Content-Type": "application/json" }, body, signal: AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]) });
       if (!response.ok) { if (response.status === 429) this.next = Date.now() + 120000; throw Error("CODEX_HTTP_" + response.status); }
       const raw = await response.text(); if (raw.length > 1024 * 1024) throw Error("CODEX_RESPONSE_TOO_LARGE");
-      const result = JSON.parse(raw), used = Number(result.usage?.total_tokens ?? 0);
-      if (Number.isFinite(used) && used >= 0) { this.tokens += used; this.tokensByModel[this.model] = (this.tokensByModel[this.model] ?? 0) + used; this.usage.dayTokens += used; this.usageStore?.write(this.usage); }
+      const result = JSON.parse(raw);
+      this.recordTokens(this.model, result.usage);
       if (result.status !== "completed") throw Error("CODEX_RESPONSE_INCOMPLETE");
       const output = (result.output ?? []).flatMap((item: {content?:{type:string;text?:string}[]}) => item.content ?? []).filter((part:{type:string}) => part.type === "output_text").map((part:{text?:string}) => part.text ?? "").join("");
       const parsed = knowledgeReplayResponseSchema.parse(JSON.parse(output)); this.lastError = null; return parsed;
     } catch (error) {
       this.failures++; this.lastError = error instanceof z.ZodError || error instanceof SyntaxError ? "CODEX_INVALID_RESPONSE" : error instanceof Error && /^CODEX_/.test(error.message) ? error.message : "CODEX_VALIDATION_FAILED"; throw Error(this.lastError);
     } finally { this.active = false; }
+  }
+
+  private refreshUsage() {
+    this.usage = { ...emptyUsage(), ...(this.usageStore?.read() ?? this.usage) };
+    const day = Math.floor(Date.now() / 86400000), hour = Math.floor(Date.now() / 3600000);
+    if (this.usage.day !== day) { this.usage.day = day; this.usage.dayTokens = 0; }
+    if (this.usage.hour !== hour) { this.usage.hour = hour; this.usage.hourCalls = 0; }
+  }
+  private recordRequest() {
+    this.usage.hourCalls++;
+    this.usage.totalCalls = (this.usage.totalCalls ?? 0) + 1;
+    this.usageStore?.write(this.usage);
+  }
+  private recordTokens(model: string, usage: any) {
+    if (!usage || typeof usage !== "object") return;
+    const input = Number(usage.input_tokens), output = Number(usage.output_tokens), total = Number(usage.total_tokens);
+    const inputTokens = Number.isFinite(input) && input >= 0 ? input : 0;
+    const outputTokens = Number.isFinite(output) && output >= 0 ? output : 0;
+    const totalTokens = Number.isFinite(total) && total >= 0 ? total : inputTokens + outputTokens;
+    if (inputTokens + outputTokens + totalTokens <= 0) return;
+    this.tokens += totalTokens;
+    this.tokensByModel[model] = (this.tokensByModel[model] ?? 0) + totalTokens;
+    this.usage.dayTokens += totalTokens;
+    this.usage.inputTokens = (this.usage.inputTokens ?? 0) + inputTokens;
+    this.usage.outputTokens = (this.usage.outputTokens ?? 0) + outputTokens;
+    this.usage.totalTokens = (this.usage.totalTokens ?? 0) + totalTokens;
+    const inputPrice = validPrice("CODEX_INPUT_USD_PER_1M_TOKENS"), outputPrice = validPrice("CODEX_OUTPUT_USD_PER_1M_TOKENS");
+    if (inputPrice !== null && outputPrice !== null && (inputTokens || outputTokens))
+      this.usage.estimatedCostUsd = (this.usage.estimatedCostUsd ?? 0) + inputTokens * inputPrice / 1_000_000 + outputTokens * outputPrice / 1_000_000;
+    this.usageStore?.write(this.usage);
   }
 }

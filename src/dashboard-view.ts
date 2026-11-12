@@ -46,6 +46,7 @@ export const DASHBOARD_ROUTES = [
   "/chart-learning",
 ] as const;
 export const DASHBOARD_ASSETS = [
+  "/rug-killer-neon.png",
   "/dashboard-router.js",
   "/dashboard-mode.js",
   "/dashboard-core.js",

@@ -4,15 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Rug Killer · Bảng điều khiển</title>
+    <link rel="icon" type="image/png" href="/rug-killer-neon.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <aside>
       <div class="brand">
-        <span class="brandmark"
-          ><span class="brand-word bot-icon">Rug</span
-          ><span class="brand-word">Killer</span></span
-        ><span id="overviewMode" class="terminal-live">Đang kết nối</span>
+        <img class="brandmark brand-logo" src="/rug-killer-neon.png" alt="Rug Killer · Kronos Bot" />
+        <span id="overviewMode" class="terminal-live">Đang kết nối</span>
       </div>
       <div class="micro">BẢNG GIAO DỊCH SOLANA RIÊNG</div>
       <nav>
@@ -166,9 +165,29 @@
               >
               <span id="batchDuration" hidden></span>
             </section>
-            <section class="terminal-panel current-token">
-              <h2>Token hiện tại</h2>
-              <div id="terminalToken"></div>
+            <section class="terminal-panel scanner-recent" aria-label="Token Trending trong batch">
+              <div class="terminal-panel-head scanner-recent-head">
+                <h2>Token Trending trong batch</h2>
+                <button id="scannerAutoFollow" type="button" aria-pressed="true">Auto</button>
+              </div>
+              <div id="scannerRecentList" role="listbox" aria-label="Chọn token trong batch để xem chart"></div>
+              <p id="scannerRecentEmpty" class="chart-empty-note" hidden>Chưa có token trong batch</p>
+            </section>
+            <section class="terminal-panel current-token terminal-chart-panel" aria-label="Chart M1 token hiện tại">
+              <div class="chart-token-heading" id="terminalToken"></div>
+              <div class="chart-toolbar">
+                <div class="chart-timeframes" role="group" aria-label="Khoảng hiển thị M1">
+                  <button type="button" data-chart-window="15">15 nến</button>
+                  <button type="button" data-chart-window="30">30 nến</button>
+                  <button type="button" data-chart-window="60" aria-pressed="true">60 nến M1</button>
+                </div>
+                <span id="chartCoverage" role="status">Chưa có dữ liệu nến M1</span>
+              </div>
+              <div class="chart-canvas-wrap" id="chartCanvasWrap">
+                <canvas id="m1Chart" aria-label="Biểu đồ nến M1 với khối lượng"></canvas>
+                <div id="chartTooltip" class="chart-tooltip" hidden></div>
+                <div id="chartOverlay" class="chart-overlay" role="status">Chưa có dữ liệu nến M1</div>
+              </div>
             </section>
             <section
               class="terminal-panel kronos-evaluation strategy-card"

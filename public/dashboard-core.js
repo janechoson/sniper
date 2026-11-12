@@ -104,6 +104,63 @@ function accountingEntryPrice(p) {
       : "—";
 }
 
+function normalizeM1Candles(input, limit = 60) {
+  if (!Array.isArray(input) || !Number.isSafeInteger(limit) || limit < 1)
+    return [];
+  const byTimestamp = new Map();
+  for (const item of input) {
+    if ([item?.at, item?.open, item?.high, item?.low, item?.close].some((v) => v == null || v === ""))
+      continue;
+    const at = Number(item.at);
+    const open = Number(item.open);
+    const high = Number(item.high);
+    const low = Number(item.low);
+    const close = Number(item.close);
+    const volumeUsd = item.volumeUsd == null ? null : Number(item.volumeUsd);
+    if (
+      !Number.isFinite(at) ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(close) ||
+      (volumeUsd !== null && (!Number.isFinite(volumeUsd) || volumeUsd < 0))
+    )
+      continue;
+    byTimestamp.set(at, { at, open, high, low, close, volumeUsd });
+  }
+  return [...byTimestamp.values()].sort((a, b) => a.at - b.at).slice(-limit);
+}
+
+function createChartSelection() {
+  let following = true;
+  let activeMint = null;
+  let selectedMint = null;
+  return {
+    observe(mint) {
+      activeMint = mint || null;
+      if (following && activeMint) selectedMint = activeMint;
+      return selectedMint;
+    },
+    select(mint) {
+      if (!mint) return selectedMint;
+      following = false;
+      selectedMint = mint;
+      return selectedMint;
+    },
+    toggle() {
+      following = !following;
+      if (following && activeMint) selectedMint = activeMint;
+      return following;
+    },
+    get following() {
+      return following;
+    },
+    get selectedMint() {
+      return selectedMint;
+    },
+  };
+}
+
 export {
   el,
   sol,
@@ -117,4 +174,6 @@ export {
   accountingFeeText,
   accountingFeeDetails,
   accountingEntryPrice,
+  normalizeM1Candles,
+  createChartSelection,
 };

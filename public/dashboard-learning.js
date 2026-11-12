@@ -262,9 +262,11 @@ export async function mount(ctx) {
     document.getElementById("learningProvider").textContent = providerLabel;
     document.getElementById("learningProvider").title =
       runtime.lastError || runtime.model || runtime.state || "";
+    const usage = runtime.usage || {}, cost = runtime.estimatedCost || {};
+    const usageText = `API calls ${usage.totalCalls ?? runtime.calls ?? 0} · tokens input/output/total ${usage.inputTokens ?? 0}/${usage.outputTokens ?? 0}/${usage.totalTokens ?? runtime.tokens ?? 0}${cost.configured ? ` · est. $${Number(cost.usd || 0).toFixed(4)}` : ""}`;
     document.getElementById("learningProviderDetail").textContent = runtime.lastError
-      ? `Lỗi gần nhất: ${runtime.lastError}`
-      : `Tự phân tích case đã đủ điều kiện · gần nhất: ${analysis.lastAnalyzedAt ? time(analysis.lastAnalyzedAt) : "chưa có"}`;
+      ? `Lỗi gần nhất: ${runtime.lastError} · ${usageText}`
+      : `${usageText} · gần nhất: ${analysis.lastAnalyzedAt ? time(analysis.lastAnalyzedAt) : "chưa phân tích case"}`;
     const auto = data.autoLearningStatus || {};
     document.getElementById("learningQueueHealth").textContent = `${auto.enabled ? "AUTO" : "TẮT"} · ${auto.automaticJobs?.pending ?? 0} chờ · ${auto.automaticJobs?.running ?? 0} chạy`;
     document.getElementById("learningQueueHealth").title = `Delay tối thiểu ${auto.delayMs ?? 30000}ms · một job mỗi case/version`;

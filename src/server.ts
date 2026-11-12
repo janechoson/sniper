@@ -362,7 +362,7 @@ export async function startServer(
       if (req.method === "GET" && url.pathname === "/api/status")
         return reply(res, 200, { ...((await fullStatus()) as object), csrf });
       if (req.method === "GET" && url.pathname === "/favicon.ico") {
-        res.writeHead(204);
+        res.writeHead(302, { Location: "/rug-killer-neon.png", "Cache-Control": "no-cache" });
         res.end();
         return;
       }
@@ -687,7 +687,9 @@ export async function startServer(
             ? "text/html"
             : file.endsWith(".js")
               ? "text/javascript"
-              : "text/css",
+              : file.endsWith(".png")
+                ? "image/png"
+                : "text/css",
           "Cache-Control": "no-cache",
         });
         res.end(readFileSync(resolve("public", file)));
