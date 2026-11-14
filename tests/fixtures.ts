@@ -24,7 +24,7 @@ import { fixtureDecision } from "./kronos-fixtures.js";
 export function fixtureCodex(): ReasoningRuntime {
   return {
     status: () => ({ state: "READY", model: "FIXTURE_ONLY", promptVersion: "fixture" }),
-    analyze: async () => ({ action: "REVIEW", reason: "Fixture review", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "Fixture only", hypothesis: null } satisfies ReasoningResult),
+    analyze: async () => ({ action: "REVIEW", reason: "Fixture review", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "Fixture only", hypothesis: null, knowledgeHypothesis: null, experienceReview: null } satisfies ReasoningResult),
     analyzeGuard: async (input: any) => ({ action: "PASS", riskLevel: "LOW", confidence: 0.8, summary: "Fixture mock pass; not evidence of semantic quality.", matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "Fixture market snapshot supplied." }], uncertaintyReasons: ["Fixture runtime"], evidenceCutoffAt: input.evidenceCutoffAt }),
   };
 }

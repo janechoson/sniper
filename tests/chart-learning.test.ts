@@ -83,6 +83,8 @@ function runtime(result: Partial<ReasoningResult> = {}): ReasoningRuntime {
       contradictoryEventIds: [],
       uncertainty: "Fixture only",
       hypothesis: null,
+      knowledgeHypothesis: null,
+      experienceReview: null,
       ...result,
     }),
     analyzeGuard: async (input: any) => ({
@@ -640,6 +642,8 @@ test("Codex API sends no tools or private keys, validates JSON and records usage
     contradictoryEventIds: [],
     uncertainty: "Insufficient samples",
     hypothesis: null,
+    knowledgeHypothesis: null,
+    experienceReview: null,
   };
   const transport: typeof fetch = async (_url, init) => {
     body = JSON.parse(String(init!.body));
@@ -854,7 +858,7 @@ test("Codex requests proceed when persisted usage exceeds former local quotas", 
     "fixture",
     async () => {
       calls++;
-      return new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: JSON.stringify({ action: "HOLD", reason: "fixture", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "fixture", hypothesis: null }) }] }], usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 } }), { status: 200 });
+      return new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: JSON.stringify({ action: "HOLD", reason: "fixture", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "fixture", hypothesis: null, knowledgeHypothesis: null, experienceReview: null }) }] }], usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 } }), { status: 200 });
     },
     { read: () => used, write: () => {} },
   );
@@ -957,7 +961,7 @@ test("collector pump never invokes Codex; post-BUY-only evidence cannot create a
   };
   const r = runtime(response);
   let analysisPayload: any;
-  r.analyze = async (input) => { calls++; analysisPayload = (input as any).payload; return runtime(response).analyze({}); };
+  r.analyze = async (input) => { calls++; if ((input as any).task === "PRE_BUY_REVIEW") analysisPayload = (input as any).payload; return runtime(response).analyze({}); };
   const c = new ChartLearning(s, provider().gmgn, r);
   try {
     const h = history();
@@ -980,9 +984,9 @@ test("collector pump never invokes Codex; post-BUY-only evidence cannot create a
     assert.equal(duplicate.jobs[0]!.id, accepted.jobs[0]!.id);
     for (let i = 0; i < 100 && c.analyzer.job(accepted.jobs[0]!.id)?.state !== "COMPLETED"; i++)
       await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(calls, 1);
-    assert.equal(analysisPayload.snapshots.some((item: any) => item.id === snapshotId), true);
-    assert.equal(analysisPayload.decisions.some((item: any) => item.id === "hold-fixture" && item.action === "HOLD" && item.simulated), true);
+    assert.equal(calls, 2);
+    assert.equal(analysisPayload.snapshots.some((item: any) => item.id === snapshotId), false);
+    assert.equal(analysisPayload.decisions.some((item: any) => item.id === "hold-fixture" && item.action === "HOLD" && item.simulated), false);
     assert.equal(c.analyzer.job(accepted.jobs[0]!.id)?.state, "COMPLETED");
     assert.equal(c.charts.rules().length, 0);
     assert.equal(c.charts.db.prepare("SELECT state FROM chart_jobs WHERE kind='EVENT_REVIEW'").get()!.state, "PENDING");

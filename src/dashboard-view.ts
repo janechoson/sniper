@@ -43,6 +43,7 @@ export const DASHBOARD_ROUTES = [
   "/settings",
   "/logs",
   "/thongke",
+  "/kronos",
   "/chart-learning",
 ] as const;
 export const DASHBOARD_ASSETS = [
@@ -58,7 +59,9 @@ export const DASHBOARD_ASSETS = [
   "/dashboard-settings.js",
   "/dashboard-logs.js",
   "/dashboard-statistics.js",
+  "/dashboard-kronos.js",
   "/dashboard-learning.js",
+  "/dashboard-gallery.js",
 ];
 
 /** Page-specific, read-only projections; never calls the full status/Memory/statistics facade. */
@@ -123,5 +126,89 @@ export function dashboardLogs(engine: Engine, limit: number) {
     events,
     flow: { events: transitions },
     overview: { attempt: engine.attempts.current ?? null },
+  };
+}
+
+/** Read-only KRONOS call and entry outcome projection for the current mode/account. */
+export function dashboardKronos(engine: Engine, range: "all" | "24h" | "7d") {
+  const { store } = engine;
+  const now = Date.now();
+  const since = range === "24h" ? now - 24 * 60 * 60 * 1000 : range === "7d" ? now - 7 * 24 * 60 * 60 * 1000 : null;
+  const scope = `COALESCE(scope_mode,json_extract(payload,'$.mode'),'live')=? AND (?<>'demo' OR scope_account=?)`;
+  const scopeArgs = [store.mode, store.mode, store.demoAccountId()];
+  const timeClause = since === null ? "" : " AND at>=?";
+  const args = since === null ? scopeArgs : [...scopeArgs, since];
+  const countRecords = (kind: string, types: string[]) => {
+    const typeClause = types.map(() => "json_extract(payload,'$.type')=?").join(" OR ");
+    const row = store.db.prepare(
+      `SELECT count(*) AS n FROM records WHERE kind=? AND ${scope}${timeClause} AND (${typeClause})`,
+    ).get(kind, ...args, ...types) as { n: number };
+    return Number(row.n);
+  };
+  const decisionRows = store.db.prepare(
+    `SELECT json_extract(payload,'$.action') AS action,count(*) AS n FROM records WHERE kind='kronos_decisions' AND ${scope}${timeClause} GROUP BY action`,
+  ).all(...args) as Array<{ action: string | null; n: number }>;
+  const decisions = Object.fromEntries(decisionRows.map((row) => [row.action ?? "UNKNOWN", Number(row.n)]));
+  const candidateTime = since === null ? "" : " AND started_at>=?";
+  const candidateArgs: Array<string | number> = since === null ? [store.mode] : [store.mode, since];
+  const accountClause = store.mode === "demo" ? " AND json_extract(payload,'$.demoAccountId')=?" : "";
+  if (store.mode === "demo") candidateArgs.push(store.demoAccountId());
+  const entry = store.db.prepare(
+    `SELECT result,count(*) AS n FROM candidate_attempts WHERE mode=?${candidateTime}${accountClause} AND json_extract(payload,'$.summaries.strategies.KRONOS.decision')='BUY' GROUP BY result`,
+  ).all(...candidateArgs) as Array<{ result: string; n: number }>;
+  const outcomes = Object.fromEntries(entry.map((row) => [row.result, Number(row.n)]));
+  const outcomeCount = Object.values(outcomes).reduce((sum, value) => sum + value, 0);
+  const attemptTotal = Number((store.db.prepare(
+    `SELECT count(*) AS n FROM candidate_attempts WHERE mode=?${candidateTime}${accountClause}`,
+  ).get(...candidateArgs) as { n: number }).n);
+  const recent = store.db.prepare(
+    `SELECT mint,at,payload FROM records WHERE kind='kronos_decisions' AND ${scope}${timeClause} ORDER BY id DESC LIMIT 50`,
+  ).all(...args) as Array<{ mint: string; at: number; payload: string }>;
+  const latest = recent.map((row) => {
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    const token = store.token(row.mint);
+    return {
+      at: Number(row.at),
+      symbol: token?.symbol ?? row.mint.slice(0, 8) + "…",
+      action: typeof payload.action === "string" ? payload.action : "UNKNOWN",
+      reason: typeof payload.reason === "string" ? payload.reason : "",
+      attemptId: typeof payload.attemptId === "string" ? payload.attemptId : null,
+    };
+  });
+  const countDistinctTransitions = (type: string, expression: string) => {
+    const row = store.db.prepare(
+      `SELECT count(DISTINCT ${expression}) AS n FROM records WHERE kind='pipeline_transitions' AND ${scope}${timeClause} AND json_extract(payload,'$.type')=?`,
+    ).get(...args, type) as { n: number };
+    return Number(row.n);
+  };
+  // Older builds wrote two start markers per entry attempt; count unique attempt IDs.
+  const entryCalls = countDistinctTransitions("KRONOS_EVALUATION_STARTED", "json_extract(payload,'$.attemptId')");
+  const positionCalls = countDistinctTransitions("KRONOS_POSITION_EVALUATION", "json_extract(payload,'$.positionId') || ':' || json_extract(payload,'$.inputTo')");
+  const totalCalls = entryCalls + positionCalls;
+  const inferenceErrors = countRecords("pipeline_transitions", ["KRONOS_INFERENCE_FAILED"]);
+  const decisionTotal = Object.values(decisions).reduce((sum, value) => sum + value, 0);
+  return {
+    mode: store.mode,
+    range,
+    since,
+    calls: { total: totalCalls, entry: entryCalls, position: positionCalls, withoutRecordedOutcome: totalCalls - decisionTotal - inferenceErrors },
+    decisions: {
+      buy: decisions.BUY ?? 0,
+      wait: decisions.WAIT ?? 0,
+      hold: decisions.HOLD ?? 0,
+      sell: decisions.SELL ?? 0,
+      errors: inferenceErrors,
+    },
+    buyOutcomes: {
+      attempts: outcomeCount,
+      bought: outcomes.BOUGHT ?? 0,
+      rejectedAfterBuy: outcomes.REJECTED ?? 0,
+      reconciling: outcomes.RECONCILING ?? 0,
+      running: outcomes.RUNNING ?? 0,
+      retainedCandidateAttempts: attemptTotal,
+      retentionLimit: 2000,
+    },
+    latest,
+    updatedAt: now,
   };
 }

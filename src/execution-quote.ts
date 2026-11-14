@@ -3,6 +3,12 @@ import { Blocked, CandidateRejected } from "./domain.js";
 const SOL = "So11111111111111111111111111111111111111112";
 const atomic = z.string().regex(/^[1-9]\d*$/);
 export const orderSchema = z.object({
+  priceImpact: z.preprocess((v) => {
+    if ((typeof v !== "number" && typeof v !== "string") || v === "")
+      return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }, z.number().finite().optional()),
   priceImpactPct: z.preprocess((v) => {
     if ((typeof v !== "number" && typeof v !== "string") || v === "")
       return undefined;
@@ -47,6 +53,21 @@ export const orderSchema = z.object({
     )
     .min(1),
 });
+/** Jupiter V2 priceImpact is in percentage points; legacy priceImpactPct is a ratio. */
+export function quotePriceImpactPercent(order: {
+  priceImpact?: number;
+  priceImpactPct?: number;
+}): number | null {
+  if (typeof order.priceImpact === "number" && Number.isFinite(order.priceImpact))
+    return Math.abs(order.priceImpact);
+  if (
+    typeof order.priceImpactPct === "number" &&
+    Number.isFinite(order.priceImpactPct) &&
+    order.priceImpactPct >= 0
+  )
+    return order.priceImpactPct * 100;
+  return null;
+}
 export interface ExecutionQuote {
   provider: "JUPITER";
   chain: "solana";

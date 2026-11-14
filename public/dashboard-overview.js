@@ -4,7 +4,6 @@ import {
   accountingFeeDetails,
   accountingEntryPrice,
   normalizeM1Candles,
-  createChartSelection,
 } from "./dashboard-core.js";
 export async function mount(ctx) {
   /* Backend-driven overview. No simulated progress, countdown or trade path. */
@@ -54,7 +53,7 @@ export async function mount(ctx) {
     let latest, status, sellAction;
     const recentAttempts = new Map();
     let currentBatchId = null;
-    const chartSelection = createChartSelection();
+    let selectedChartMint = null;
     let chartWindow = 60,
       chartGeometry = null,
       crosshairX = null,
@@ -199,6 +198,27 @@ export async function mount(ctx) {
     function renderStrategyCards(a) {
       const summaries = a?.summaries || {};
       const owner = summaries.ownershipClaim?.strategy;
+      const elapsed = $("kronosElapsed");
+      const startedAt = Number(a?.startedAt);
+      if (Number.isFinite(startedAt) && startedAt > 0) {
+        const running = a.result === "RUNNING";
+        const endAt = running ? Date.now() : Number(a.endedAt) || startedAt;
+        const seconds = Math.max(0, Math.floor((endAt - startedAt) / 1000));
+        elapsed.hidden = false;
+        elapsed.textContent = seconds + " giây";
+        elapsed.dataset.running = String(running);
+        elapsed.setAttribute(
+          "aria-label",
+          (running ? "Đang kiểm tra KRONOS: " : "Thời gian kiểm tra KRONOS: ") + seconds + " giây",
+        );
+        elapsed.title = "Bắt đầu lúc " + new Date(startedAt).toLocaleTimeString("vi-VN");
+      } else {
+        elapsed.hidden = true;
+        elapsed.textContent = "";
+        delete elapsed.dataset.running;
+        elapsed.removeAttribute("aria-label");
+        elapsed.removeAttribute("title");
+      }
       const commonStages = [
         "CHEAP_FILTER",
         "SECURITY",
@@ -579,47 +599,6 @@ export async function mount(ctx) {
         $("chartCoverage").textContent = "Dữ liệu M1 không hợp lệ";
       drawM1Chart(record);
     }
-    function renderBatchTokens(batchId, activeMint) {
-      const root = $("scannerRecentList"),
-        empty = $("scannerRecentEmpty"),
-        rows = [...recentAttempts.values()]
-          .filter((record) => record.batchId === batchId)
-          .sort((left, right) => (left.appearanceId ?? 0) - (right.appearanceId ?? 0));
-      root.replaceChildren();
-      empty.hidden = rows.length > 0;
-      for (const record of rows) {
-        const a = record.attempt,
-          token = record.token,
-          m = record.market,
-          button = node("button", undefined, "scanner-recent-row");
-        button.type = "button";
-        button.setAttribute("role", "option");
-        button.setAttribute("aria-selected", String(record.mint === chartSelection.selectedMint));
-        button.classList.toggle("is-active", record.mint === activeMint);
-        button.classList.toggle("is-selected", record.mint === chartSelection.selectedMint);
-        button.append(avatar({ ...token, mint: a.mint, symbol: a.symbol }));
-        const identity = node("span", undefined, "scanner-recent-identity");
-        identity.append(node("strong", a.symbol || token.symbol || short(a.mint)), node("small", short(a.mint)));
-        button.append(identity);
-        const values = node("span", undefined, "scanner-recent-values");
-        values.append(node("strong", usd(val(m.price))), node("small", a.result === "RUNNING" ? a.stage || "Đang quét" : a.result === "QUEUED" ? "Trong batch · chờ quét" : a.result || "Đã quét"));
-        const movement = val(m.windows?.["1m"]?.startPrice), price = val(m.price);
-        if (movement > 0 && price !== null) {
-          const change = (price / movement - 1) * 100;
-          values.lastChild.className = change >= 0 ? "positive" : "negative";
-          values.lastChild.textContent = (change >= 0 ? "+" : "") + change.toFixed(1) + "% · 1m";
-        }
-        button.append(values);
-        button.onclick = () => {
-          chartSelection.select(record.mint);
-          $("scannerAutoFollow").setAttribute("aria-pressed", "false");
-          $("scannerAutoFollow").textContent = "Thủ công";
-          renderBatchTokens(batchId, activeMint);
-          renderChartToken(record);
-        };
-        root.append(button);
-      }
-    }
     function renderCandidate(o) {
       renderBatch(o.batch);
       const a = o.attempt,
@@ -668,10 +647,9 @@ export async function mount(ctx) {
       while (recentAttempts.size > 250)
         recentAttempts.delete(recentAttempts.keys().next().value);
       const activeMint = a?.mint || null;
-      chartSelection.observe(activeMint);
-      const selectedMint = chartSelection.selectedMint;
+      if (activeMint) selectedChartMint = activeMint;
+      const selectedMint = selectedChartMint;
       const record = selectedMint ? recentAttempts.get(selectedMint) : null;
-      renderBatchTokens(batchId, activeMint);
       const chartKey = record ? JSON.stringify([record.mint, record.market, record.history?.fetchedAt, record.history?.candles?.length, record.history?.candles?.at(-1)?.at, record.history?.candles?.at(-1)?.close, chartWindow]) : "empty:" + chartWindow;
       if ($("terminalToken").dataset.chartKey !== chartKey) {
         $("terminalToken").dataset.chartKey = chartKey;
@@ -829,12 +807,7 @@ export async function mount(ctx) {
       renderPositions(o);
     }
     function redrawChart() {
-      drawM1Chart(chartSelection.selectedMint ? recentAttempts.get(chartSelection.selectedMint) : null);
-    }
-    function toggleAutoFollow() {
-      const following = chartSelection.toggle();
-      if (latest) renderCandidate(latest);
-      return following;
+      drawM1Chart(selectedChartMint ? recentAttempts.get(selectedChartMint) : null);
     }
     function setChartWindow(size) {
       if (![15, 30, 60].includes(size)) return;
@@ -849,7 +822,6 @@ export async function mount(ctx) {
     return {
       update,
       redrawChart,
-      toggleAutoFollow,
       setChartWindow,
       setCrosshair,
       formatters: { formatCompactUsd, formatSmallUsd },
@@ -882,12 +854,6 @@ export async function mount(ctx) {
     document.getElementById("m1Chart").onpointerleave = null;
     window.BOTOverview = undefined;
   });
-  const followButton = document.getElementById("scannerAutoFollow");
-  followButton.onclick = () => {
-    const enabled = window.BOTOverview.toggleAutoFollow();
-    followButton.setAttribute("aria-pressed", String(enabled));
-    followButton.textContent = enabled ? "Auto" : "Thủ công";
-  };
   for (const button of document.querySelectorAll("[data-chart-window]")) {
     button.onclick = () => {
       window.BOTOverview.setChartWindow(Number(button.dataset.chartWindow));

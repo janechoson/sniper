@@ -7,7 +7,7 @@ function response(name: string, input: any) {
     ? { action: "PASS", riskLevel: "LOW", confidence: 0.8, summary: "fixture", matchedKnowledge: [], marketObservations: [{ evidenceId: "MARKET-1", explanation: "fixture" }], uncertaintyReasons: [], evidenceCutoffAt: input.evidenceCutoffAt }
     : name === "knowledge_holdout_replay"
       ? { prediction: "PASS", summary: "fixture", supportingEvidenceIds: [], contradictoryEvidenceIds: [], uncertaintyReasons: [] }
-      : { action: "HOLD", reason: "fixture", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "fixture", hypothesis: null };
+      : { action: "HOLD", reason: "fixture", ruleIds: [], supportingEventIds: [], contradictoryEventIds: [], uncertainty: "fixture", hypothesis: null, knowledgeHypothesis: null, experienceReview: null };
   return new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: JSON.stringify(value) }] }], usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 } }), { status: 200 });
 }
 

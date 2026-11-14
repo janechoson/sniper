@@ -31,6 +31,7 @@
         <a data-view="settings" data-route="" href="/settings">Cấu hình</a>
         <a data-view="logs" data-route="" href="/logs">Log</a
         ><a data-view="statistics" data-route="" href="/thongke">Thống kê</a>
+        <a data-view="kronos" data-route="" href="/kronos">KRONOS</a>
         <a data-view="learning" data-route="" href="/chart-learning"
           >Chart Learning</a
         >
@@ -165,14 +166,6 @@
               >
               <span id="batchDuration" hidden></span>
             </section>
-            <section class="terminal-panel scanner-recent" aria-label="Token Trending trong batch">
-              <div class="terminal-panel-head scanner-recent-head">
-                <h2>Token Trending trong batch</h2>
-                <button id="scannerAutoFollow" type="button" aria-pressed="true">Auto</button>
-              </div>
-              <div id="scannerRecentList" role="listbox" aria-label="Chọn token trong batch để xem chart"></div>
-              <p id="scannerRecentEmpty" class="chart-empty-note" hidden>Chưa có token trong batch</p>
-            </section>
             <section class="terminal-panel current-token terminal-chart-panel" aria-label="Chart M1 token hiện tại">
               <div class="chart-token-heading" id="terminalToken"></div>
               <div class="chart-toolbar">
@@ -196,6 +189,7 @@
             >
               <h2 id="kronosEvaluationTitle">
                 Đánh giá hiện tại – <span>KRONOS</span>
+                <span id="kronosElapsed" class="kronos-elapsed" role="timer" hidden></span>
                 <button id="currentDecisionEvidence" type="button" disabled>
                   Chi tiết
                 </button>
@@ -510,70 +504,31 @@
             ></span>
           </div></section
       ></template>
-      <template id="page-learning">
-        <section class="view" id="learning">
-          <header class="learning-heading">
-            <div><h2>Chart Learning</h2>
-              <p>Học từ dữ liệu thị trường thực · RUG_30 là nhãn sụp giá, không phải bằng chứng gian lận.</p></div>
-            <span class="learning-scope">SHARED LEARNING</span>
+      <template id="page-kronos">
+        <section id="kronosManagement" class="view stats-dashboard">
+          <header class="stats-heading">
+            <div class="stats-heading-title"><span class="stats-heading-icon" aria-hidden="true">◈</span><div><h2>Quản lý KRONOS</h2><p>Thống kê lượt đánh giá, quyết định và kết quả BUY theo chế độ hiện tại.</p></div></div>
+            <label class="stats-strategy">Khoảng thời gian<select id="kronosRange"><option value="all">Toàn bộ dữ liệu</option><option value="24h">24 giờ</option><option value="7d">7 ngày</option></select></label>
           </header>
-          <section id="learningHealth" aria-label="Tình trạng học">
-            <article><span>Market Collector</span><strong id="learningCollector">Đang kiểm tra</strong><small id="learningCollectorDetail"></small></article>
-            <article><span>Codex Learning</span><strong id="learningProvider">Đang kiểm tra</strong><small id="learningProviderDetail"></small></article>
-            <article><span>Learning Queue</span><strong id="learningQueueHealth">Đang kiểm tra</strong><small id="learningQueueDetail"></small></article>
-            <article><span>Rule Validation</span><strong id="learningValidation">Đang kiểm tra</strong><small id="learningValidationDetail"></small></article>
-          </section>
-          <section id="aiGuardHealth" aria-label="Tình trạng AI Guard">
-            <article><span>Codex AI Guard</span><strong id="aiGuardState">Đang kiểm tra</strong><small id="aiGuardRuntime"></small></article>
-            <article><span>Đánh giá gần nhất</span><strong id="aiGuardLatest">Chưa có</strong><small id="aiGuardLatency"></small></article>
-            <article><span>Knowledge hợp lệ</span><strong id="aiGuardKnowledge">0</strong><small id="aiGuardMatches"></small></article>
-            <article><span>Lỗi Guard</span><strong id="aiGuardErrors">0</strong><small id="aiGuardQueue"></small></article>
-          </section>
-          <p id="learningStatus" role="status"></p>
-          <section id="learningCaseControls" class="learning-case-controls" aria-label="Tự động học Learning Case">
-            <header><div><h3>Automatic Chart Learning</h3><p>Case đủ bằng chứng được xếp lịch tự động; Codex chạy sau thời gian chờ, không chạy theo từng lần lấy nến.</p></div>
-            </header>
-            <div id="learningCaseStatus" role="status"></div>
-            <div id="learningCaseList" role="list"></div>
-            <article id="learningCaseAnalysis" class="panel" hidden aria-live="polite"></article>
-          </section>
-          <section id="validationSummary" class="learning-case-controls" aria-label="Kết quả holdout replay">
-            <header><div><h3>Holdout Replay Validation</h3><p>Replay pre-BUY độc lập tự quyết định promotion; quality gates và drift monitor luôn hiển thị.</p></div></header>
-            <div id="validationJobList" role="list"></div>
-          </section>
-          <section id="semanticKnowledge" class="learning-case-controls" aria-label="Semantic trading knowledge">
-            <header><div><h3>Semantic Knowledge</h3><p>DRAFT chỉ tác động Guard sau khi qua validation độc lập.</p></div></header>
-            <div id="semanticKnowledgeList" role="list"></div>
-          </section>
-          <section id="learningOverview" aria-label="Chỉ số học"></section>
-          <details id="learningMoreStats"><summary>Chi tiết thống kê</summary><div id="learningSecondaryStats"></div></details>
-          <nav id="learningTabs" aria-label="Learning sections"></nav>
-          <section id="learningWorkspace" class="learning-workspace">
-            <aside class="learning-event-panel">
-              <header><h3>Danh sách sự kiện</h3><span id="learningEventCount"></span></header>
-              <input id="learningEventSearch" type="search" placeholder="Tìm symbol hoặc mint" aria-label="Tìm sự kiện" />
-              <div id="learningEventFilters" class="learning-filters"></div>
-              <div id="learningEventList" role="list"></div>
-              <p class="learning-list-note">Hiển thị tối đa 100 sự kiện gần nhất.</p>
-            </aside>
-            <section class="learning-chart-panel">
-              <header><div><h3 id="learningChartTitle">Chọn một sự kiện</h3><p id="learningChartMeta"></p></div><span id="learningChartTag"></span></header>
-              <div id="learningChart"></div>
-              <div id="learningChartControls" class="learning-chart-controls"><span>Nến 1m</span><div id="learningWindowControls" class="learning-window-controls"></div><span id="learningCandleCount"></span><label><input id="learningVolumeToggle" type="checkbox" checked /> Volume</label><label><input id="learningMarkerToggle" type="checkbox" checked /> Ký hiệu quyết định</label><label><input id="learningRugToggle" type="checkbox" checked /> Vùng RUG_30</label></div>
-              <section class="learning-ai-panel"><div><h3>Phân tích AI</h3><p id="learningAiSummary">Chọn sự kiện để xem dữ liệu phân tích.</p><small id="learningAiMeta"></small></div></section>
-            </section>
-            <aside class="learning-insights-panel">
-              <section><header><h3>Kết quả học</h3><span id="learningInsightTag"></span></header><div id="learningEventSummary"></div></section>
-              <section><header><h3>Tín hiệu trước sự kiện</h3></header><div id="learningSignals"></div></section>
-              <section><header><h3>Rules liên quan</h3></header><div id="learningRelatedRules"></div></section>
-            </aside>
-          </section>
-          <div id="learningRows"></div>
-          <article
-            id="learningDetail"
-            class="panel"
-            aria-live="polite"
-          ></article>
+          <p id="kronosScope" class="stats-scope"></p>
+          <div id="kronosSummary" class="stats-kpis kronos-summary" aria-live="polite" aria-busy="true"></div>
+          <div id="kronosBreakdown" class="stats-analytics"></div>
+          <section class="stats-card kronos-recent"><h3>Lượt đánh giá gần đây</h3><div class="kronos-table-wrap"><table><thead><tr><th>Thời gian</th><th>Token</th><th>Quyết định</th><th>Lý do</th></tr></thead><tbody id="kronosRecent"></tbody></table></div></section>
+          <p id="kronosFeedback" class="stats-scope" role="status" aria-live="polite"></p>
+        </section>
+      </template>
+      <template id="page-learning">
+        <section class="view chart-gallery-page" id="learning">
+          <header class="chart-gallery-heading"><div><p class="eyebrow">TRADE REPLAY · AI EXPERIENCE</p><h2>Chart Learning</h2><p>Học từ giao dịch thực và nến M1 đã lưu.</p></div><details class="chart-diagnostics"><summary>Trạng thái học</summary><div id="chartDiagnostics">Đang tải…</div></details></header>
+          <div class="chart-gallery-filters">
+            <label>Pattern<select id="galleryPattern"><option value="ALL">Tất cả pattern</option></select></label>
+            <div class="gallery-outcome" role="group" aria-label="Kết quả"><button type="button" data-outcome="ALL" aria-pressed="true">Tất cả</button><button type="button" data-outcome="WIN" aria-pressed="false">Thắng</button><button type="button" data-outcome="LOSS" aria-pressed="false">Thua</button></div>
+            <label>Thời gian<select id="galleryDays"><option value="30">30 ngày</option><option value="7">7 ngày</option><option value="90">90 ngày</option><option value="0">Toàn bộ</option></select></label>
+          </div>
+          <p id="galleryStatus" class="gallery-status" role="status" aria-live="polite"></p>
+          <div id="learningGallery" class="learning-gallery" aria-live="polite"></div>
+          <nav id="galleryPagination" class="gallery-pagination" aria-label="Phân trang"></nav>
+          <dialog id="experienceModal" class="experience-modal"><div class="experience-modal-inner"><button id="experienceClose" class="experience-close" type="button" aria-label="Đóng">×</button><div id="experienceDetail"></div></div></dialog>
         </section>
       </template>
       <footer>

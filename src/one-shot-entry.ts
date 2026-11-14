@@ -10,6 +10,7 @@ import {
 import type { Engine } from "./engine.js";
 import { address, normalizeMarket, numberEvidence, record } from "./gmgn.js";
 import { attemptFlow, parseMarketHistory } from "./market-history.js";
+import { validateCandles } from "./kronos-domain.js";
 import { positionSizeMatches } from "./position-sizing.js";
 import { cheapGuard, size } from "./risk.js";
 import { requireCompatibleToken } from "./token-program.js";
@@ -154,6 +155,24 @@ export async function oneShotEntry(
         Date.now() - h.historyTo > e.settings.maxSnapshotAgeMs + 60000
       )
         reject("INSUFFICIENT_MARKET_HISTORY");
+      try {
+        validateCandles(
+          h.candles.slice(-60).map(({ at, open, high, low, close }) => ({
+            at,
+            open,
+            high,
+            low,
+            close,
+          })),
+          Date.now(),
+        );
+      } catch (error) {
+        const reason =
+          error instanceof Error && /^[A-Z][A-Z0-9_]{1,80}$/.test(error.message)
+            ? error.message
+            : "INVALID_KRONOS_MARKET_HISTORY";
+        reject(reason);
+      }
       return h;
     });
     let flow = await run("CAPITAL_FLOW", () => {
@@ -284,10 +303,6 @@ export async function oneShotEntry(
       });
       try {
         const kronos = await run("KRONOS", async () => {
-          e.store.pipelineEvent("KRONOS_EVALUATION_STARTED", mint, {
-            strategy,
-            attemptId: common.attemptId,
-          });
           try {
             const d = await e.kronos.evaluateEntry({
               candles: history.candles
@@ -332,6 +347,7 @@ export async function oneShotEntry(
               e.store.pipelineEvent("KRONOS_INFERENCE_FAILED", mint, {
                 strategy,
                 attemptId: common.attemptId,
+                reason: safeError(error),
               });
             throw error;
           }

@@ -10,9 +10,10 @@ const routes = {
   "/settings": { view: "settings", module: "settings", title: "Cấu hình" },
   "/logs": { view: "logs", module: "logs", title: "Log" },
   "/thongke": { view: "statistics", module: "statistics", title: "Thống kê" },
+  "/kronos": { view: "kronos", module: "kronos", title: "Quản lý KRONOS" },
   "/chart-learning": {
     view: "learning",
-    module: "learning",
+    module: "gallery",
     title: "Chart Learning",
   },
 };

@@ -14,6 +14,8 @@ const button = (label, work) => {
   b.addEventListener("click", work);
   return b;
 };
+const learningStatusVi = (status) => ({ DRAFT: "Bản nháp", OBSERVING: "Đang theo dõi", VALIDATING: "Đang kiểm định", VALIDATED: "Đã hợp lệ", REJECTED: "Bị từ chối", RETIRED: "Đã ngừng dùng", PENDING: "Đang chờ", RUNNING: "Đang chạy", RETRY_WAIT: "Chờ thử lại", COMPLETED: "Hoàn tất", DEAD_LETTER: "Đã dừng vì lỗi", FAILED: "Thất bại", CANCELLED: "Đã hủy", WAITING_FOR_ELIGIBILITY: "Chờ đủ điều kiện", READY_FOR_ANALYSIS: "Đủ dữ liệu phân tích", INCOMPLETE: "Thiếu dữ liệu", POST_SELL_COLLECTING: "Đang thu thập sau bán" }[status] || status || "Chưa có trạng thái");
+const learningErrorVi = (error) => String(error || "").startsWith("CODEX_INPUT_TOO_LARGE") ? "Dữ liệu gửi phân tích vượt giới hạn cho phép." : String(error || "").startsWith("CODEX_HTTP_400") ? `OpenAI từ chối yêu cầu (HTTP 400) · ${error}` : String(error || "").startsWith("CODEX_HTTP_429") ? `OpenAI giới hạn tốc độ gọi; hệ thống chờ cooldown rồi thử lại · ${error}` : error === "CODEX_BUSY_OR_RATE_LIMITED" ? "Đang trong thời gian chờ sau lỗi giới hạn tốc độ; chưa gửi yêu cầu mới." : error || "Không có chi tiết lỗi.";
 
 /** Local SVG candles and volume, no remote scripts or synthetic values. */
 export function candleChart(candles, markers = [], select = () => {}, options = {}) {
@@ -270,13 +272,13 @@ export async function mount(ctx) {
     const auto = data.autoLearningStatus || {};
     document.getElementById("learningQueueHealth").textContent = `${auto.enabled ? "AUTO" : "TẮT"} · ${auto.automaticJobs?.pending ?? 0} chờ · ${auto.automaticJobs?.running ?? 0} chạy`;
     document.getElementById("learningQueueHealth").title = `Delay tối thiểu ${auto.delayMs ?? 30000}ms · một job mỗi case/version`;
-    document.getElementById("learningQueueDetail").textContent = `${auto.automaticJobs?.completed ?? 0} xong · ${auto.automaticJobs?.retry_wait ?? 0} retry · ${auto.automaticJobs?.dead_letter ?? 0} dead letter · kế tiếp ${auto.nextEligibleAt ? time(auto.nextEligibleAt) : "chưa xếp lịch"}`;
+    document.getElementById("learningQueueDetail").textContent = `${auto.automaticJobs?.completed ?? 0} hoàn tất · ${auto.automaticJobs?.retry_wait ?? 0} chờ thử lại · ${auto.automaticJobs?.dead_letter ?? 0} thất bại · kế tiếp ${auto.nextEligibleAt ? time(auto.nextEligibleAt) : "chưa xếp lịch"}`;
     document.getElementById("learningValidation").textContent = `${data.aiGuardStatus?.validatedKnowledgeCount ?? 0} knowledge đang hoạt động`;
     const drift=data.validationStatus?.drift||{};
     document.getElementById("learningValidationDetail").textContent = `Holdout tự động · drift ${drift.sample_count ?? 0} case / ${drift.dangerous_count ?? 0} rủi ro · ngưỡng ${drift.minCases ?? 10} case`;
     document.getElementById("learningStatus").textContent =
       `Shared Learning · ${data.overview.policy} · dữ liệu thị trường dùng chung giữa DEMO/LIVE`;
-    document.getElementById("learningCaseStatus").textContent = `Collector: ${status.collector?.state || "RUNNING"} · Auto Learning: ${auto.enabled ? "ON" : "OFF"} · delay ${auto.delayMs ?? 30000}ms · ${auto.automaticJobs?.pending ?? 0} pending / ${auto.automaticJobs?.running ?? 0} running / ${auto.automaticJobs?.dead_letter ?? 0} dead letter · validation: ${data.validationStatus?.jobs?.pending ?? 0} pending / ${data.validationStatus?.jobs?.running ?? 0} running`;
+    document.getElementById("learningCaseStatus").textContent = `Thu thập: ${learningStatusVi(status.collector?.state || "RUNNING")} · Tự học: ${auto.enabled ? "Bật" : "Tắt"} · trễ ${auto.delayMs ?? 30000}ms · ${auto.automaticJobs?.pending ?? 0} chờ / ${auto.automaticJobs?.running ?? 0} đang chạy / ${auto.automaticJobs?.dead_letter ?? 0} thất bại · kiểm định: ${data.validationStatus?.jobs?.pending ?? 0} chờ / ${data.validationStatus?.jobs?.running ?? 0} đang chạy`;
   }
   function renderCaseList() {
     const list = document.getElementById("learningCaseList"), cases = data?.learningCases || [];
@@ -284,9 +286,10 @@ export async function mount(ctx) {
     if (!cases.length) list.append(el("p", "Chưa có vị thế BUY đủ điều kiện cho Learning."));
     for (const item of cases) {
       const row = el("div", undefined, "learning-case-row");
-      row.append(el("strong", shortMint(item.mint)), el("small", `${item.mode.toUpperCase()} · ${item.positionStatus} · ${item.collectionStatus}`), el("small", `PnL ${metricValue(item.realizedPnlPct, "%")} · post-SELL ${item.followupsCollected}/4`), el("small", `Auto analysis: ${item.autoLearningState || "WAITING_FOR_ELIGIBILITY"}${item.eligibleAt ? ` · eligible ${time(item.eligibleAt)}` : ""}`));
+      row.append(el("strong", shortMint(item.mint)), el("small", `${item.mode.toUpperCase()} · ${item.positionStatus} · ${learningStatusVi(item.collectionStatus)}`), el("small", `PnL ${metricValue(item.realizedPnlPct, "%")} · post-SELL ${item.followupsCollected}/4`), el("small", `Phân tích tự động: ${learningStatusVi(item.autoLearningState || "WAITING_FOR_ELIGIBILITY")}${item.eligibleAt ? ` · đủ điều kiện ${time(item.eligibleAt)}` : ""}`));
+      if (item.autoLearningError) row.append(el("small", `Lý do: ${learningErrorVi(item.autoLearningError)}`));
       if (item.autoLearningState === "DEAD_LETTER" && item.autoLearningJobId)
-        row.append(button("Retry Failed", async () => {
+        row.append(button("Thử phân tích lại", async () => {
           try { await ctx.post(`/api/chart-learning/auto-learning-jobs/${encodeURIComponent(item.autoLearningJobId)}/retry`, {}); data = await read(""); renderHealth(); renderCaseList(); }
           catch (error) { ctx.error(error); }
         }));
@@ -310,13 +313,13 @@ export async function mount(ctx) {
     list.replaceChildren();
     for (const item of data?.knowledge || []) {
       const row = el("div", undefined, "learning-case-row");
-      row.append(el("strong", item.title), el("small", `${item.category} · ${item.applicableStage} · v${item.version} · ${item.validationStatus}`), el("small", item.description));
+      row.append(el("strong", item.title), el("small", `${item.category} · ${item.applicableStage} · v${item.version} · ${learningStatusVi(item.validationStatus)}`), el("small", item.description));
       const report=item.latestValidation, metrics=report?.metrics;
       if (report) {
         const summary = metrics
           ? `TP ${metrics.TP} / FP ${metrics.FP} / TN ${metrics.TN} / FN ${metrics.FN} · P ${metricValue(metrics.precision)} · R ${metricValue(metrics.recall)} · F1 ${metricValue(metrics.f1)} · FPR ${metricValue(metrics.falsePositiveRate)} · abstain ${metricValue(metrics.abstentionRate)} · holdout ${report.independentMintCount ?? metrics.sampleCount}`
           : (report.qualityGate?.failures || []).join(", ") || "Đang chờ dữ liệu độc lập";
-        row.append(el("small", `Validation ${report.lifecycleState || item.validationStatus} · ${summary}`));
+        row.append(el("small", `Kiểm định ${learningStatusVi(report.lifecycleState || item.validationStatus)} · ${summary}`));
       }
       if(item.controlReason)row.append(el("small",`${item.controlAction}: ${item.controlReason}`));
       const act=async(action,ask=true)=>{let reason="User intervention";if(ask){const supplied=window.prompt(`Lý do ${action} knowledge này?`);if(!supplied)return;reason=supplied;}if(action==="delete"&&!window.confirm("Xóa mềm knowledge này? Có thể khôi phục từ dashboard."))return;try{await ctx.post(`/api/chart-learning/knowledge/${encodeURIComponent(item.id)}/${action}`,{version:item.version,reason});data=await read("");renderHealth();renderKnowledge();}catch(error){ctx.error(error);}};
@@ -332,7 +335,7 @@ export async function mount(ctx) {
     }
     if (!list.childElementCount) list.append(el("p", "Chưa có semantic knowledge."));
     const jobs=document.getElementById("validationJobList");
-    if(jobs){jobs.replaceChildren();for(const item of data?.validationJobs||[]){let report=item.report;try{if(typeof report==="string")report=JSON.parse(report)}catch{report=null}const card=el("div",undefined,"learning-case-row");card.append(el("strong",`${item.knowledge_id} · v${item.knowledge_version}`),el("small",`${item.state} · ${time(item.requested_at)} · attempt ${item.attempt_count}`));if(report?.metrics)card.append(el("small",`TP ${report.metrics.TP} · FP ${report.metrics.FP} · TN ${report.metrics.TN} · FN ${report.metrics.FN} · Precision ${metricValue(report.metrics.precision)} · Recall ${metricValue(report.metrics.recall)} · Specificity ${metricValue(report.metrics.specificity)} · FPR ${metricValue(report.metrics.falsePositiveRate)} · FNR ${metricValue(report.metrics.falseNegativeRate)} · F1 ${metricValue(report.metrics.f1)} · coverage ${metricValue(report.metrics.coverage)} · abstention ${metricValue(report.metrics.abstentionRate)}`));jobs.append(card);}if(!jobs.childElementCount)jobs.append(el("p","Chưa có holdout replay."));}
+    if(jobs){jobs.replaceChildren();for(const item of data?.validationJobs||[]){let report=item.report;try{if(typeof report==="string")report=JSON.parse(report)}catch{report=null}const card=el("div",undefined,"learning-case-row");card.append(el("strong",`${item.knowledge_id} · v${item.knowledge_version}`),el("small",`${learningStatusVi(item.state)} · ${time(item.requested_at)} · lần thử ${item.attempt_count}`));if(item.error)card.append(el("small",`Lý do: ${learningErrorVi(item.error)}`));if(report?.metrics)card.append(el("small",`TP ${report.metrics.TP} · FP ${report.metrics.FP} · TN ${report.metrics.TN} · FN ${report.metrics.FN} · Precision ${metricValue(report.metrics.precision)} · Recall ${metricValue(report.metrics.recall)} · Specificity ${metricValue(report.metrics.specificity)} · FPR ${metricValue(report.metrics.falsePositiveRate)} · FNR ${metricValue(report.metrics.falseNegativeRate)} · F1 ${metricValue(report.metrics.f1)} · coverage ${metricValue(report.metrics.coverage)} · abstention ${metricValue(report.metrics.abstentionRate)}`));jobs.append(card);}if(!jobs.childElementCount)jobs.append(el("p","Chưa có holdout replay."));}
   }
   function renderEventList() {
     const list = document.getElementById("learningEventList"),
@@ -433,7 +436,7 @@ export async function mount(ctx) {
     if (!related.length) rules.append(el("p", "Chưa có Learning Rule được tạo từ sự kiện này."));
     for (const rule of related) {
       const node = el("article", undefined, "learning-related-rule");
-      node.append(el("strong", rule.name), el("span", `${rule.status} · v${rule.version}`), el("small", `${rule.supportingEventIds.length} hỗ trợ · ${rule.contradictoryEventIds.length} mâu thuẫn`));
+      node.append(el("strong", rule.name), el("span", `${learningStatusVi(rule.status)} · v${rule.version}`), el("small", `${rule.supportingEventIds.length} hỗ trợ · ${rule.contradictoryEventIds.length} mâu thuẫn`));
       rules.append(node);
     }
     const ai = document.getElementById("learningAiSummary"),
@@ -442,16 +445,16 @@ export async function mount(ctx) {
       ai.textContent = selected.analysis.reason || "Phân tích đã hoàn tất.";
       const evidence = ` · ${selected.analysis.supportingEventIds?.length ?? 0} bằng chứng hỗ trợ / ${selected.analysis.contradictoryEventIds?.length ?? 0} mâu thuẫn`;
       const hypothesis = selected.analysis.hypothesis?.name ? ` · Giả thuyết DRAFT: ${selected.analysis.hypothesis.name}` : "";
-      meta.textContent = `${selected.analysisState} · ${time(selected.analysisAt)} · ${selected.analysisRuntime?.lastModel || selected.analysisRuntime?.model || "Model không có trong bản ghi"} · độ bất định: ${selected.analysis.uncertainty || "N/A"}${evidence}${hypothesis}`;
+      meta.textContent = `${learningStatusVi(selected.analysisState)} · ${time(selected.analysisAt)} · ${selected.analysisRuntime?.lastModel || selected.analysisRuntime?.model || "Model không có trong bản ghi"} · độ bất định: ${selected.analysis.uncertainty || "N/A"}${evidence}${hypothesis}`;
     } else if (selected.analysisState === "PENDING" || selected.analysisState === "RUNNING") {
       ai.textContent = "Đang chờ Codex phân tích sự kiện này.";
-      meta.textContent = selected.analysisState === "PENDING" ? "Job đang chờ trong Learning Queue" : "Job đang được xử lý";
+      meta.textContent = selected.analysisState === "PENDING" ? "Job đang chờ trong hàng đợi Learning" : "Job đang được xử lý";
     } else if (selected.analysisError === "CODEX_HTTP_429") {
       ai.textContent = "OpenAI API trả về HTTP 429; dữ liệu hiện có không xác định được nguyên nhân quota hay giới hạn tốc độ.";
       meta.textContent = "Lỗi provider: CODEX_HTTP_429";
     } else if (selected.analysisState === "FAILED") {
       ai.textContent = "Phân tích chưa hoàn tất.";
-      meta.textContent = selected.analysisError || "Job thất bại · xem tab Jobs để biết chẩn đoán";
+      meta.textContent = learningErrorVi(selected.analysisError) || "Job thất bại · xem tab Jobs để biết chẩn đoán";
     } else {
       ai.textContent = "Chưa có phân tích AI cho sự kiện này.";
       meta.textContent = "Market evidence được lưu độc lập với trạng thái Codex.";
@@ -472,11 +475,11 @@ export async function mount(ctx) {
     for (const job of rows.filter((item) => filter === "ALL" || item.state === filter)) {
       const tr = el("tr"),
         ref = job.case_id ? shortMint(job.case_id) : [job.referenceKind, job.mint ? shortMint(job.mint) : ""].filter(Boolean).join(" · ") || shortMint(job.id);
-      for (const value of [job.kind || "CASE_ANALYSIS", ref, job.state, time(job.requested_at ?? job.at), String(job.retry_count ?? job.attempts ?? 0)]) tr.append(el("td", value));
+      for (const value of [job.kind || "CASE_ANALYSIS", ref, learningStatusVi(job.state), time(job.requested_at ?? job.at), String(job.retry_count ?? job.attempts ?? 0)]) tr.append(el("td", value));
       let result = job.result;
       try { if (typeof result === "string") result = JSON.parse(result); } catch { /* Keep text fallback. */ }
       const diagnostic = job.error
-        ? job.error
+        ? learningErrorVi(job.error)
         : result?.reason || "—";
       tr.append(el("td", diagnostic));
       body.append(tr);
@@ -511,7 +514,7 @@ export async function mount(ctx) {
         head = el("header"),
         title = el("div");
       title.append(el("strong", rule.name), el("small", `${rule.id} · v${rule.version}`));
-      head.append(title, el("b", rule.status));
+      head.append(title, el("b", learningStatusVi(rule.status)));
       card.append(head,
         infoRow("Purpose", rule.action === "BLOCK" ? "BUY Guard · BLOCK" : "SELL"),
         infoRow("Observation window", `${rule.window} phút`),

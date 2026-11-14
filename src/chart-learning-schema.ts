@@ -140,6 +140,11 @@ CREATE TABLE IF NOT EXISTS chart_knowledge_drift_cases (
  observed_at INTEGER NOT NULL, payload TEXT NOT NULL,
  PRIMARY KEY(knowledge_id,knowledge_version,case_id));
 CREATE INDEX IF NOT EXISTS chart_knowledge_drift_recent ON chart_knowledge_drift_cases(knowledge_id,knowledge_version,observed_at DESC);
+CREATE TABLE IF NOT EXISTS chart_learning_recovery_events (
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL, case_id TEXT NOT NULL,
+ action TEXT NOT NULL CHECK(action IN ('REQUEUED','COMPLETED','FAILED')),
+ at INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS chart_learning_recovery_case ON chart_learning_recovery_events(case_id,at DESC);
 ${[
   "chart_candles",
   "chart_events",
@@ -156,6 +161,7 @@ ${[
   "chart_ai_guard_decisions",
   "chart_knowledge_control_events",
   "chart_knowledge_drift_cases",
+  "chart_learning_recovery_events",
 ]
   .map(
     (t) => `
@@ -175,6 +181,7 @@ ${[
   "chart_ai_guard_decisions",
   "chart_knowledge_control_events",
   "chart_knowledge_drift_cases",
+  "chart_learning_recovery_events",
 ]
   .map(
     (t) => `
@@ -188,5 +195,6 @@ INSERT OR IGNORE INTO migrations VALUES(20,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(21,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(22,unixepoch());
 INSERT OR IGNORE INTO migrations VALUES(23,unixepoch());
+INSERT OR IGNORE INTO migrations VALUES(24,unixepoch());
 COMMIT;
 `;

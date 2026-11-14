@@ -5,6 +5,7 @@ import { CHART_POLICY, type LearningRule } from "./chart-features.js";
 import { sqliteAtomic } from "./learning-database.js";
 import { ChartKnowledgeRepository } from "./chart-knowledge.js";
 import { env } from "./config.js";
+import { ANALYSIS_MAX_ENVELOPE_BYTES, analysisPayloadMetrics, boundedAnalysisInput, buildAnalysisPlan, inputEvidenceIds } from "./chart-analysis-plan.js";
 
 export const CHART_ANALYSIS_VERSION = "chart-learning-v4";
 const MAX_BATCH = 20;
@@ -49,6 +50,51 @@ export class ChartAnalyzer {
     }
   }
 
+  recoveryPreview(limit = 100) {
+    const safeLimit = Math.max(1, Math.min(100, limit));
+    const where = `j.state='DEAD_LETTER' AND j.last_error LIKE 'CODEX_INPUT_TOO_LARGE%'
+      AND a.state='FAILED' AND a.error LIKE 'CODEX_INPUT_TOO_LARGE%'
+      AND c.status='CLOSED' AND s.status IN ('READY_FOR_ANALYSIS','INCOMPLETE')
+      AND EXISTS (SELECT 1 FROM chart_case_evidence ce WHERE ce.case_id=c.position_id AND ce.evidence_type='CANDLE')
+      AND NOT EXISTS (SELECT 1 FROM chart_case_analyses ca WHERE ca.case_id=c.position_id)
+      AND NOT EXISTS (SELECT 1 FROM chart_learning_recovery_events re WHERE re.job_id=j.id AND re.action='REQUEUED')`;
+    const total = Number((this.charts.db.prepare(`SELECT count(*) n FROM chart_auto_learning_jobs j
+      JOIN chart_analysis_jobs a ON a.id=j.analysis_job_id JOIN chart_learning_cases c ON c.position_id=j.case_id
+      JOIN chart_case_collection s ON s.case_id=c.position_id WHERE ${where}`).get() as {n:number}).n);
+    const jobs = this.charts.db.prepare(`SELECT j.id jobId,j.case_id caseId,j.last_error error,j.attempt_count attempts,
+      c.mode,c.account_id accountId,s.status collectionStatus FROM chart_auto_learning_jobs j
+      JOIN chart_analysis_jobs a ON a.id=j.analysis_job_id JOIN chart_learning_cases c ON c.position_id=j.case_id
+      JOIN chart_case_collection s ON s.case_id=c.position_id WHERE ${where}
+      ORDER BY j.requested_at,j.id LIMIT ?`).all(safeLimit) as any[];
+    return { dryRun: true, totalEligible: total, returned: jobs.length, jobs };
+  }
+
+  recoverOversizedFailures(confirm = false, limit = 20) {
+    const preview = this.recoveryPreview(Math.max(1, Math.min(20, limit)));
+    if (!confirm) return preview;
+    const now = Date.now(), queued: string[] = [];
+    sqliteAtomic(this.charts.db, () => {
+      for (const candidate of preview.jobs as any[]) {
+        const current = this.charts.db.prepare("SELECT state,last_error,case_id FROM chart_auto_learning_jobs WHERE id=?").get(candidate.jobId) as any;
+        if (current?.state !== "DEAD_LETTER" || !String(current.last_error).startsWith("CODEX_INPUT_TOO_LARGE")) continue;
+        if (this.charts.db.prepare("SELECT 1 FROM chart_case_analyses WHERE case_id=?").get(current.case_id)) continue;
+        this.charts.db.prepare("INSERT INTO chart_learning_recovery_events VALUES(?,?,?,?,?,?)")
+          .run(randomUUID(), candidate.jobId, candidate.caseId, "REQUEUED", now,
+            JSON.stringify({ originalError: current.last_error, attemptsBeforeRecovery: candidate.attempts }));
+        this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='PENDING',next_attempt_at=?,completed_at=NULL WHERE id=? AND state='DEAD_LETTER'")
+          .run(now + env.AUTO_CHART_LEARNING_DELAY_MS, candidate.jobId);
+        queued.push(candidate.jobId);
+      }
+    });
+    return { dryRun: false, requested: preview.totalEligible, requeued: queued.length, jobIds: queued };
+  }
+
+  private recordRecoveryOutcome(id: string, caseId: string, action: "COMPLETED" | "FAILED", details: unknown) {
+    if (!this.charts.db.prepare("SELECT 1 FROM chart_learning_recovery_events WHERE job_id=? AND action='REQUEUED'").get(id)) return;
+    this.charts.db.prepare("INSERT INTO chart_learning_recovery_events VALUES(?,?,?,?,?,?)")
+      .run(randomUUID(), id, caseId, action, Date.now(), JSON.stringify(details));
+  }
+
   private async runAutomatic(id:string) {
     const job=this.charts.db.prepare("SELECT * FROM chart_auto_learning_jobs WHERE id=? AND state IN ('PENDING','RETRY_WAIT')").get(id) as any;
     if(!job)return;
@@ -64,16 +110,21 @@ export class ChartAnalyzer {
       this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET analysis_job_id=? WHERE id=?").run(analysisJobId,id);
       await this.executeOne(analysisJobId);
       const result=this.charts.db.prepare("SELECT state,error FROM chart_analysis_jobs WHERE id=?").get(analysisJobId) as any;
-      if(result?.state==='COMPLETED')this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='COMPLETED',completed_at=?,last_error=NULL WHERE id=?").run(Date.now(),id);
+      if(result?.state==='COMPLETED'){
+        this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state='COMPLETED',completed_at=?,last_error=NULL WHERE id=?").run(Date.now(),id);
+        this.recordRecoveryOutcome(id, String(job.case_id), "COMPLETED", { analysisJobId });
+      }
       else {
         const message=String(result?.error??"AUTO_ANALYSIS_FAILED"), transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed/.test(message), retry=transient&&attempt<3;
         const retryAt=Math.max(Date.now()+Math.min(300000,30000*2**(attempt-1)),Number(this.runtime.status().nextAvailableAt??0));
         this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',retryAt,retry?null:Date.now(),message,id);
+        this.recordRecoveryOutcome(id, String(job.case_id), "FAILED", { analysisJobId, error: message, retryScheduled: retry });
       }
     } catch(error) {
       const message=error instanceof Error?error.message:"AUTO_ANALYSIS_FAILED", transient=/HTTP_429|TIMEOUT|REQUEST_FAILED|BUSY|UNAVAILABLE|fetch failed/.test(message),retry=transient&&attempt<3;
       const retryAt=Math.max(Date.now()+Math.min(300000,30000*2**(attempt-1)),Number(this.runtime.status().nextAvailableAt??0));
       this.charts.db.prepare("UPDATE chart_auto_learning_jobs SET state=?,next_attempt_at=?,completed_at=?,last_error=? WHERE id=?").run(retry?'RETRY_WAIT':'DEAD_LETTER',retryAt,retry?null:Date.now(),message,id);
+      this.recordRecoveryOutcome(id, String(job.case_id), "FAILED", { error: message, retryScheduled: retry });
     }
   }
 
@@ -168,10 +219,10 @@ export class ChartAnalyzer {
       .map((row: any) => ({ ...JSON.parse(String(row.payload)), availableAt: Number(row.available_at), casePhase: String(row.casePhase), evidenceAvailableAt: Number(row.evidenceAvailableAt) }));
     const candles = this.charts.db
       .prepare(
-        "SELECT c.payload FROM chart_case_evidence ce JOIN chart_candles c ON ce.evidence_type='CANDLE' AND ce.evidence_id=c.id WHERE ce.case_id=? AND ce.available_at<=? AND c.available_at<=? ORDER BY c.at LIMIT 1500",
+        "SELECT c.id,c.payload FROM chart_case_evidence ce JOIN chart_candles c ON ce.evidence_type='CANDLE' AND ce.evidence_id=c.id WHERE ce.case_id=? AND ce.available_at<=? AND c.available_at<=? ORDER BY c.at LIMIT 60000",
       )
       .all(caseId, now, now)
-      .map((row: any) => JSON.parse(String(row.payload)));
+      .map((row: any) => ({ ...JSON.parse(String(row.payload)), id: String(row.id) }));
     const snapshots = this.charts.db
       .prepare("SELECT s.id,s.at,s.payload,ce.phase,ce.available_at FROM chart_case_evidence ce JOIN chart_snapshots s ON ce.evidence_type='SNAPSHOT' AND ce.evidence_id=s.id WHERE ce.case_id=? AND ce.available_at<=? ORDER BY s.at DESC LIMIT 120")
       .all(caseId, now)
@@ -182,25 +233,34 @@ export class ChartAnalyzer {
       .all(caseId)
       .map((row: any) => ({ id: String(row.decision_id), source: String(row.source), at: Number(row.at), action: String(row.action), simulated: Boolean(row.simulated), payload: JSON.parse(String(row.payload)) }))
       .reverse();
-    const replay = this.charts.db
+    const replayRow = this.charts.db
       .prepare("SELECT payload FROM chart_replays WHERE position_id=?")
       .get(caseId) as { payload: string } | undefined;
     const followups = this.charts.db
       .prepare("SELECT horizon,state,collected_at,payload,error FROM chart_case_followups WHERE case_id=? ORDER BY horizon")
       .all(caseId);
-    if (!replay) throw Error("LEARNING_CASE_REPLAY_UNAVAILABLE");
+    if (!replayRow) throw Error("LEARNING_CASE_REPLAY_UNAVAILABLE");
+    const fullReplay = JSON.parse(replayRow.payload);
+    const replay = {
+      positionId: fullReplay.positionId, mint: fullReplay.mint, mode: fullReplay.mode,
+      accountId: fullReplay.accountId, entryAt: fullReplay.entryAt, closedAt: fullReplay.closedAt,
+      fills: fullReplay.fills, accounting: fullReplay.accounting,
+      maximumFavorableExcursion: fullReplay.maximumFavorableExcursion,
+      maximumAdverseExcursion: fullReplay.maximumAdverseExcursion, dataQuality: fullReplay.dataQuality,
+    };
     const caseData = JSON.parse(String(learningCase.payload));
     const cohort = this.charts.db.prepare("SELECT c.position_id,c.mint,c.mode,c.account_id,c.realized_pnl_pct,c.payload,r.payload replay FROM chart_learning_cases c JOIN chart_replays r ON r.position_id=c.position_id WHERE c.status='CLOSED' AND c.position_id<>? AND c.mint<>? AND c.mode=? AND c.account_id=? ORDER BY c.updated_at DESC LIMIT 30")
       .all(caseId, (learningCase as any).mint, (learningCase as any).mode, (learningCase as any).account_id)
       .map((row: any) => {
         const payload = JSON.parse(String(row.payload)), replayData = JSON.parse(String(row.replay));
-        const peerEvents = this.charts.db.prepare("SELECT e.kind,e.at,e.payload FROM chart_case_evidence ce JOIN chart_events e ON ce.evidence_type='EVENT' AND ce.evidence_id=e.id WHERE ce.case_id=? AND ce.available_at<=? ORDER BY e.at LIMIT 40")
-          .all(String(row.position_id), now).map((event: any) => ({ kind: String(event.kind), at: Number(event.at), event: JSON.parse(String(event.payload)) }));
+        const peerEvents = this.charts.db.prepare("SELECT e.kind,e.at FROM chart_case_evidence ce JOIN chart_events e ON ce.evidence_type='EVENT' AND ce.evidence_id=e.id WHERE ce.case_id=? AND ce.available_at<=? ORDER BY e.at LIMIT 8")
+          .all(String(row.position_id), now).map((event: any) => ({ kind: String(event.kind), at: Number(event.at) }));
         return { caseId: String(row.position_id), mint: String(row.mint), mode: String(row.mode), simulated: payload.simulated === true, realizedPnlPct: row.realized_pnl_pct === null ? null : Number(row.realized_pnl_pct), mfePct: replayData.maximumFavorableExcursion ?? null, maePct: replayData.maximumAdverseExcursion ?? null, eventSamples: peerEvents };
       });
     return {
       case: { ...caseData, buyConfirmedAt: Number((learningCase as any).buy_confirmed_at), sellConfirmedAt: caseData.sellConfirmedAt ?? null },
-      replay: JSON.parse(replay.payload),
+      replay,
+      legacyReplay: fullReplay,
       candles,
       snapshots,
       decisions,
@@ -225,20 +285,104 @@ export class ChartAnalyzer {
       .run(started, this.runtime.status().model ?? null, id);
     try {
       const context = this.caseContext(job.case_id, started);
-      const result = reasoningSchema.parse(await this.runtime.analyze({
-        analysisDepth: "DEEP",
-        task: "COMPLETED_TRADE_CASE_ANALYSIS",
-        payload: context,
+      const { legacyReplay, ...measuredContext } = context;
+      const legacyInput = {
+        analysisDepth: "DEEP", task: "COMPLETED_TRADE_CASE_ANALYSIS", payload: { ...measuredContext, replay: legacyReplay },
         events: context.events,
-        rules: this.charts.rules().filter((rule) => rule.status === "VALIDATED"),
-        policy: CHART_POLICY,
-      }));
+        rules: this.charts.rules().filter((rule) => rule.status === "VALIDATED"), policy: CHART_POLICY,
+      };
+      const originalMetrics = analysisPayloadMetrics(legacyInput);
+      const plan = buildAnalysisPlan(context);
+      const contextHash = analysisPayloadMetrics(plan.map((task) => task.input)).sha256;
+      const prior = this.charts.db.prepare(
+        "SELECT result FROM chart_analysis_jobs WHERE case_id=? AND id<>? AND state='FAILED' AND result IS NOT NULL ORDER BY requested_at DESC LIMIT 1",
+      ).get(job.case_id, id) as { result: string } | undefined;
+      let progress: { contextHash: string; stageResults: Record<string, unknown> } = {
+        contextHash, stageResults: {},
+      };
+      if (prior) {
+        try {
+          const previous = JSON.parse(prior.result);
+          if (previous.contextHash === contextHash && previous.stageResults && typeof previous.stageResults === "object")
+            progress = previous;
+        } catch { /* old single-result jobs are safely reprocessed from the first stage */ }
+      }
+      for (const task of plan) {
+        if (progress.stageResults[task.key]) continue;
+        const taskInput = task.stage === "OUTCOME_COMPARISON"
+          ? {
+              ...task.input,
+              decisionReviews: Object.fromEntries(
+                Object.entries(progress.stageResults).map(([key, value]: [string, any]) => [key, {
+                  stage: value.stage, review: value.review ?? null, reason: value.result.reason,
+                  uncertainty: value.result.uncertainty, supportingEventIds: value.result.supportingEventIds,
+                  contradictoryEventIds: value.result.contradictoryEventIds,
+                }]),
+              ),
+            }
+          : task.input;
+        const bounded = boundedAnalysisInput(taskInput);
+        const validEvents = Array.isArray((taskInput as any).events) ? (taskInput as any).events : [];
+        const rules = task.stage === "PRE_BUY_REVIEW"
+          ? this.charts.rules().filter((rule) => rule.status === "VALIDATED").slice(0, 12).map((rule) => ({
+              id: rule.id, version: rule.version, name: rule.name, behaviors: rule.behaviors.slice(0, 8),
+              invalidation: rule.invalidation.slice(0, 240), action: rule.action,
+            }))
+          : [];
+        const runtimeInput = {
+          analysisDepth: "DEEP", task: task.stage, payload: bounded.input,
+          events: validEvents, rules, policy: CHART_POLICY,
+        };
+        const requestMetrics = analysisPayloadMetrics(runtimeInput);
+        if (requestMetrics.bytes > ANALYSIS_MAX_ENVELOPE_BYTES)
+          throw Error(`CODEX_INPUT_TOO_LARGE:bytes=${requestMetrics.bytes}:estimatedTokens=${requestMetrics.estimatedTokens}`);
+        const result = reasoningSchema.parse(await this.runtime.analyze(runtimeInput));
+        let review = result.experienceReview ?? null;
+        if (task.stage === "PRE_BUY_REVIEW" || task.stage === "PRE_SELL_REVIEW") {
+          const allowedIds = inputEvidenceIds(taskInput as Record<string, any>);
+          if (review && review.evidence.some((entry) => !allowedIds.has(entry.evidenceId)))
+            throw Error("EXPERIENCE_REVIEW_EVIDENCE_NOT_IN_STAGE_INPUT");
+          if (!review) review = {
+            conclusion: "INSUFFICIENT_EVIDENCE", evidence: [], whatWentRight: [], whatWentWrong: [],
+            candidateLesson: "Structured decision-time review was not returned.",
+            uncertainty: result.uncertainty || "No structured review evidence.",
+          };
+        }
+        progress.stageResults[task.key] = {
+          stage: task.stage, result, review,
+          inputBytes: requestMetrics.bytes, estimatedInputTokens: requestMetrics.estimatedTokens,
+          inputHash: requestMetrics.sha256,
+        };
+        this.charts.db.prepare("UPDATE chart_analysis_jobs SET result=? WHERE id=? AND state='RUNNING'")
+          .run(JSON.stringify(progress), id);
+      }
+      const outcome = progress.stageResults.OUTCOME as any;
+      if (!outcome?.result) throw Error("ANALYSIS_OUTCOME_STAGE_MISSING");
+      const result = reasoningSchema.parse(outcome.result);
       if (result.action !== "REVIEW") throw Error("CODEX_REVIEW_ACTION_REQUIRED");
       const allowed = new Set(context.events.map((event: any) => event.id));
       if ([...result.supportingEventIds, ...result.contradictoryEventIds].some((eventId) => !allowed.has(eventId)))
         throw Error("CODEX_CASE_EVIDENCE_NOT_LINKED");
       const analyzedAt = Date.now(), analysisId = randomUUID();
-      const saved = { ...result, analysisVersion: job.analysis_version, runtime: this.runtime.status(), caseId: job.case_id, analyzedAt };
+      const stageResult = (key: string) => (progress.stageResults[key] as any)?.result ?? null;
+      const saved = {
+        ...result,
+        experienceReport: {
+          buy: { decisionTime: (progress.stageResults.BUY as any)?.review ?? null, outcomeComparison: result },
+          holdChunks: Object.entries(progress.stageResults).filter(([key]) => key.startsWith("HOLD_"))
+            .map(([key, value]: [string, any]) => ({ key, summary: value.result.reason, uncertainty: value.result.uncertainty, inputBytes: value.inputBytes })),
+          sells: Object.entries(progress.stageResults).filter(([key]) => key.startsWith("SELL_"))
+            .map(([key, value]: [string, any]) => ({ key, decisionTime: value.review ?? null, outcomeComparison: result })),
+          outcomeComparison: result,
+        },
+        inputMetrics: {
+          originalBytes: originalMetrics.bytes, originalEstimatedTokens: originalMetrics.estimatedTokens,
+          optimizedStages: Object.fromEntries(Object.entries(progress.stageResults).map(([key, value]: [string, any]) => [key, {
+            bytes: value.inputBytes, estimatedTokens: value.estimatedInputTokens,
+          }])),
+        },
+        analysisVersion: job.analysis_version, runtime: this.runtime.status(), caseId: job.case_id, analyzedAt,
+      };
       sqliteAtomic(this.charts.db, () => {
         this.charts.db.prepare("INSERT INTO chart_case_analyses VALUES(?,?,?,?,?,?,?)")
           .run(analysisId, job.case_id, id, analyzedAt, job.analysis_version, this.runtime.status().model ?? null, JSON.stringify(saved));
@@ -250,7 +394,7 @@ export class ChartAnalyzer {
         if (result.hypothesis && result.supportingEventIds.length && result.hypothesis.behaviors.length && ((result.hypothesis.action === "BLOCK" && buyEvidenceOnly) || (result.hypothesis.action === "SELL" && sellEvidenceOnly))) {
           const hypothesis = result.hypothesis;
           const rule: LearningRule & { category?: string; sourceCaseId?: string } = {
-            id: "LR-" + chartId(job.case_id, id, hypothesis.name).slice(0, 16),
+            id: "LR-" + chartId(job.case_id, hypothesis.name, hypothesis.action).slice(0, 16),
             version: 1,
             at: analyzedAt,
             createdAt: analyzedAt,
@@ -266,7 +410,8 @@ export class ChartAnalyzer {
             supportingEventIds: result.supportingEventIds,
             contradictoryEventIds: result.contradictoryEventIds,
           };
-          this.charts.saveRule(rule);
+          if (!this.charts.db.prepare("SELECT 1 FROM chart_rule_versions WHERE id=? LIMIT 1").get(rule.id))
+            this.charts.saveRule(rule);
         }
         if (result.knowledgeHypothesis) {
           const knowledge = new ChartKnowledgeRepository(this.charts.db);
@@ -274,8 +419,9 @@ export class ChartAnalyzer {
           const supportCases = result.knowledgeHypothesis.supportingCaseIds;
           const contradictoryCases = result.knowledgeHypothesis.contradictoryCaseIds;
           if ([...supportCases, ...contradictoryCases].some((caseId) => !allowedCases.has(caseId)) || !supportCases.length || supportCases.some((caseId) => contradictoryCases.includes(caseId))) throw Error("CODEX_KNOWLEDGE_CASE_REFERENCE_INVALID");
-          try { knowledge.createDraft({
-            id: "KN-" + chartId(job.case_id, id, result.knowledgeHypothesis.title).slice(0, 20),
+          const knowledgeId = "KN-" + chartId(job.case_id, result.knowledgeHypothesis.title, result.knowledgeHypothesis.category, result.knowledgeHypothesis.applicableStage).slice(0, 20);
+          if (!this.charts.db.prepare("SELECT 1 FROM chart_knowledge_versions WHERE id=? LIMIT 1").get(knowledgeId)) try { knowledge.createDraft({
+            id: knowledgeId,
             title: result.knowledgeHypothesis.title,
             category: result.knowledgeHypothesis.category,
             applicableStage: result.knowledgeHypothesis.applicableStage,

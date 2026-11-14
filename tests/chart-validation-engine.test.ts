@@ -190,6 +190,6 @@ test("automatic analyzer persists eligibility and waits the configured minimum d
     restarted.pump(eligibleAt+30000);
     await waitUntil(()=>!restarted.status().active);
     row=store.db.prepare("SELECT * FROM chart_auto_learning_jobs WHERE case_id='auto-case'").get() as any;
-    assert.equal(calls,1);assert.equal(row.state,"COMPLETED");
+    assert.equal(calls,2);assert.equal(row.state,"COMPLETED");
   }finally{store.close();env.AUTO_CHART_LEARNING_ENABLED=prev.enabled;env.AUTO_CHART_LEARNING_DELAY_MS=prev.delay;env.AUTO_CHART_LEARNING_MIN_CANDLES=prev.min;}
 });

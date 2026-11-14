@@ -79,6 +79,22 @@ export interface KronosDecisionStrategy {
   stop(): void;
   status(): unknown;
 }
+function codedError(code: string) {
+  return Object.assign(Error(code), { code });
+}
+function safeFailureCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,80}$/.test(code))
+      return code;
+  }
+  if (
+    error instanceof Error &&
+    /^[A-Z][A-Z0-9_]{1,80}$/.test(error.message)
+  )
+    return error.message;
+  return "KRONOS_INFERENCE_FAILED";
+}
 export class KronosStrategy implements KronosDecisionStrategy {
   private active = false;
   private stopped = false;
@@ -97,7 +113,7 @@ export class KronosStrategy implements KronosDecisionStrategy {
   }
   private enqueue(candles: LabCandle[], position: boolean) {
     if (this.stopped || this.queue.length >= 100)
-      return Promise.reject(Error("KRONOS_UNAVAILABLE"));
+      return Promise.reject(codedError("KRONOS_UNAVAILABLE"));
     // Explicit projection: arbitrary caller fields never enter the worker request.
     const input = candles.map(({ at, open, high, low, close }) => ({
       at,
@@ -160,8 +176,8 @@ export class KronosStrategy implements KronosDecisionStrategy {
           lastObservedClose: decision.lastObservedClose!,
         },
       });
-    } catch {
-      job.reject(Error("KRONOS_INFERENCE_FAILED"));
+    } catch (error) {
+      job.reject(codedError(safeFailureCode(error)));
     } finally {
       this.active = false;
       void this.pump();

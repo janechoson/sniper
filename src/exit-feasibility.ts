@@ -10,6 +10,7 @@ import type {
   SolanaExecutionProvider,
 } from "./execution-provider.js";
 import { validateQuote } from "./execution-provider.js";
+import { quotePriceImpactPercent } from "./execution-quote.js";
 import type { Store } from "./store.js";
 import { hash, safeError } from "./util.js";
 
@@ -116,11 +117,7 @@ export async function probeExits(
         budget = BigInt(s.exitProbeFeeBudgetLamports);
       const fee = quoted > budget ? quoted : budget;
       const net = BigInt(q.order.otherAmountThreshold) - fee;
-      const impact =
-        typeof q.order.priceImpactPct === "number" &&
-        Number.isFinite(q.order.priceImpactPct)
-          ? q.order.priceImpactPct
-          : null;
+      const impact = quotePriceImpactPercent(q.order);
       Object.assign(level, {
         checkedAt: q.at,
         routeAvailable: true,

@@ -52,8 +52,6 @@ try {
   );
   await page.goto(base + "/chart-learning");
   await page.waitForSelector('#routeOutlet[data-state="ready"]');
-  assert.equal(await page.locator("#learningOverview .learning-stat").count(), 7);
-  assert.match(await page.locator("#learningChart").innerText(), /Chưa có nến sự kiện/);
   const baseHistory = parseMarketHistory(candles(60), candidate()),
     last = baseHistory.candles.at(-1)!,
     rug = {
@@ -69,22 +67,26 @@ try {
     normalizeMarket(info()),
     "demo",
   );
+  const caseId = "gallery-fixture-case", charts = app.engine.chartLearning.charts,
+    entryAt = h.candles.at(-30)!.at, closedAt = Date.now() - 5 * 60000;
+  charts.db.prepare("INSERT INTO chart_learning_cases(position_id,mint,mode,account_id,buy_confirmed_at,learning_started_at,entry_price_usd,entry_quantity,status,entry_snapshot_id,exit_snapshot_id,realized_pnl_lamports,realized_pnl_pct,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,1,'100','CLOSED',NULL,NULL,'-10',-14.67,?,?,?)")
+    .run(caseId, MINT, "demo", charts.account("demo"), entryAt, entryAt, closedAt, closedAt, JSON.stringify({positionId:caseId,mint:MINT,mode:"demo",closedAt,simulated:true}));
+  charts.db.prepare("INSERT INTO chart_case_collection(case_id,status,data_quality,updated_at,payload) VALUES(?,'INCOMPLETE','INCOMPLETE',?,'{}')").run(caseId, closedAt);
   await page.reload();
   await page.waitForSelector('#routeOutlet[data-state="ready"]');
-  await page.waitForSelector("#learningChart svg");
-  assert.ok(await page.locator("#learningEventList .learning-event-item").count() >= 1);
-  assert.match(await page.locator("#learningChartTitle").innerText(), /RUG_30/);
-  assert.equal(await page.locator("#learningChart svg line[stroke-dasharray='5 5']").count(), 1);
-  await page.locator('#learningEventFilters button[data-filter="RUG_30"]').click();
-  assert.equal(await page.locator("#learningEventList .learning-event-item").count(), 1);
-  await page.locator('#learningEventFilters button[data-filter="ANALYZED"]').click();
-  assert.equal(await page.locator("#learningEventList .learning-event-item").count(), 0);
-  await page.locator('#learningEventFilters button[data-filter="ALL"]').click();
-  await page.locator("#learningEventSearch").fill("not-a-token");
-  await page.waitForTimeout(250);
-  assert.equal(await page.locator("#learningEventList .learning-event-item").count(), 0);
-  await page.locator("#learningEventSearch").fill("");
-  await page.waitForTimeout(250);
+  await page.waitForFunction(() => document.querySelector("#galleryStatus")?.textContent !== "Đang tải giao dịch…");
+  assert.equal(await page.locator(".experience-card").count(), 1, await page.locator("#galleryStatus").innerText());
+  assert.match(await page.locator(".experience-card").innerText(), /-14.67%/);
+  assert.match((await page.locator("#chartDiagnostics").textContent()) ?? "", /Thiếu dữ liệu:\s*1/);
+  await page.locator(".experience-card").click();
+  await page.waitForSelector("#experienceDetail .experience-detail-chart svg");
+  assert.match(await page.locator("#experienceDetail").innerText(), /BUY Analysis/);
+  assert.match(await page.locator("#experienceDetail").innerText(), /chưa lưu review riêng/);
+  await page.locator('#experienceDetail .replay-tabs button').nth(1).click();
+  await page.locator('#experienceDetail .replay-tabs button').nth(2).click();
+  await page.locator("#experienceClose").click();
+  await page.locator('#galleryDays').selectOption("7");
+  assert.equal(await page.locator(".experience-card").count(), 1);
   const viewports: [number, number][] = [
     [1920, 1080],
     [1440, 900],
@@ -94,32 +96,11 @@ try {
   for (const [width, height] of viewports) {
     await page.setViewportSize({ width, height });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `page overflow at ${width}`);
-    await page.screenshot({ path: join(dir, `learning-${width}.png`), fullPage: true });
   }
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole("button", { name: "Decisions", exact: true }).click();
-  await page.locator("#learningRows button").first().click();
-  await page.waitForSelector("#learningDetail svg");
-  assert.match(
-    await page.locator("#learningDetail").innerText(),
-    new RegExp(d.id),
-  );
-  assert.equal(
-    (await page.locator("#learningDetail svg rect").count()) > 0,
-    true,
-  );
-  await page.locator('a[href="/positions"]').click();
-  await page.waitForSelector('#routeOutlet[data-route="/positions"]');
-  await page.locator('a[href="/chart-learning"]').click();
-  await page.waitForSelector('#routeOutlet[data-route="/chart-learning"]');
-  assert.equal(
-    await page.locator("#learningOverview strong").first().innerText(),
-    String(app.engine.chartLearning.charts.events(100).filter((event) => event.kind !== "CONTROL").length),
-  );
   assert.deepEqual(errors, []);
   assert.equal(app.engine.store.executions().length, 0);
   console.log(
-    "Chart Learning browser fixture: shared KPIs, RUG_30 event selection/filter/search, evidence-backed candle chart, 4 responsive sizes, persisted decision, route cleanup PASS. Mint fixture " +
+    "Chart Learning browser fixture: actual-candle gallery, incomplete-case visibility, diagnostics, modal replay tabs, no LIVE execution, 4 responsive sizes PASS. Mint fixture " +
       MINT,
   );
 } finally {

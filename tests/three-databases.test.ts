@@ -415,6 +415,8 @@ test("standard and contradiction jobs select centrally configured Luna and Sol w
                   contradictoryEventIds: [],
                   uncertainty: "fixture",
                   hypothesis: null,
+                  knowledgeHypothesis: null,
+                  experienceReview: null,
                 }),
               },
             ],

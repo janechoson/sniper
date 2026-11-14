@@ -1316,7 +1316,7 @@ export class Engine {
           decisionAt: d.decisionAt,
         });
         if (this.running) void this.processExits();
-      } catch {
+      } catch (error) {
         const current = this.store
           .managedPositions(p.mode)
           .find((x) => x.id === p.id);
@@ -1327,6 +1327,7 @@ export class Engine {
         this.store.pipelineEvent("KRONOS_INFERENCE_FAILED", p.mint, {
           strategy: "KRONOS",
           positionId: p.id,
+          reason: safeError(error),
         });
       }
     })().finally(() => this.kronosJobs.delete(p.id));

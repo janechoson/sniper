@@ -326,7 +326,8 @@ test("healthy partial exits with high-impact full exit are LIMITED but eligible;
   const buy = quote("BUY", 1900000n),
     h = ports((n, bps) => {
       const q = quote("SELL", n, WALLET, true);
-      q.order.priceImpactPct = bps === 10000 ? 30 : 1;
+      q.order.priceImpact = bps === 10000 ? 30 : 1;
+      q.order.priceImpactPct = undefined;
       return q;
     });
   const r = await probeExits(

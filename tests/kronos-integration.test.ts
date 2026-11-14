@@ -18,7 +18,10 @@ import {
   KronosStrategy,
   type KronosInference,
 } from "../src/kronos-strategy.js";
-import { kronosWorkerEnvironment } from "../src/kronos-worker.js";
+import {
+  kronosWorkerEnvironment,
+  kronosWorkerErrorCode,
+} from "../src/kronos-worker.js";
 import { parseMarketHistory } from "../src/market-history.js";
 import { positionViews } from "../src/position-view.js";
 import { RiskEngine } from "../src/risk.js";
@@ -237,6 +240,32 @@ test("worker receives OHLC only; malicious outputs and errors cannot create deci
     /^Error: KRONOS_INFERENCE_FAILED$/,
   );
   m.stop();
+});
+
+test("worker errors retain only safe, stable reason codes", () => {
+  assert.equal(
+    kronosWorkerErrorCode("ValueError:FUTURE_PARTIAL_OR_GAPPED_CANDLE"),
+    "KRONOS_WORKER_FUTURE_PARTIAL_OR_GAPPED_CANDLE",
+  );
+  assert.equal(
+    kronosWorkerErrorCode("RuntimeError:secret path and model details"),
+    "KRONOS_WORKER_RUNTIMEERROR",
+  );
+  assert.equal(kronosWorkerErrorCode({ leaked: "secret" }), "KRONOS_WORKER_ERROR");
+});
+
+test("KRONOS strategy propagates safe worker error codes instead of replacing them", async () => {
+  const m = new KronosStrategy({
+    forecast: async () => { throw Error("KRONOS_WORKER_FUTURE_PARTIAL_OR_GAPPED_CANDLE"); },
+    status() { return {}; },
+    stop() {},
+  });
+  try {
+    await assert.rejects(
+      m.evaluateEntry({ candles: bars() }),
+      /^Error: KRONOS_WORKER_FUTURE_PARTIAL_OR_GAPPED_CANDLE$/,
+    );
+  } finally { m.stop(); }
 });
 
 test("inference is serial and queued position jobs precede queued entries", async () => {

@@ -29,6 +29,25 @@ export function kronosWorkerEnvironment(
     MKL_NUM_THREADS: "2",
   };
 }
+const workerErrorCodes = new Set([
+  "INPUT_TOO_LARGE",
+  "UNEXPECTED_INPUT_FIELDS",
+  "CONTEXT_LENGTH",
+  "UNEXPECTED_CANDLE_FIELDS",
+  "INVALID_CANDLE",
+  "FUTURE_PARTIAL_OR_GAPPED_CANDLE",
+  "INVALID_OHLC",
+  "INVALID_FORECAST_PRICE",
+]);
+export function kronosWorkerErrorCode(value: unknown): string {
+  if (typeof value !== "string") return "KRONOS_WORKER_ERROR";
+  const [type, detail] = value.split(":", 2);
+  if (detail && workerErrorCodes.has(detail))
+    return `KRONOS_WORKER_${detail}`;
+  if (type && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(type))
+    return `KRONOS_WORKER_${type.toUpperCase()}`;
+  return "KRONOS_WORKER_ERROR";
+}
 /** One offline child and one request at a time. Timeout kills/reaps model worker. */
 export class KronosWorker {
   private child?: ChildProcessWithoutNullStreams;
@@ -88,24 +107,40 @@ export class KronosWorker {
         this.buffer = this.buffer.slice(at + 1);
         const p = this.pending;
         if (!p) return;
+        let data: Record<string, unknown>;
         try {
-          const data = JSON.parse(line);
-          if (data.error) throw Error("KRONOS_INFERENCE_FAILED");
-          if (!data.result || Object.keys(data).length !== 1)
-            throw Error("KRONOS_INVALID_OUTPUT");
-          const result = kronosForecastSchema.parse(data.result);
-          this.pending = undefined;
-          clearTimeout(p.timer);
-          this.latencies.push(data.result.latencyMs);
-          this.telemetry = {
-            loadMs: data.result.loadMs,
-            rssBytes: data.result.rssBytes,
-          };
-          this.latencies = this.latencies.slice(-100);
-          p.resolve(result);
+          const parsed: unknown = JSON.parse(line);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+            throw Error("invalid worker message");
+          data = parsed as Record<string, unknown>;
         } catch {
           this.fail("KRONOS_INVALID_OUTPUT");
+          return;
         }
+        if (data?.error !== undefined) {
+          this.fail(kronosWorkerErrorCode(data.error));
+          return;
+        }
+        if (!data?.result || Object.keys(data).length !== 1) {
+          this.fail("KRONOS_INVALID_OUTPUT");
+          return;
+        }
+        let result: Forecast;
+        try {
+          result = kronosForecastSchema.parse(data.result);
+        } catch {
+          this.fail("KRONOS_INVALID_OUTPUT");
+          return;
+        }
+        this.pending = undefined;
+        clearTimeout(p.timer);
+        this.latencies.push(result.latencyMs);
+        this.telemetry = {
+          loadMs: result.loadMs,
+          rssBytes: result.rssBytes,
+        };
+        this.latencies = this.latencies.slice(-100);
+        p.resolve(result);
       });
       child.stderr.on("data", (x) => {
         this.stderr = (this.stderr + String(x)).slice(-2000);

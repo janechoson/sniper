@@ -92,6 +92,9 @@ test("dashboard routes isolate read models and never eagerly aggregate other pag
         assert.deepEqual(result.learningCases, []);
         assert.deepEqual(result.rules, []);
         assert.deepEqual(result.decisions, []);
+        const experiences = await (await fetch(base + "/api/chart-learning/experiences")).json();
+        assert.deepEqual(experiences.items, []);
+        assert.equal(experiences.total, 0);
         const decision = await (
           await fetch(base + "/api/chart-learning/decision?id=FAKE")
         ).json();

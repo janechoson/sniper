@@ -15,6 +15,7 @@ import { test } from "node:test";
 import { env } from "../src/config.js";
 import { Blocked, CandidateRejected } from "../src/domain.js";
 import { JupiterExecutionProvider } from "../src/execution-provider.js";
+import { quotePriceImpactPercent } from "../src/execution-quote.js";
 import { SOL } from "../src/gmgn.js";
 import { Solana } from "../src/solana.js";
 import { Store } from "../src/store.js";
@@ -44,6 +45,15 @@ test("Jupiter optional impact sentinel -1/null/missing stays UNKNOWN without inv
       (await p.quoteBuy(MINT, 500000n, 100)).order.priceImpactPct,
       0.5,
     );
+    p.http.request = async () => ({
+      ...quote("BUY", 500000n).order,
+      priceImpact: -0.5,
+      priceImpactPct: undefined,
+    });
+    const v2 = (await p.quoteBuy(MINT, 500000n, 100)).order;
+    assert.equal(v2.priceImpact, -0.5);
+    assert.equal(quotePriceImpactPercent(v2), 0.5);
+    assert.equal(quotePriceImpactPercent({ priceImpactPct: 0.005 }), 0.5);
   } finally {
     env.WALLET_PUBLIC_KEY = old;
   }

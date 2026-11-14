@@ -248,6 +248,31 @@ test("missing history rejects immediately with no watcher", async () => {
     x.store.close();
   }
 });
+test("KRONOS history gate rejects short or gapped minute candles before inference", async () => {
+  for (const fixture of [
+    { code: "INSUFFICIENT_KRONOS_HISTORY", raw: candles(24) },
+    {
+      code: "INVALID_FUTURE_PARTIAL_OR_GAPPED_CANDLES",
+      raw: (() => {
+        const raw = candles(60);
+        raw.list.splice(20, 1);
+        return raw;
+      })(),
+    },
+  ]) {
+    const f = setup();
+    f.engine.gmgn.marketHistory = async () => fixture.raw;
+    try {
+      await assert.rejects(f.engine.analyze(MINT));
+      assert.equal(f.engine.attempts.current!.failedStage, "HISTORY");
+      assert.equal(f.engine.attempts.current!.reasonCode, fixture.code);
+      assert.equal(f.calls(), 0);
+    } finally {
+      await f.engine.stop();
+      f.store.close();
+    }
+  }
+});
 test("missing GMGN K-line plan capability rejects the candidate without pausing Position work or all BUYs", async () => {
   const f = setup();
   f.engine.gmgn.marketHistory = async () => {

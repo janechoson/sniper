@@ -39,6 +39,7 @@ function fixture(settingsInput: Record<string, unknown> = {}) {
   store.record("snapshots", mint, snapshot);
   store.record("position_market", mint, market);
   let quotesFail = false;
+  let buyImpact: number | undefined = 0.1;
   const quotes: QuoteSource = {
     wallet,
     health: { state: "READY", at: Date.now() },
@@ -81,7 +82,11 @@ function fixture(settingsInput: Record<string, unknown> = {}) {
         signatureFeeLamports: 5000,
         prioritizationFeeLamports: 0,
         rentFeeLamports: 0,
-        priceImpactPct: 0.1,
+        ...(side === "BUY"
+          ? buyImpact === undefined
+            ? {}
+            : { priceImpactPct: buyImpact }
+          : { priceImpactPct: 0.1 }),
         routePlan: [
           {
             swapInfo: {
@@ -153,8 +158,49 @@ function fixture(settingsInput: Record<string, unknown> = {}) {
     setQuotesFail: () => {
       quotesFail = true;
     },
+    setBuyImpact: (impact: number | undefined) => {
+      buyImpact = impact;
+    },
   };
 }
+test("DEMO allows unknown impact only through exit probes and rejects known high impact", async () => {
+  const unknown = fixture();
+  unknown.setBuyImpact(undefined);
+  try {
+    const e = await unknown.executor.execute(
+      unknown.intent,
+      unknown.settings,
+      "100",
+      async () => {},
+      () => {},
+      undefined,
+      unknown.fx,
+    );
+    assert.equal(e.state, "CONFIRMED");
+    assert.equal(unknown.ledger.holdings().length, 1);
+  } finally {
+    unknown.store.close();
+  }
+
+  const high = fixture();
+  high.setBuyImpact(0.2); // legacy ratio = 20 percentage points
+  try {
+    await assert.rejects(
+      high.executor.execute(
+        high.intent,
+        high.settings,
+        "100",
+        async () => {},
+        () => {},
+        undefined,
+        high.fx,
+      ),
+      /DEMO_QUOTE_PRICE_IMPACT_TOO_HIGH/,
+    );
+  } finally {
+    high.store.close();
+  }
+});
 test("DEMO uses unchanged configured sizing, actual quotes and atomic holdings without any RPC capability", async () => {
   for (const settingsInput of [
     { positionSizeMode: "SOL", positionSizeSol: 0.2 },

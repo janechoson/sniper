@@ -25,6 +25,7 @@ import { env } from "./config.js";
 import {
   DASHBOARD_ASSETS,
   DASHBOARD_ROUTES,
+  dashboardKronos,
   dashboardLogs,
   dashboardPositionCount,
   dashboardPositions,
@@ -403,6 +404,10 @@ export async function startServer(
           200,
           strategy === "ALL" ? data : data.strategyAccounting,
         );
+      }
+      if (req.method === "GET" && url.pathname === "/api/kronos/management") {
+        const range = z.enum(["all", "24h", "7d"]).parse(url.searchParams.get("range") ?? "all");
+        return reply(res, 200, dashboardKronos(requestEngine, range));
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const limit = z.coerce

@@ -3,7 +3,7 @@ import { Blocked } from "./domain.js";
 import type { Settings } from "./config.js";
 import type { Store } from "./store.js";
 import type { QuoteSource } from "./jupiter-quotes.js";
-import { validateQuote } from "./execution-quote.js";
+import { quotePriceImpactPercent, validateQuote } from "./execution-quote.js";
 import { probeExits, assertEntryExit } from "./exit-feasibility.js";
 import { DemoLedger, type DemoFill } from "./demo-ledger.js";
 import type { FxEvidence } from "./trade-accounting.js";
@@ -72,14 +72,11 @@ export class DemoExecutor {
       slippageBps: s.slippagePercent * 100,
       routeOnly: true,
     });
-    if (
-      !q.routeOnly ||
-      !Number.isFinite(q.at) ||
-      q.at > Date.now() ||
-      q.order.priceImpactPct === undefined ||
-      q.order.priceImpactPct > s.exitProbeMaxImpactPercent
-    )
+    if (!q.routeOnly || !Number.isFinite(q.at) || q.at > Date.now())
       throw new Blocked("DEMO_QUOTE_FEASIBILITY_UNPROVEN");
+    const impact = quotePriceImpactPercent(q.order);
+    if (impact !== null && impact > s.exitProbeMaxImpactPercent)
+      throw new Blocked("DEMO_QUOTE_PRICE_IMPACT_TOO_HIGH");
     if (i.side === "BUY") {
       e.exitFeasibility = await probeExits(
         this.quotes,
